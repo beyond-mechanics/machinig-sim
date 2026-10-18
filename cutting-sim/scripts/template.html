@@ -1,0 +1,192 @@
+<title>2D切削シミュレーター</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a lab instrument page. Run bar on top, the cutting zone view beside the condition sheet,
+   then the measured results and their time histories, then the model notes. */
+:root {
+  --bg: #eef0f2; --panel: #f9fafb; --panel-2: #e2e6ea; --ink: #1b2228; --ink-mute: #5a6672; --rule: #c9d0d6;
+  --accent: #1d5f8a; --accent-ink: #ffffff; --ok: #2e7a4e; --warn: #9a6a00;
+  --s1: #c2492c; --s2: #2c6fb0; --s3: #8a5a00;
+  --tool-a: #8d969e; --tool-b: #c9cfd4; --tool-edge: #2a3138; --guide: rgba(27, 34, 40, 0.35);
+  --view-bg: #f4f5f6;
+  --font-body: "BIZ UDPGothic", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #13171b; --panel: #1b2026; --panel-2: #252c33; --ink: #e2e7eb; --ink-mute: #94a1ac; --rule: #333d46;
+  --accent: #5fa8d8; --accent-ink: #08131b; --ok: #62c48d; --warn: #e3b341;
+  --s1: #f07d5e; --s2: #6fb1f0; --s3: #e3b341;
+  --tool-a: #4d565e; --tool-b: #8e979f; --tool-edge: #d6dce1; --guide: rgba(226, 231, 235, 0.35);
+  --view-bg: #0e1114; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #13171b; --panel: #1b2026; --panel-2: #252c33; --ink: #e2e7eb; --ink-mute: #94a1ac; --rule: #333d46;
+  --accent: #5fa8d8; --accent-ink: #08131b; --ok: #62c48d; --warn: #e3b341;
+  --s1: #f07d5e; --s2: #6fb1f0; --s3: #e3b341;
+  --tool-a: #4d565e; --tool-b: #8e979f; --tool-edge: #d6dce1; --guide: rgba(226, 231, 235, 0.35);
+  --view-bg: #0e1114; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.55; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px 40px; max-width: 1500px; margin: 0 auto; display: grid; gap: 14px; }
+header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.brand { margin-right: auto; min-width: 0; }
+.brand h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: 0.02em; text-wrap: balance; }
+.brand p { margin: 0; color: var(--ink-mute); font-size: 12.5px; }
+.pill { font: 500 12px/1 var(--font-mono); padding: 6px 10px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; color: var(--ink-mute); }
+.pill[data-s="running"] { color: var(--accent); } .pill[data-s="done"] { color: var(--ok); } .pill[data-s="paused"] { color: var(--warn); }
+button, select, input { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+button:hover { border-color: var(--ink-mute); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; min-width: 108px; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select, input[type=number] { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 8px; width: 100%; min-width: 0; font-family: var(--font-mono); font-size: 13px; }
+select { font-family: var(--font-body); }
+.runrow { display: grid; gap: 6px; }
+.clock { font: 12px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-mute); }
+.progress { height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
+.progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s linear; }
+
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; align-items: start; }
+@media (max-width: 960px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.viewport { position: relative; height: clamp(320px, 62vh, 720px); border-radius: 8px; overflow: hidden; background: var(--view-bg); border: 1px solid var(--rule); }
+.viewport canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.overlay { position: absolute; display: flex; gap: 6px; flex-wrap: wrap; }
+.overlay.tl { top: 10px; left: 10px; right: 120px; }
+.overlay.tr { top: 10px; right: 10px; }
+.overlay.bl { bottom: 10px; left: 10px; right: 150px; flex-direction: column; align-items: flex-start; }
+.chipbtn { font-size: 12px; padding: 4px 9px; background: color-mix(in srgb, var(--panel) 88%, transparent); }
+.chipbtn[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+.legend { display: grid; grid-template-columns: auto 120px auto; gap: 2px 8px; align-items: center; font: 11px var(--font-mono); background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 4px; }
+.legend .name { grid-column: 1 / -1; font-family: var(--font-body); font-size: 11.5px; }
+.legend i { display: block; height: 9px; border-radius: 2px; }
+.probe { font: 11.5px var(--font-mono); background: color-mix(in srgb, var(--panel) 92%, transparent); padding: 4px 8px; border-radius: 4px; max-width: 100%; overflow-wrap: anywhere; }
+
+aside.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; min-width: 0; padding: 14px; display: grid; gap: 16px; }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
+legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-mute); margin-bottom: 4px; padding: 0; }
+.row { display: grid; grid-template-columns: 1fr 104px; gap: 8px; align-items: center; }
+.row label { font-size: 13px; }
+.row label small { color: var(--ink-mute); font: 11px var(--font-mono); margin-left: 4px; }
+.row.wide { grid-template-columns: 1fr; }
+.meta { font: 11px/1.6 var(--font-mono); color: var(--ink-mute); }
+
+.results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.cell { background: var(--panel); padding: 12px 14px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.cell .k { font-size: 12px; color: var(--ink-mute); }
+.cell .v { font: 500 24px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
+.cell .v small { font-size: 12px; color: var(--ink-mute); margin-left: 4px; }
+.cell .sub { font: 11.5px var(--font-mono); color: var(--ink-mute); }
+
+@media (max-width: 760px) { .results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.chart { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.chart h2 { font-size: 13.5px; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.chart h2 span { font: 11.5px var(--font-mono); font-weight: 400; color: var(--ink-mute); display: inline-flex; align-items: center; gap: 5px; }
+.chart h2 span i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.chart canvas { width: 100%; height: 190px; display: block; }
+
+.notes { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 28px; }
+.notes h2 { font-size: 14px; margin: 0 0 6px; }
+.notes p, .notes ul { margin: 0; font-size: 13px; color: var(--ink); max-width: 65ch; }
+.notes ul { padding-left: 18px; display: grid; gap: 4px; }
+.notes code { font-family: var(--font-mono); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .progress > i { transition: none; } }
+</style>
+<div class="wrap">
+  <header class="bar">
+    <div class="brand">
+      <h1>2D 直交切削シミュレーター</h1>
+      <p>工具と被削材の接触部で、切りくずの生成、温度、応力、ひずみ、切削抵抗を計算します（平面ひずみ、粒子法 SPH）</p>
+    </div>
+    <span class="pill" id="state" data-s="idle">待機</span>
+    <button class="primary" id="run">切削開始</button>
+    <button id="reset">リセット</button>
+  </header>
+  <div class="runrow">
+    <div class="progress"><i id="prog"></i></div>
+    <div class="clock" id="clock">—</div>
+  </div>
+
+  <div class="main">
+    <div class="viewport">
+      <canvas id="view" aria-label="切削部の粒子と工具"></canvas>
+      <div class="overlay tl" id="fields"></div>
+      <div class="overlay tr">
+        <button class="chipbtn" data-zoom="tip" aria-pressed="true">刃先</button>
+        <button class="chipbtn" data-zoom="all" aria-pressed="false">全体</button>
+      </div>
+      <div class="overlay bl">
+        <div class="probe" id="probe" hidden></div>
+        <div class="legend"><span class="name" id="lg-name">温度 [°C]</span><span id="lg-lo">20</span><i id="lg-bar"></i><span id="lg-hi">100</span></div>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <fieldset>
+        <legend>被削材</legend>
+        <div class="row wide"><select id="mat" aria-label="被削材"></select></div>
+        <div class="row"><label for="vc">切削速度<small>m/min</small></label><input id="vc" type="number" min="10" max="1500" step="10"></div>
+        <div class="row"><label for="h">切取り厚さ h<small>mm</small></label><input id="h" type="number" min="0.02" max="0.3" step="0.01" value="0.1"></div>
+        <div class="row"><label for="width">切削幅 b<small>mm</small></label><input id="width" type="number" min="0.1" max="20" step="0.1" value="1"></div>
+      </fieldset>
+      <fieldset>
+        <legend>工具</legend>
+        <div class="row"><label for="rake">すくい角 α<small>°</small></label><input id="rake" type="number" min="-20" max="30" step="1" value="5"></div>
+        <div class="row"><label for="clear">逃げ角<small>°</small></label><input id="clear" type="number" min="2" max="20" step="1" value="7"></div>
+        <div class="row"><label for="edge">刃先丸み r<small>µm</small></label><input id="edge" type="number" min="0" max="60" step="1" value="10"></div>
+        <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" min="0" max="1.5" step="0.05"></div>
+      </fieldset>
+      <fieldset>
+        <legend>計算</legend>
+        <div class="row"><label for="len">切削長さ<small>mm</small></label><input id="len" type="number" min="0.2" max="2" step="0.1" value="0.6"></div>
+        <div class="row"><label for="res">解像度</label>
+          <select id="res"><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option></select></div>
+        <div class="meta" id="meta">—</div>
+      </fieldset>
+    </aside>
+  </div>
+
+  <section class="results" aria-label="計算結果">
+    <div class="cell"><span class="k">主分力 Fc</span><span class="v"><b id="r-fc">—</b><small>N</small></span><span class="sub">後半区間の平均</span></div>
+    <div class="cell"><span class="k">背分力 Ft</span><span class="v"><b id="r-ft">—</b><small>N</small></span><span class="sub">工具を押し上げる向き</span></div>
+    <div class="cell"><span class="k">比切削抵抗 kc</span><span class="v"><b id="r-kc">—</b><small>N/mm²</small></span><span class="sub" id="r-kcref">便覧値の目安 —</span></div>
+    <div class="cell"><span class="k">切りくず厚さ hc</span><span class="v"><b id="r-hc">—</b><small>mm</small></span><span class="sub" id="r-ratio">切りくず厚さ比 —</span></div>
+    <div class="cell"><span class="k">せん断角 φ</span><span class="v"><b id="r-phi">—</b><small>°</small></span><span class="sub" id="r-phim">Merchant の式 —</span></div>
+    <div class="cell"><span class="k">最高温度</span><span class="v"><b id="r-tmax">—</b><small>°C</small></span><span class="sub">被削材と切りくず全体</span></div>
+    <div class="cell"><span class="k">すくい面接触部の温度</span><span class="v"><b id="r-trake">—</b><small>°C</small></span><span class="sub">切りくず側、後半区間の平均</span></div>
+    <div class="cell"><span class="k">最大相当塑性ひずみ</span><span class="v"><b id="r-ep">—</b></span><span class="sub" id="r-ed">最大ひずみ速度 —</span></div>
+  </section>
+
+  <section class="charts">
+    <div class="chart">
+      <h2>切削抵抗<span><i style="background: var(--s1)"></i>主分力 Fc</span><span><i style="background: var(--s2)"></i>背分力 Ft</span></h2>
+      <canvas id="chart-f" aria-label="切削抵抗の推移"></canvas>
+    </div>
+    <div class="chart">
+      <h2>温度<span><i style="background: var(--s3)"></i>最高温度</span><span><i style="background: var(--s1)"></i>すくい面接触部</span></h2>
+      <canvas id="chart-t" aria-label="温度の推移"></canvas>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div>
+      <h2>計算モデル</h2>
+      <ul>
+        <li>2次元平面ひずみの直交切削。被削材を粒子で表す SPH 法（更新ラグランジュ、陽解法）なので、要素のゆがみやリメッシュなしで切りくずが大変形します。</li>
+        <li>材料は Johnson-Cook 則（ひずみ硬化、ひずみ速度、温度軟化）の弾塑性体。塑性仕事の 90 % と摩擦熱の半分が熱になり、熱伝導と連成します。</li>
+        <li>工具は剛体で、すくい角、逃げ角、刃先丸みを持ちます。すくい面の摩擦はクーロン摩擦で、材料のせん断流れ応力を上限にしています。</li>
+      </ul>
+    </div>
+    <div>
+      <h2>読み方と限界</h2>
+      <ul>
+        <li>計算を速くするため、慣性だけ密度を数百倍にしています（質量スケーリング）。慣性による応力が降伏応力の 4 % 程度に収まるように自動で決めます。</li>
+        <li>工具は温度を持たないため、表示温度は切りくず側の値です。工具摩耗、切りくずの破断と鋸歯状化、構成成分の違いは扱いません。</li>
+        <li>標準解像度では切取り厚さを 8 粒子で表すため、温度のピークや刃先丸みの効果は粗く出ます。定量比較には「細かい」を使ってください。</li>
+        <li>Johnson-Cook 定数は文献値で、同じ材料でも文献によって 2 割以上違います。</li>
+      </ul>
+    </div>
+  </section>
+</div>
+<script>/*APP*/</script>

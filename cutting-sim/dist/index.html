@@ -1,0 +1,194 @@
+<title>2D切削シミュレーター</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a lab instrument page. Run bar on top, the cutting zone view beside the condition sheet,
+   then the measured results and their time histories, then the model notes. */
+:root {
+  --bg: #eef0f2; --panel: #f9fafb; --panel-2: #e2e6ea; --ink: #1b2228; --ink-mute: #5a6672; --rule: #c9d0d6;
+  --accent: #1d5f8a; --accent-ink: #ffffff; --ok: #2e7a4e; --warn: #9a6a00;
+  --s1: #c2492c; --s2: #2c6fb0; --s3: #8a5a00;
+  --tool-a: #8d969e; --tool-b: #c9cfd4; --tool-edge: #2a3138; --guide: rgba(27, 34, 40, 0.35);
+  --view-bg: #f4f5f6;
+  --font-body: "BIZ UDPGothic", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #13171b; --panel: #1b2026; --panel-2: #252c33; --ink: #e2e7eb; --ink-mute: #94a1ac; --rule: #333d46;
+  --accent: #5fa8d8; --accent-ink: #08131b; --ok: #62c48d; --warn: #e3b341;
+  --s1: #f07d5e; --s2: #6fb1f0; --s3: #e3b341;
+  --tool-a: #4d565e; --tool-b: #8e979f; --tool-edge: #d6dce1; --guide: rgba(226, 231, 235, 0.35);
+  --view-bg: #0e1114; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #13171b; --panel: #1b2026; --panel-2: #252c33; --ink: #e2e7eb; --ink-mute: #94a1ac; --rule: #333d46;
+  --accent: #5fa8d8; --accent-ink: #08131b; --ok: #62c48d; --warn: #e3b341;
+  --s1: #f07d5e; --s2: #6fb1f0; --s3: #e3b341;
+  --tool-a: #4d565e; --tool-b: #8e979f; --tool-edge: #d6dce1; --guide: rgba(226, 231, 235, 0.35);
+  --view-bg: #0e1114; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.55; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px 40px; max-width: 1500px; margin: 0 auto; display: grid; gap: 14px; }
+header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.brand { margin-right: auto; min-width: 0; }
+.brand h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: 0.02em; text-wrap: balance; }
+.brand p { margin: 0; color: var(--ink-mute); font-size: 12.5px; }
+.pill { font: 500 12px/1 var(--font-mono); padding: 6px 10px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; color: var(--ink-mute); }
+.pill[data-s="running"] { color: var(--accent); } .pill[data-s="done"] { color: var(--ok); } .pill[data-s="paused"] { color: var(--warn); }
+button, select, input { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+button:hover { border-color: var(--ink-mute); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; min-width: 108px; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select, input[type=number] { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 8px; width: 100%; min-width: 0; font-family: var(--font-mono); font-size: 13px; }
+select { font-family: var(--font-body); }
+.runrow { display: grid; gap: 6px; }
+.clock { font: 12px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-mute); }
+.progress { height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
+.progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s linear; }
+
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; align-items: start; }
+@media (max-width: 960px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.viewport { position: relative; height: clamp(320px, 62vh, 720px); border-radius: 8px; overflow: hidden; background: var(--view-bg); border: 1px solid var(--rule); }
+.viewport canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.overlay { position: absolute; display: flex; gap: 6px; flex-wrap: wrap; }
+.overlay.tl { top: 10px; left: 10px; right: 120px; }
+.overlay.tr { top: 10px; right: 10px; }
+.overlay.bl { bottom: 10px; left: 10px; right: 150px; flex-direction: column; align-items: flex-start; }
+.chipbtn { font-size: 12px; padding: 4px 9px; background: color-mix(in srgb, var(--panel) 88%, transparent); }
+.chipbtn[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+.legend { display: grid; grid-template-columns: auto 120px auto; gap: 2px 8px; align-items: center; font: 11px var(--font-mono); background: color-mix(in srgb, var(--panel) 88%, transparent); padding: 6px 8px; border-radius: 4px; }
+.legend .name { grid-column: 1 / -1; font-family: var(--font-body); font-size: 11.5px; }
+.legend i { display: block; height: 9px; border-radius: 2px; }
+.probe { font: 11.5px var(--font-mono); background: color-mix(in srgb, var(--panel) 92%, transparent); padding: 4px 8px; border-radius: 4px; max-width: 100%; overflow-wrap: anywhere; }
+
+aside.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; min-width: 0; padding: 14px; display: grid; gap: 16px; }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
+legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-mute); margin-bottom: 4px; padding: 0; }
+.row { display: grid; grid-template-columns: 1fr 104px; gap: 8px; align-items: center; }
+.row label { font-size: 13px; }
+.row label small { color: var(--ink-mute); font: 11px var(--font-mono); margin-left: 4px; }
+.row.wide { grid-template-columns: 1fr; }
+.meta { font: 11px/1.6 var(--font-mono); color: var(--ink-mute); }
+
+.results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.cell { background: var(--panel); padding: 12px 14px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.cell .k { font-size: 12px; color: var(--ink-mute); }
+.cell .v { font: 500 24px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
+.cell .v small { font-size: 12px; color: var(--ink-mute); margin-left: 4px; }
+.cell .sub { font: 11.5px var(--font-mono); color: var(--ink-mute); }
+
+@media (max-width: 760px) { .results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.chart { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.chart h2 { font-size: 13.5px; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.chart h2 span { font: 11.5px var(--font-mono); font-weight: 400; color: var(--ink-mute); display: inline-flex; align-items: center; gap: 5px; }
+.chart h2 span i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.chart canvas { width: 100%; height: 190px; display: block; }
+
+.notes { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 28px; }
+.notes h2 { font-size: 14px; margin: 0 0 6px; }
+.notes p, .notes ul { margin: 0; font-size: 13px; color: var(--ink); max-width: 65ch; }
+.notes ul { padding-left: 18px; display: grid; gap: 4px; }
+.notes code { font-family: var(--font-mono); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .progress > i { transition: none; } }
+</style>
+<div class="wrap">
+  <header class="bar">
+    <div class="brand">
+      <h1>2D 直交切削シミュレーター</h1>
+      <p>工具と被削材の接触部で、切りくずの生成、温度、応力、ひずみ、切削抵抗を計算します（平面ひずみ、粒子法 SPH）</p>
+    </div>
+    <span class="pill" id="state" data-s="idle">待機</span>
+    <button class="primary" id="run">切削開始</button>
+    <button id="reset">リセット</button>
+  </header>
+  <div class="runrow">
+    <div class="progress"><i id="prog"></i></div>
+    <div class="clock" id="clock">—</div>
+  </div>
+
+  <div class="main">
+    <div class="viewport">
+      <canvas id="view" aria-label="切削部の粒子と工具"></canvas>
+      <div class="overlay tl" id="fields"></div>
+      <div class="overlay tr">
+        <button class="chipbtn" data-zoom="tip" aria-pressed="true">刃先</button>
+        <button class="chipbtn" data-zoom="all" aria-pressed="false">全体</button>
+      </div>
+      <div class="overlay bl">
+        <div class="probe" id="probe" hidden></div>
+        <div class="legend"><span class="name" id="lg-name">温度 [°C]</span><span id="lg-lo">20</span><i id="lg-bar"></i><span id="lg-hi">100</span></div>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <fieldset>
+        <legend>被削材</legend>
+        <div class="row wide"><select id="mat" aria-label="被削材"></select></div>
+        <div class="row"><label for="vc">切削速度<small>m/min</small></label><input id="vc" type="number" min="10" max="1500" step="10"></div>
+        <div class="row"><label for="h">切取り厚さ h<small>mm</small></label><input id="h" type="number" min="0.02" max="0.3" step="0.01" value="0.1"></div>
+        <div class="row"><label for="width">切削幅 b<small>mm</small></label><input id="width" type="number" min="0.1" max="20" step="0.1" value="1"></div>
+      </fieldset>
+      <fieldset>
+        <legend>工具</legend>
+        <div class="row"><label for="rake">すくい角 α<small>°</small></label><input id="rake" type="number" min="-20" max="30" step="1" value="5"></div>
+        <div class="row"><label for="clear">逃げ角<small>°</small></label><input id="clear" type="number" min="2" max="20" step="1" value="7"></div>
+        <div class="row"><label for="edge">刃先丸み r<small>µm</small></label><input id="edge" type="number" min="0" max="60" step="1" value="10"></div>
+        <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" min="0" max="1.5" step="0.05"></div>
+      </fieldset>
+      <fieldset>
+        <legend>計算</legend>
+        <div class="row"><label for="len">切削長さ<small>mm</small></label><input id="len" type="number" min="0.2" max="2" step="0.1" value="0.6"></div>
+        <div class="row"><label for="res">解像度</label>
+          <select id="res"><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option></select></div>
+        <div class="meta" id="meta">—</div>
+      </fieldset>
+    </aside>
+  </div>
+
+  <section class="results" aria-label="計算結果">
+    <div class="cell"><span class="k">主分力 Fc</span><span class="v"><b id="r-fc">—</b><small>N</small></span><span class="sub">後半区間の平均</span></div>
+    <div class="cell"><span class="k">背分力 Ft</span><span class="v"><b id="r-ft">—</b><small>N</small></span><span class="sub">工具を押し上げる向き</span></div>
+    <div class="cell"><span class="k">比切削抵抗 kc</span><span class="v"><b id="r-kc">—</b><small>N/mm²</small></span><span class="sub" id="r-kcref">便覧値の目安 —</span></div>
+    <div class="cell"><span class="k">切りくず厚さ hc</span><span class="v"><b id="r-hc">—</b><small>mm</small></span><span class="sub" id="r-ratio">切りくず厚さ比 —</span></div>
+    <div class="cell"><span class="k">せん断角 φ</span><span class="v"><b id="r-phi">—</b><small>°</small></span><span class="sub" id="r-phim">Merchant の式 —</span></div>
+    <div class="cell"><span class="k">最高温度</span><span class="v"><b id="r-tmax">—</b><small>°C</small></span><span class="sub">被削材と切りくず全体</span></div>
+    <div class="cell"><span class="k">すくい面接触部の温度</span><span class="v"><b id="r-trake">—</b><small>°C</small></span><span class="sub">切りくず側、後半区間の平均</span></div>
+    <div class="cell"><span class="k">最大相当塑性ひずみ</span><span class="v"><b id="r-ep">—</b></span><span class="sub" id="r-ed">最大ひずみ速度 —</span></div>
+  </section>
+
+  <section class="charts">
+    <div class="chart">
+      <h2>切削抵抗<span><i style="background: var(--s1)"></i>主分力 Fc</span><span><i style="background: var(--s2)"></i>背分力 Ft</span></h2>
+      <canvas id="chart-f" aria-label="切削抵抗の推移"></canvas>
+    </div>
+    <div class="chart">
+      <h2>温度<span><i style="background: var(--s3)"></i>最高温度</span><span><i style="background: var(--s1)"></i>すくい面接触部</span></h2>
+      <canvas id="chart-t" aria-label="温度の推移"></canvas>
+    </div>
+  </section>
+
+  <section class="notes">
+    <div>
+      <h2>計算モデル</h2>
+      <ul>
+        <li>2次元平面ひずみの直交切削。被削材を粒子で表す SPH 法（更新ラグランジュ、陽解法）なので、要素のゆがみやリメッシュなしで切りくずが大変形します。</li>
+        <li>材料は Johnson-Cook 則（ひずみ硬化、ひずみ速度、温度軟化）の弾塑性体。塑性仕事の 90 % と摩擦熱の半分が熱になり、熱伝導と連成します。</li>
+        <li>工具は剛体で、すくい角、逃げ角、刃先丸みを持ちます。すくい面の摩擦はクーロン摩擦で、材料のせん断流れ応力を上限にしています。</li>
+      </ul>
+    </div>
+    <div>
+      <h2>読み方と限界</h2>
+      <ul>
+        <li>計算を速くするため、慣性だけ密度を数百倍にしています（質量スケーリング）。慣性による応力が降伏応力の 4 % 程度に収まるように自動で決めます。</li>
+        <li>工具は温度を持たないため、表示温度は切りくず側の値です。工具摩耗、切りくずの破断と鋸歯状化、構成成分の違いは扱いません。</li>
+        <li>標準解像度では切取り厚さを 8 粒子で表すため、温度のピークや刃先丸みの効果は粗く出ます。定量比較には「細かい」を使ってください。</li>
+        <li>Johnson-Cook 定数は文献値で、同じ材料でも文献によって 2 割以上違います。</li>
+      </ul>
+    </div>
+  </section>
+</div>
+<script>(()=>{var U={S45C:{name:"S45C / AISI 1045 \u70AD\u7D20\u92FC",rho:7850,E:205,nu:.29,k:50,c:486,A:553.1,B:600.8,n:.234,C:.0134,m:1,Tm:1460,Tr:20,vc:200,mu:.4,kcRef:2100},SUS304:{name:"SUS304 \u30B9\u30C6\u30F3\u30EC\u30B9\u92FC",rho:7900,E:200,nu:.29,k:16.2,c:500,A:310,B:1e3,n:.65,C:.07,m:1,Tm:1400,Tr:20,vc:150,mu:.45,kcRef:2500},Ti64:{name:"Ti-6Al-4V \u30C1\u30BF\u30F3\u5408\u91D1",rho:4430,E:113.8,nu:.342,k:7.3,c:560,A:782.7,B:498.4,n:.28,C:.028,m:1,Tm:1660,Tr:20,vc:60,mu:.4,kcRef:1900},Al6061:{name:"A6061-T6 \u30A2\u30EB\u30DF\u5408\u91D1",rho:2700,E:68.9,nu:.33,k:167,c:896,A:324,B:114,n:.42,C:.002,m:1.34,Tm:582,Tr:20,vc:400,mu:.3,kcRef:800},IN718:{name:"Inconel 718 \u30CB\u30C3\u30B1\u30EB\u57FA\u5408\u91D1",rho:8190,E:206,nu:.3,k:11.4,c:435,A:1241,B:622,n:.6522,C:.0134,m:1.3,Tm:1297,Tr:20,vc:40,mu:.4,kcRef:3200}};var Z={mat:"S45C",vc:200,h:.1,rake:5,clearance:7,edgeRadius:10,mu:null,mShear:1,nh:8,massScale:0,cutLen:.6,width:1,T0:20,beta:.9,heatToWork:.5};var a=t=>document.getElementById(t),W=new Worker(URL.createObjectURL(new Blob([`(()=>{var _t={S45C:{name:"S45C / AISI 1045 \\u70AD\\u7D20\\u92FC",rho:7850,E:205,nu:.29,k:50,c:486,A:553.1,B:600.8,n:.234,C:.0134,m:1,Tm:1460,Tr:20,vc:200,mu:.4,kcRef:2100},SUS304:{name:"SUS304 \\u30B9\\u30C6\\u30F3\\u30EC\\u30B9\\u92FC",rho:7900,E:200,nu:.29,k:16.2,c:500,A:310,B:1e3,n:.65,C:.07,m:1,Tm:1400,Tr:20,vc:150,mu:.45,kcRef:2500},Ti64:{name:"Ti-6Al-4V \\u30C1\\u30BF\\u30F3\\u5408\\u91D1",rho:4430,E:113.8,nu:.342,k:7.3,c:560,A:782.7,B:498.4,n:.28,C:.028,m:1,Tm:1660,Tr:20,vc:60,mu:.4,kcRef:1900},Al6061:{name:"A6061-T6 \\u30A2\\u30EB\\u30DF\\u5408\\u91D1",rho:2700,E:68.9,nu:.33,k:167,c:896,A:324,B:114,n:.42,C:.002,m:1.34,Tm:582,Tr:20,vc:400,mu:.3,kcRef:800},IN718:{name:"Inconel 718 \\u30CB\\u30C3\\u30B1\\u30EB\\u57FA\\u5408\\u91D1",rho:8190,E:206,nu:.3,k:11.4,c:435,A:1241,B:622,n:.6522,C:.0134,m:1.3,Tm:1297,Tr:20,vc:40,mu:.4,kcRef:3200}};function Nt(i,e,h,r){let a=i.A+i.B*(e>0?Math.pow(e,i.n):0),n=h>1?1+i.C*Math.log(h):1,l=(r-i.Tr)/(i.Tm-i.Tr);l=l<0?0:l>1?1:l;let M=Math.max(1-Math.pow(l,i.m),.01);return a*n*M*1e6}function $t({rakeDeg:i,clearanceDeg:e,edgeRadius:h}){let r=i*Math.PI/180,a=e*Math.PI/180,n=-Math.sin(r),l=Math.cos(r),M=-Math.cos(a),d=Math.sin(a),y=Math.cos(r),o=Math.sin(r),s=Math.sin(a),u=-Math.cos(a);return{a:r,g:a,r:h,u1x:n,u1y:l,u2x:M,u2y:d,n1x:y,n1y:o,n2x:s,n2y:u,ex:0,ey:0,out:new Float64Array(3)}}function ts(i,e,h){let r=e-i.ex,a=h-i.ey,n=i.out,l=r*i.n1x+a*i.n1y,M=r*i.n2x+a*i.n2y;if(l<=0&&M<=0)return l>M?(n[1]=i.n1x,n[2]=i.n1y,n[0]=l-i.r):(n[1]=i.n2x,n[2]=i.n2y,n[0]=M-i.r),n[0];let d=r*i.u1x+a*i.u1y;d<0&&(d=0);let y=r*i.u2x+a*i.u2y;y<0&&(y=0);let o=r-d*i.u1x,s=a-d*i.u1y,u=r-y*i.u2x,m=a-y*i.u2y,c=Math.hypot(o,s),T=Math.hypot(u,m);return c<T?(n[1]=o/c,n[2]=s/c,n[0]=c-i.r):(n[1]=u/T,n[2]=m/T,n[0]=T-i.r),n[0]}function ss(i,e){let h=[],r=[i.ex+i.u1x*e+i.n1x*i.r,i.ey+i.u1y*e+i.n1y*i.r];h.push(r);let a=Math.atan2(i.n1y,i.n1x),l=Math.atan2(i.n2y,i.n2x)-a;l>0&&(l-=2*Math.PI);for(let d=0;d<=16;d++){let y=a+l*d/16;h.push([i.ex+Math.cos(y)*i.r,i.ey+Math.sin(y)*i.r])}h.push([i.ex+i.u2x*e+i.n2x*i.r,i.ey+i.u2y*e+i.n2y*i.r]);let M=h[h.length-1];return h.push([M[0],r[1]]),h}var As={mat:"S45C",vc:200,h:.1,rake:5,clearance:7,edgeRadius:10,mu:null,mShear:1,nh:8,massScale:0,cutLen:.6,width:1,T0:20,beta:.9,heatToWork:.5},Mt=Math.PI,Tt=class{constructor(e={}){let h=this.cfg={...As,...e},r=this.mat=_t[h.mat];h.mu==null&&(h.mu=r.mu),this.V=h.vc/60;let a=this.h=h.h*.001,n=this.dx=a/h.nh;this.hk=1.2*n,this.E=r.E*1e9,this.G=this.E/(2*(1+r.nu)),this.K=this.E/(3*(1-2*r.nu)),this.ms=h.massScale>0?h.massScale:Math.min(1e4,Math.max(1,.04*r.A*1e6/(r.rho*this.V*this.V))),this.rho0=r.rho*this.ms,this.cs=Math.sqrt((this.K+4*this.G/3)/this.rho0);let l=h.cutLen*.001+Math.max(3*a,2e-4),M=Math.max(3.5*a,a+12*n),d=Math.round(l/n),y=Math.round(M/n);this.L=d*n,this.H=y*n;let o=this.N=d*y,s=m=>new Float64Array(m);this.x=s(o),this.y=s(o),this.vx=s(o),this.vy=s(o),this.ax=s(o),this.ay=s(o),this.rho=s(o),this.p=s(o),this.sxx=s(o),this.syy=s(o),this.szz=s(o),this.sxy=s(o),this.ep=s(o),this.epd=s(o),this.sr=s(o),this.T=s(o),this.dT=s(o),this.seq=s(o),this.cx=s(o),this.cy=s(o),this.Lxx=s(o),this.Lxy=s(o),this.Lyx=s(o),this.Lyy=s(o),this.Mxx=s(o),this.Mxy=s(o),this.Myx=s(o),this.Myy=s(o),this.Rxx=s(o),this.Ryy=s(o),this.Rxy=s(o),this.contact=new Uint8Array(o),this.fixed=new Uint8Array(o),this.dead=new Uint8Array(o),this.nDead=0,this.m=this.rho0*n*n,this.mReal=r.rho*n*n;let u=0;for(let m=0;m<y;m++)for(let c=0;c<d;c++,u++)this.x[u]=(c+.5)*n,this.y[u]=-(m+.5)*n,this.rho[u]=this.rho0,this.T[u]=h.T0,(m>=y-3||c>=d-3||c<3&&this.y[u]<-a-1.5*n)&&(this.fixed[u]=1);this.tool=$t({rakeDeg:h.rake,clearanceDeg:h.clearance,edgeRadius:h.edgeRadius*1e-6}),this.tool.ex=-this.tool.r-1*n,this.tool.ey=-a+this.tool.r,this.x0Tool=this.tool.ex,this.ad=10/(7*Mt*this.hk*this.hk),this.Wdx=this.kernelW(n/this.hk),this.dt=.3*this.hk/(this.cs+this.V),this.dtTh=.1*r.rho*r.c*this.hk*this.hk/r.k,this.nSub=Math.max(1,Math.ceil(this.dt/this.dtTh)),this.cap=o*16,this.allocPairs(this.cap),this.head=new Int32Array(1),this.next=new Int32Array(o),this.t=0,this.steps=0,this.travel=0,this.done=!1,this.impX=0,this.impY=0,this.impT=0,this.qTool=0,this.qToolT=0,this.workIn=0,this.heatTool=0,this.hist={travel:[],fc:[],ft:[],tmax:[],trake:[]}}allocPairs(e){this.pi=new Int32Array(e),this.pj=new Int32Array(e),this.gx=new Float64Array(e),this.gy=new Float64Array(e),this.pw=new Float64Array(e),this.pf=new Float64Array(e)}kernelW(e){if(e<1)return this.ad*(1-1.5*e*e+.75*e*e*e);if(e<2){let h=2-e;return this.ad*.25*h*h*h}return 0}buildPairs(){let{N:e,x:h,y:r,hk:a}=this,n=2*a,l=1/0,M=1/0,d=-1/0,y=-1/0,o=this.dead;for(let x=0;x<e;x++)o[x]||(h[x]<l&&(l=h[x]),h[x]>d&&(d=h[x]),r[x]<M&&(M=r[x]),r[x]>y&&(y=r[x]));let s=Math.floor((d-l)/n)+1,u=Math.floor((y-M)/n)+1;this.head.length<s*u&&(this.head=new Int32Array(s*u*2));let m=this.head,c=this.next;m.fill(-1,0,s*u);for(let x=0;x<e;x++){if(o[x])continue;let q=Math.floor((h[x]-l)/n)+Math.floor((r[x]-M)/n)*s;c[x]=m[q],m[q]=x}let T=n*n,S=1/a,j=this.ad,X=.01*a*a,I=0;for(let x=0;x<u;x++)for(let q=0;q<s;q++)for(let F=m[q+x*s];F>=0;F=c[F])for(let P=0;P<=1;P++)for(let C=-1;C<=1;C++){if(P===0&&C<0)continue;let Q=q+C,Z=x+P;if(Q<0||Q>=s||Z>=u)continue;let it=C===0&&P===0;for(let D=it?c[F]:m[Q+Z*s];D>=0;D=c[D]){let O=h[F]-h[D],ht=r[F]-r[D],_=O*O+ht*ht;if(_>=T||_===0)continue;I>=this.cap&&this.growPairs();let $=Math.sqrt(_),N=$*S,ot,tt;if(N<1)ot=j*(1-1.5*N*N+.75*N*N*N),tt=j*S*(-3*N+2.25*N*N);else{let J=2-N;ot=j*.25*J*J*J,tt=-j*S*.75*J*J}this.pi[I]=F,this.pj[I]=D,this.gx[I]=tt*O/$,this.gy[I]=tt*ht/$,this.pw[I]=ot,this.pf[I]=tt*$/(_+X),I++}}this.np=I}growPairs(){let e={pi:this.pi,pj:this.pj,gx:this.gx,gy:this.gy,pw:this.pw,pf:this.pf};this.cap*=2,this.allocPairs(this.cap);for(let h in e)this[h].set(e[h])}step(){if(this.done)return;let{N:e,dt:h,m:r,G:a,K:n,rho0:l,mat:M,cfg:d}=this,{x:y,y:o,vx:s,vy:u,rho:m,p:c,sxx:T,syy:S,szz:j,sxy:X,ep:I,epd:x,T:q}=this,{Lxx:F,Lxy:P,Lyx:C,Lyy:Q,Mxx:Z,Mxy:it,Myx:D,Myy:O,Rxx:ht,Ryy:_,Rxy:$,fixed:N}=this;this.buildPairs();let{pi:ot,pj:tt,gx:J,gy:kt,pw:Ct,pf:vs,np:Vt}=this;F.fill(0),P.fill(0),C.fill(0),Q.fill(0),Z.fill(0),it.fill(0),D.fill(0),O.fill(0);let lt=this.dT;lt.fill(0);for(let t=0;t<Vt;t++){let p=ot[t],f=tt[t],w=r/m[p],A=r/m[f],R=s[p]-s[f],E=u[p]-u[f],b=y[p]-y[f],L=o[p]-o[f],k=J[t],g=kt[t];F[p]-=A*R*k,P[p]-=A*R*g,C[p]-=A*E*k,Q[p]-=A*E*g,F[f]-=w*R*k,P[f]-=w*R*g,C[f]-=w*E*k,Q[f]-=w*E*g,Z[p]-=A*b*k,it[p]-=A*b*g,D[p]-=A*L*k,O[p]-=A*L*g,Z[f]-=w*b*k,it[f]-=w*b*g,D[f]-=w*L*k,O[f]-=w*L*g;let v=R*k+E*g;lt[p]+=r*v,lt[f]+=r*v}this.steps%20===0&&this.shepard();let zt=.3,hs=Math.sqrt(2/3),gt=-2*M.A*1e6,At=0;for(let t=0;t<e;t++){if(N[t]===2)continue;let p=F[t],f=P[t],w=C[t],A=Q[t],R=Z[t]*O[t]-it[t]*D[t];if(R>.25){let et=O[t]/R,Jt=-it[t]/R,Qt=-D[t]/R,Zt=Z[t]/R,Ts=p*et+f*Qt,ws=p*Jt+f*Zt,ks=w*et+A*Qt,gs=w*Jt+A*Zt;p=Ts,f=ws,w=ks,A=gs}let E=p,b=A,L=.5*(f+w),k=.5*(f-w),g=E+b;m[t]+=lt[t]*h,c[t]=n*(m[t]/l-1),c[t]<gt&&(c[t]=gt,m[t]=l*(1+gt/n));let v=E-g/3,V=b-g/3,st=-g/3,z=T[t],U=S[t],H=j[t],W=X[t],pt=z+h*(2*a*v+2*W*k),ds=U+h*(2*a*V-2*W*k),ms=H+h*(2*a*st),Ms=W+h*(2*a*L+k*(U-z));z=pt,U=ds,H=ms,W=Ms;let dt=Math.sqrt(1.5*(z*z+U*U+H*H+2*W*W)),at=Nt(M,I[t],x[t],q[t]),mt=0;if(dt>at){let et=at/dt;z*=et,U*=et,H*=et,W*=et,mt=(dt-at)/(3*a),I[t]+=mt,q[t]+=d.beta*at*mt/(M.rho*M.c)}x[t]=.7*x[t]+.3*mt/h,this.sr[t]=hs*Math.sqrt(v*v+V*V+st*st+2*L*L),T[t]=z,S[t]=U,j[t]=H,X[t]=W,this.seq[t]=Math.min(dt,at),this.seq[t]>At&&(At=this.seq[t]);let St=z-c[t],qt=U-c[t],Lt=W,Yt=.5*Math.atan2(2*Lt,St-qt),Y=Math.cos(Yt),G=Math.sin(Yt),Gt=Y*Y*St+2*Y*G*Lt+G*G*qt,Kt=G*G*St-2*Y*G*Lt+Y*Y*qt,Ot=1/(m[t]*m[t]),jt=Gt>0?-zt*Gt*Ot:0,Ft=Kt>0?-zt*Kt*Ot:0;ht[t]=Y*Y*jt+G*G*Ft,_[t]=G*G*jt+Y*Y*Ft,$[t]=Y*G*(jt-Ft)}this.seqMax=At;let ft=this.ax,xt=this.ay,yt=this.cx,ut=this.cy,es=.5*r;ft.fill(0),xt.fill(0),yt.fill(0),ut.fill(0);let vt=this.hk,os=this.cs,ns=.01*vt*vt,rs=1,as=1,cs=1/this.Wdx;for(let t=0;t<Vt;t++){let p=ot[t],f=tt[t],w=1/(m[p]*m[p]),A=1/(m[f]*m[f]),R=(T[p]-c[p])*w+(T[f]-c[f])*A,E=(S[p]-c[p])*w+(S[f]-c[f])*A,b=X[p]*w+X[f]*A,L=y[p]-y[f],k=o[p]-o[f],g=(s[p]-s[f])*L+(u[p]-u[f])*k;if(g<0){let W=vt*g/(L*L+k*k+ns),pt=(-rs*os*W+as*W*W)*2/(m[p]+m[f]);R-=pt,E-=pt}let v=Ct[t]*cs;v*=v,v*=v,R+=v*(ht[p]+ht[f]),E+=v*(_[p]+_[f]),b+=v*($[p]+$[f]);let V=r*(R*J[t]+b*kt[t]),st=r*(b*J[t]+E*kt[t]);ft[p]+=V,xt[p]+=st,ft[f]-=V,xt[f]-=st;let z=es*Ct[t]*2/(m[p]+m[f]),U=(s[f]-s[p])*z,H=(u[f]-u[p])*z;yt[p]+=U,ut[p]+=H,yt[f]-=U,ut[f]-=H}this.conduct();let nt=this.tool,rt=this.V,Ut=this.dx,Wt=.5*Ut,Bt=nt.out;nt.ex+=rt*h;let ls=d.mu,Dt=d.heatToWork,fs=M.c,xs=this.mReal,bt=0,Ht=0,It=0,Rt=d.T0,Xt=this.dead,ys=100*rt*rt,us=nt.ex-this.h-nt.r,ps=-.5*this.h;for(let t=0;t<e;t++){if(!N[t]&&y[t]<us&&o[t]<ps&&(N[t]=2),N[t]||Xt[t]){s[t]=0,u[t]=0,this.contact[t]=0;continue}if(s[t]+=ft[t]*h,u[t]+=xt[t]*h,s[t]*s[t]+u[t]*u[t]>ys){Xt[t]=1,this.nDead++,s[t]=0,u[t]=0;continue}y[t]+=(s[t]+yt[t])*h,o[t]+=(u[t]+ut[t])*h;let p=ts(nt,y[t],o[t]);if(p>=Wt){this.contact[t]=0;continue}this.contact[t]=1;let f=Bt[1],w=Bt[2],A=Wt-p;y[t]+=f*A,o[t]+=w*A;let R=s[t]-rt,E=u[t],b=R*f+E*w,L=r*(b<0?-b:0),k=R-b*f,g=E-b*w,v=Math.hypot(k,g),V=0;if(v>1e-12){k/=v,g/=v;let U=d.mShear*Nt(M,I[t],x[t],q[t])/Math.sqrt(3);V=Math.min(r*v,ls*L,U*Ut*h);let H=V*(v-.5*V/r);q[t]+=Dt*H/(xs*fs),It+=(1-Dt)*H}let st=L*f-V*k,z=L*w-V*g;b<0&&(s[t]+=-b*f,u[t]+=-b*w),s[t]-=V/r*k,u[t]-=V/r*g,bt-=st,Ht-=z,q[t]>Rt&&(Rt=q[t])}this.impX+=bt,this.impY+=Ht,this.impT+=h,this.qTool+=It,this.tRake=Rt,this.workIn-=bt*rt,this.heatTool+=It,this.t+=h,this.steps++,this.travel=nt.ex-this.x0Tool,this.travel>=d.cutLen*.001&&(this.done=!0)}shepard(){let{N:e,pi:h,pj:r,pw:a,np:n,m:l,rho:M}=this,d=this.cx,y=this.cy,o=this.ad;for(let s=0;s<e;s++)d[s]=l*o,y[s]=l*o/M[s];for(let s=0;s<n;s++){let u=h[s],m=r[s],c=a[s];d[u]+=l*c,d[m]+=l*c,y[u]+=l*c/M[m],y[m]+=l*c/M[u]}for(let s=0;s<e;s++)M[s]=d[s]/y[s]}conduct(){let{N:e,pi:h,pj:r,pf:a,np:n,m:l,rho:M,T:d,dT:y,mat:o}=this,s=this.nSub,u=this.dt/s,m=2*o.k/(o.rho*o.c)*u;for(let c=0;c<s;c++){y.fill(0);for(let T=0;T<n;T++){let S=h[T],j=r[T],X=m*(d[S]-d[j])*a[T];y[S]+=X*l/M[j],y[j]-=X*l/M[S]}for(let T=0;T<e;T++)d[T]+=y[T]}}sample(){if(this.impT<=0)return null;let e=this.cfg.width*.001,h=-this.impX/this.impT*e,r=this.impY/this.impT*e;this.qToolT=this.qTool/this.impT*e,this.impX=0,this.impY=0,this.impT=0,this.qTool=0;let a=-1/0;for(let l=0;l<this.N;l++)this.T[l]>a&&(a=this.T[l]);let n=this.hist;return n.travel.push(this.travel*1e3),n.fc.push(h),n.ft.push(r),n.tmax.push(a),n.trake.push(this.tRake),{fc:h,ft:r,tmax:a}}chipThickness(){let e=this.tool,h=this.h,r=0,a=[];for(let n=0;n<this.N;n++){if(this.y[n]<.25*h)continue;let l=this.x[n]-e.ex,M=this.y[n]-e.ey,d=l*e.u1x+M*e.u1y;if(d<h||d>2.2*h)continue;let y=l*e.n1x+M*e.n1y-e.r;y>0&&y<8*h&&a.push(y)}return a.length<3?0:(a.sort((n,l)=>n-l),r=a[Math.floor(.97*(a.length-1))]+.5*this.dx,r)}summary(){let e=this.hist,h=e.fc.length,r=(x,q)=>{let F=0,P=0;for(let C=q;C<x.length;C++)F+=x[C],P++;return P?F/P:0},a=0,n=.5*this.cfg.cutLen;for(;a<h-1&&e.travel[a]<Math.min(n,this.travel*1e3*.5);)a++;let l=r(e.fc,a),M=r(e.ft,a),d=this.cfg.width,y=this.cfg.h,o=this.chipThickness(),s=this.tool.a,u=0;if(o>0){let x=this.h/o;u=Math.atan(x*Math.cos(s)/(1-x*Math.sin(s)))}let m=Math.atan(this.cfg.mu),c=Mt/4-(m-s)/2,T=-1/0,S=0,j=0;for(let x=0;x<this.N;x++)this.T[x]>T&&(T=this.T[x]),this.ep[x]>S&&(S=this.ep[x]),this.epd[x]>j&&(j=this.epd[x]);let X=r(e.trake,a),I=0;for(let x=0;x<this.N;x++)I+=this.T[x]-this.cfg.T0;return I=I*this.mReal*this.mat.c+this.heatTool,{fc:l,ft:M,kc:l/(d*y),hc:o*1e3,ratio:o>0?o/this.h:0,phi:u*180/Mt,phiMerchant:c*180/Mt,tmax:T,trake:X,epMax:S,edMax:j,qTool:this.qToolT,travel:this.travel*1e3,t:this.t,steps:this.steps,N:this.N,dx:this.dx*1e6,ms:this.ms,nSub:this.nSub,kcRef:this.mat.kcRef,done:this.done,heatRatio:this.workIn>0?I/this.workIn:0}}};var B=null,K=!1,Et=0,wt=0,ct=0;onmessage=i=>{let e=i.data;e.type==="init"?(B=new Tt(e.cfg),K=!1,Et=0,ct=0,Pt()):e.type==="run"?B&&!B.done&&!K&&(K=!0,wt=performance.now(),is()):e.type==="pause"&&(K&&(ct+=performance.now()-wt),K=!1,Pt())};function is(){if(!K||!B)return;let i=performance.now(),e=B.cfg.cutLen*.001/160;for(;performance.now()-i<45&&!B.done;)B.step(),B.travel-Et>=e&&(B.sample(),Et=B.travel);B.done&&(B.sample(),K=!1,ct+=performance.now()-wt),Pt(),K&&setTimeout(is,0)}function Pt(){let i=B,e=i.N,h=0;for(let c=0;c<e;c++)i.dead[c]||h++;let r=new Float32Array(h),a=new Float32Array(h),n=new Float32Array(h),l=new Float32Array(h),M=new Float32Array(h),d=new Float32Array(h),y=new Float32Array(h),o=new Uint8Array(h),s=0;for(let c=0;c<e;c++)i.dead[c]||(r[s]=i.x[c]*1e3,a[s]=i.y[c]*1e3,n[s]=i.T[c],l[s]=i.seq[c]*1e-6,M[s]=i.ep[c],d[s]=i.sr[c],y[s]=i.p[c]*1e-6,o[s]=i.contact[c]?2:i.fixed[c]===1?1:0,s++);let u=ss(i.tool,Math.max(4*i.h,4e-4)).map(([c,T])=>[c*1e3,T*1e3]),m=K?ct+performance.now()-wt:ct;postMessage({type:"frame",x:r,y:a,T:n,seq:l,ep:M,sr:d,p:y,flag:o,outline:u,dx:i.dx*1e3,L:i.L*1e3,H:i.H*1e3,tip:[i.tool.ex*1e3,i.tool.ey*1e3,i.tool.r*1e3],hist:i.hist,summary:i.summary(),running:K,wall:m,dt:i.dt},[r.buffer,a.buffer,n.buffer,l.buffer,M.buffer,d.buffer,y.buffer,o.buffer])}})();
+`],{type:"text/javascript"})));function ct(t){let i=.13572138+t*(4.6153926+t*(-42.66032258+t*(132.13108234+t*(-152.94239396+t*59.28637943)))),s=.09140261+t*(2.19418839+t*(4.84296658+t*(-14.18503333+t*(4.27729857+t*2.82956604)))),e=.1066733+t*(12.64194608+t*(-60.58204836+t*(110.36276771+t*(-89.90310912+t*27.34824973))));return[i,s,e].map(h=>Math.round(255*Math.min(1,Math.max(0,h))))}function lt(t){let i=[[44,92,168],[236,236,232],[186,52,42]],s=t<.5?t*2:(t-.5)*2,e=t<.5?i[0]:i[1],h=t<.5?i[1]:i[2];return e.map((r,d)=>Math.round(r+(h[d]-r)*s))}var H={turbo:[],div:[]};for(let t=0;t<256;t++)H.turbo.push(ct(.06+.94*t/255)),H.div.push(lt(t/255));var ft=t=>`linear-gradient(90deg, ${[0,.2,.4,.6,.8,1].map(i=>`rgb(${H[t][Math.round(i*255)]}) ${i*100}%`).join(", ")})`,O={T:{label:"\u6E29\u5EA6",unit:"\xB0C",map:"turbo",fmt:t=>t.toFixed(0)},seq:{label:"\u30DF\u30FC\u30BC\u30B9\u5FDC\u529B",unit:"MPa",map:"turbo",fmt:t=>t.toFixed(0)},ep:{label:"\u76F8\u5F53\u5851\u6027\u3072\u305A\u307F",unit:"",map:"turbo",fmt:t=>t.toFixed(2)},sr:{label:"\u3072\u305A\u307F\u901F\u5EA6",unit:"log\u2081\u2080 1/s",map:"turbo",fmt:t=>t.toFixed(1),log:!0},p:{label:"\u9759\u6C34\u5727",unit:"MPa",map:"div",fmt:t=>t.toFixed(0)}},n=null,j="T",_="tip",m="idle",E=null,y=a("view"),c=y.getContext("2d"),N=a("mat");for(let[t,i]of Object.entries(U))N.add(new Option(i.name,t));N.value=Z.mat;function st(){let t=U[N.value];a("vc").value=t.vc,a("mu").value=t.mu}st();N.addEventListener("change",()=>{st(),B()});function dt(){let t=i=>parseFloat(a(i).value);return{mat:N.value,vc:t("vc"),h:t("h"),rake:t("rake"),clearance:t("clear"),edgeRadius:t("edge"),mu:t("mu"),width:t("width"),cutLen:t("len"),nh:t("res")}}for(let t of["vc","h","rake","clear","edge","mu","width","len","res"])a(t).addEventListener("change",B);function B(){E=dt(),m="idle",n=null,W.postMessage({type:"init",cfg:E}),K()}a("run").addEventListener("click",()=>{m==="running"?(W.postMessage({type:"pause"}),m="paused"):m==="done"?(B(),W.postMessage({type:"run"}),m="running"):(W.postMessage({type:"run"}),m="running"),K()});a("reset").addEventListener("click",B);function K(){let t=a("run");t.textContent=m==="running"?"\u4E00\u6642\u505C\u6B62":m==="paused"?"\u518D\u958B":m==="done"?"\u3082\u3046\u4E00\u5EA6":"\u5207\u524A\u958B\u59CB";let i=a("state");i.dataset.s=m,i.textContent={idle:"\u5F85\u6A5F",running:"\u8A08\u7B97\u4E2D",paused:"\u4E00\u6642\u505C\u6B62",done:"\u5B8C\u4E86"}[m]}var tt=a("fields");for(let[t,i]of Object.entries(O)){let s=document.createElement("button");s.className="chipbtn",s.textContent=i.label,s.dataset.f=t,s.setAttribute("aria-pressed",t===j),s.addEventListener("click",()=>{j=t;for(let e of tt.children)e.setAttribute("aria-pressed",e.dataset.f===t);X()}),tt.appendChild(s)}for(let t of document.querySelectorAll("[data-zoom]"))t.addEventListener("click",()=>{_=t.dataset.zoom;for(let i of document.querySelectorAll("[data-zoom]"))i.setAttribute("aria-pressed",i===t);X()});W.onmessage=t=>{t.data.type==="frame"&&(n=t.data,m==="running"&&!n.running&&(m=n.summary.done?"done":"paused"),K(),X(),ot(),pt())};var S=null;function xt(t){let i=n[t];if(!O[t].log)return i;let s=new Float32Array(i.length);for(let e=0;e<i.length;e++)s[e]=Math.log10(Math.max(i[e],1));return s}function ut(t,i){let s=1/0,e=-1/0;for(let h=0;h<i.length;h++){if(n.flag[h]===1)continue;let r=i[h];r<s&&(s=r),r>e&&(e=r)}if(t==="T"&&(s=20,e=Math.max(e,100)),(t==="seq"||t==="ep")&&(s=0),t==="sr"&&(s=Math.max(s,0),e=Math.max(e,s+1)),t==="p"){let h=Math.max(Math.abs(s),Math.abs(e),1);s=-h,e=h}return e>s||(e=s+1),[s,e]}function X(){let t=window.devicePixelRatio||1,i=y.clientWidth,s=y.clientHeight;(y.width!==Math.round(i*t)||y.height!==Math.round(s*t))&&(y.width=Math.round(i*t),y.height=Math.round(s*t));let e=y.width,h=y.height;if(c.clearRect(0,0,e,h),!n)return;let r=E.h,[d,w]=n.tip,o,x,u,F;_==="all"?(o=Math.min(-.15,d-3*r),x=n.L+.02,u=-n.H-.02,F=Math.max(.35,4.5*r)):(o=d-4.5*r,x=d+4.5*r,u=w-2.2*r,F=w+4.8*r);let l=Math.min(e/(x-o),h/(F-u)),L=(e-l*(x-o))/2-o*l,g=(h-l*(F-u))/2+F*l;S={s:l,ox:L,oy:g,dpr:t};let T=xt(j),[p,C]=ut(j,T),z=H[O[j].map],f=c.createImageData(e,h),M=new Uint32Array(f.data.buffer),k=Math.max(1,n.dx*l*.5),Y=n.x.length,G=255/(C-p);for(let A=0;A<Y;A++){let $=L+n.x[A]*l,q=g-n.y[A]*l;if($<-k||q<-k||$>e+k||q>h+k)continue;let R=Math.round((T[A]-p)*G);R=R<0?0:R>255?255:R;let b=z[R],Q=255<<24|b[2]<<16|b[1]<<8|b[0];n.flag[A]===1&&(Q=255<<24|b[2]*.55<<16|b[1]*.55<<8|b[0]*.55);let nt=Math.max(0,Math.floor($-k)),ht=Math.min(e,Math.ceil($+k)),at=Math.max(0,Math.floor(q-k)),rt=Math.min(h,Math.ceil(q+k));for(let D=at;D<rt;D++)M.fill(Q,D*e+nt,D*e+ht)}c.putImageData(f,0,0);let v=getComputedStyle(document.documentElement);c.beginPath(),n.outline.forEach(([A,$],q)=>{let R=L+A*l,b=g-$*l;q?c.lineTo(R,b):c.moveTo(R,b)}),c.closePath();let I=c.createLinearGradient(L+(d-3*r)*l,0,L+d*l,0);I.addColorStop(0,v.getPropertyValue("--tool-a")),I.addColorStop(1,v.getPropertyValue("--tool-b")),c.fillStyle=I,c.fill(),c.lineWidth=1.5*t,c.strokeStyle=v.getPropertyValue("--tool-edge"),c.stroke(),c.setLineDash([4*t,4*t]),c.strokeStyle=v.getPropertyValue("--guide"),c.lineWidth=t,c.beginPath(),c.moveTo(0,g+r*l),c.lineTo(e,g+r*l),c.stroke(),c.setLineDash([]);let V=_==="all"?.1:.05,J=V*l;c.fillStyle=v.getPropertyValue("--ink"),c.fillRect(e-J-16*t,h-22*t,J,3*t),c.font=`${11*t}px ${v.getPropertyValue("--font-mono")}`,c.textAlign="right",c.fillText(`${V*1e3} \xB5m`,e-16*t,h-28*t);let P=O[j];a("lg-bar").style.background=ft(P.map),a("lg-lo").textContent=P.fmt(p),a("lg-hi").textContent=P.fmt(C),a("lg-name").textContent=P.unit?`${P.label} [${P.unit}]`:P.label}new ResizeObserver(()=>{X(),ot()}).observe(y);y.addEventListener("pointermove",t=>{if(!n||!S)return;let i=y.getBoundingClientRect(),s=(t.clientX-i.left)*S.dpr,e=(t.clientY-i.top)*S.dpr,h=(s-S.ox)/S.s,r=(S.oy-e)/S.s,d=-1,w=(n.dx*1.5)**2;for(let x=0;x<n.x.length;x++){let u=(n.x[x]-h)**2+(n.y[x]-r)**2;u<w&&(w=u,d=x)}let o=a("probe");if(d<0){o.hidden=!0;return}o.hidden=!1,o.textContent=`${n.T[d].toFixed(0)} \xB0C \xB7 \u03C3 ${n.seq[d].toFixed(0)} MPa \xB7 \u03B5 ${n.ep[d].toFixed(2)} \xB7 \u03B5\u0307 ${n.sr[d].toExponential(1)} /s \xB7 p ${n.p[d].toFixed(0)} MPa`});y.addEventListener("pointerleave",()=>{a("probe").hidden=!0});function et(t,i){let s=t/i,e=Math.pow(10,Math.floor(Math.log10(s))),h=s/e;return(h<1.5?1:h<3?2:h<7?5:10)*e}function it(t,i,s,e,h){let r=window.devicePixelRatio||1,d=t.clientWidth,w=t.clientHeight;t.width=Math.round(d*r),t.height=Math.round(w*r);let o=t.getContext("2d"),x=getComputedStyle(document.documentElement);o.scale(r,r),o.clearRect(0,0,d,w);let u=48,F=12,l=12,L=28,g=d-u-F,T=w-l-L,p=1;for(let f of s)for(let M of f.data)M>p&&(p=M);let C=et(p,4);p=Math.ceil(p/C)*C;let z=et(e,g<320?3:5);o.font=`11px ${x.getPropertyValue("--font-mono")}`,o.fillStyle=x.getPropertyValue("--ink-mute"),o.strokeStyle=x.getPropertyValue("--rule"),o.lineWidth=1,o.textAlign="right",o.textBaseline="middle";for(let f=0;f<=p+1e-9;f+=C){let M=l+T-f/p*T;o.beginPath(),o.moveTo(u,M),o.lineTo(u+g,M),o.stroke(),o.fillText(f.toFixed(C<1?1:0),u-6,M)}o.textAlign="center",o.textBaseline="top";for(let f=0;f<=e+1e-9;f+=z)o.fillText(f.toFixed(z<.1?2:1),u+f/e*g,l+T+6);o.textAlign="left",o.textBaseline="top",o.fillText(h,4,0),o.textAlign="right",o.fillText("\u6A2A\u8EF8 \u5207\u524A\u9577\u3055 [mm]",u+g,0);for(let f of s){if(!f.data.length)continue;o.strokeStyle=x.getPropertyValue(f.color),o.lineWidth=2,o.beginPath(),f.data.forEach((G,v)=>{let I=u+i[v]/e*g,V=l+T-G/p*T;v?o.lineTo(I,V):o.moveTo(I,V)}),o.stroke();let M=f.data.length-1,k=u+i[M]/e*g,Y=l+T-f.data[M]/p*T;o.fillStyle=x.getPropertyValue(f.color),o.beginPath(),o.arc(k,Y,3,0,7),o.fill()}}function ot(){let t=n?n.hist:{travel:[],fc:[],ft:[],tmax:[],trake:[]},i=E?E.cutLen:1;it(a("chart-f"),t.travel,[{data:t.fc,color:"--s1"},{data:t.ft,color:"--s2"}],i,"N"),it(a("chart-t"),t.travel,[{data:t.tmax,color:"--s3"},{data:t.trake,color:"--s1"}],i,"\xB0C")}function pt(){let t=n.summary,i=t.steps>0,s=(h,r)=>{a(h).textContent=i?r:"\u2014"};s("r-fc",t.fc.toFixed(0)),s("r-ft",t.ft.toFixed(0)),s("r-kc",t.kc.toFixed(0)),a("r-kcref").textContent=`\u4FBF\u89A7\u5024\u306E\u76EE\u5B89 ${t.kcRef}`,s("r-hc",t.ratio>0?t.hc.toFixed(3):"\u2014"),a("r-ratio").textContent=i&&t.ratio>0?`\u5207\u308A\u304F\u305A\u539A\u3055\u6BD4 ${t.ratio.toFixed(2)}`:"\u5207\u308A\u304F\u305A\u539A\u3055\u6BD4 \u2014",s("r-phi",t.phi>0?t.phi.toFixed(1):"\u2014"),a("r-phim").textContent=`Merchant \u306E\u5F0F ${t.phiMerchant.toFixed(1)}\xB0`,s("r-tmax",t.tmax.toFixed(0)),s("r-trake",t.trake.toFixed(0)),s("r-ep",t.epMax.toFixed(1)),a("r-ed").textContent=i?`\u6700\u5927\u3072\u305A\u307F\u901F\u5EA6 ${t.edMax.toExponential(1)} /s`:"\u6700\u5927\u3072\u305A\u307F\u901F\u5EA6 \u2014";let e=Math.min(100,t.travel/E.cutLen*100);a("prog").style.width=e+"%",a("clock").textContent=`${t.travel.toFixed(3)} / ${E.cutLen.toFixed(2)} mm \xB7 ${(t.t*1e6).toFixed(1)} \xB5s \xB7 \u8A08\u7B97 ${(n.wall/1e3).toFixed(0)} s`,a("meta").textContent=`\u7C92\u5B50 ${t.N.toLocaleString()} \u500B \xB7 \u9593\u9694 ${t.dx.toFixed(1)} \xB5m \xB7 \u8CEA\u91CF\u30B9\u30B1\u30FC\u30EA\u30F3\u30B0 \xD7${t.ms.toFixed(0)} \xB7 \u0394t ${(n.dt*1e9).toFixed(1)} ns \xB7 ${t.steps.toLocaleString()} \u30B9\u30C6\u30C3\u30D7${t.heatRatio>0?` \xB7 \u767A\u71B1 / \u5207\u524A\u4ED5\u4E8B ${(t.heatRatio*100).toFixed(0)} %`:""}`}B();})();
+</script>
