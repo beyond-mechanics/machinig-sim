@@ -103,6 +103,7 @@ $('exag').oninput = e => { view.exag = +e.target.value; $('exagOut').textContent
 $('showChips').onchange = e => { view.showChips = e.target.checked; };
 $('showPath').onchange = e => { view.showPath = e.target.checked; };
 $('workFlex').onchange = e => { sim.cfg.workpieceFlex = e.target.checked; host.config(true); };
+$('cutNl').onchange = e => { sim.cfg.cuttingNonlinear = e.target.checked; host.config(true); };
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view.setView(b.dataset.view));
 document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-color]').forEach(x => x.setAttribute('aria-pressed', x === b));

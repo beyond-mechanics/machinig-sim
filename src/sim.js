@@ -18,7 +18,7 @@ export class Simulator {
     this.cfg = {
       tool: { D: 10, N: 3, helixDeg: 30, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000 },
       modal: { auto: true, k: 0, fn: 0, zeta: 0.04 },
-      material: 'A5052', coolant: 'air', workpieceFlex: true,
+      material: 'A5052', coolant: 'air', workpieceFlex: true, cuttingNonlinear: true,
       feedOverride: 1, spindleOverride: 1,
       dynBudget: 220000, // slice-force evaluations per frame (≈ 5 ms of JS)
       cell: 0.3,
@@ -70,7 +70,7 @@ export class Simulator {
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
     const t = this.cfg.tool;
-    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen }, this.modalNow(), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
+    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear }, this.modalNow(), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
     this.lastS = S;
   }
 

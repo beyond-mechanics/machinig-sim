@@ -2,9 +2,14 @@
 // end mill, a 2-DOF (x, y) tool-tip modal model and regenerative chip thickness through a
 // one-tooth-period delay. An optional 1-DOF workpiece mode (thin wall) moves along the wall
 // normal; chip thickness uses the tool-to-wall relative displacement.
+// With tool.nonlinear (default) the shearing coefficients follow an exponential size effect
+// K(h) = K·(h0/h)^mc and the flank adds process damping Ci·b·v_n/V_c against the normal
+// vibration velocity, which stabilises low-speed cutting.
 // Lengths in mm, forces in N, modal states in metres (SI).
 
 export const BINS = 180; // angular resolution of the engagement map
+export const H_REF = 0.05; // chip thickness at which the size-effect coefficients equal K [mm]
+const H_MIN = 0.002;       // below this the exponential law is not extrapolated [mm]
 
 export class CuttingEngine {
   constructor() {
@@ -86,6 +91,11 @@ export class CuttingEngine {
     const { N, Hb, mat, dt, m, kSI, c, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap } = this;
     const ux = this.ux, uy = this.uy, vx = this.vx_, vy = this.vy_, fz = this.fz;
     const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kte = mat.Kte, Kre = mat.Kre, Kae = mat.Kae;
+    const nl = this.tool.nonlinear !== false;
+    const mc = nl ? (mat.mc ?? 0) : 0;
+    // process damping per slice [N·s/m] = Ci·b / V_c, V_c = ω·r
+    const pdK = nl ? (mat.Ci ?? 0) * db * 1e-3 / (this.omega * 1e-3) : 0;
+    const wnx_ = this.wnx, wny_ = this.wny;
     const TWO_PI = 2 * Math.PI, binScale = BINS / TWO_PI, pitch = TWO_PI / N;
     const st = this.stats, hist = this.hist, ts = this.toothSamples;
     const dphi = this.omega * dt;
@@ -99,6 +109,8 @@ export class CuttingEngine {
       const rx = x - w * wnx, ry = y - w * wny;
       const xm = rx * 1e3, ym = ry * 1e3;
       let Fx = 0, Fy = 0, Fz = 0, T = 0, Fr2z = 0, Fsum = 0;
+      // relative tool-to-wall velocity [m/s] for process damping
+      const rvx = vxs - wv * wnx_, rvy = vys - wv * wny_;
       for (let i = 0; i < N; i++) {
         let engaged = 0, ph = 0, zsum = 0;
         let pi = pr + i * stepsPerTooth; if (pi >= stepsPerRev) pi -= stepsPerRev;
@@ -118,9 +130,12 @@ export class CuttingEngine {
           surf[idx] = rn;
           // physical cap: beyond this the real tool breaks or jumps out; keeps severe chatter bounded
           if (h > hMax) h = hMax;
-          const Ft = Ktc * h * db + Kte * db;
-          const Fr = Krc * h * db + Kre * db;
-          const Fa = Kac * h * db + Kae * db;
+          const se = mc ? Math.pow(H_REF / (h > H_MIN ? h : H_MIN), mc) : 1;
+          const Ft = Ktc * se * h * db + Kte * db;
+          let Fr = Krc * se * h * db + Kre * db;
+          const Fa = Kac * se * h * db + Kae * db;
+          // flank indentation resists motion along the edge normal (process damping)
+          if (pdK) Fr += pdK / sliceR[k] * (rvx * nxg + rvy * nyg);
           const txg = cs * ux - sn * vx, tyg = cs * uy - sn * vy;
           Fx += -Ft * txg - Fr * nxg;
           Fy += -Ft * tyg - Fr * nyg;
