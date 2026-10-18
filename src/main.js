@@ -164,11 +164,16 @@ function frameLoop(now) {
   host.frame(dt, running);
   if (running && sim.done) { running = false; host.setRunning(false); $('btnPlay').textContent = '▶ もう一度'; }
   const e = sim.engine;
-  if (running && sim.display.cutting) spinAngle += dt * 2 * Math.PI * 3; // visual spin, not true rpm
+  // true spindle speed scaled by the playback speed; above a few degrees per frame per flute
+  // the flutes alias, so the view switches to a motion-blurred cylinder
+  const revPerS = running && sim.S > 0 ? sim.S / 60 * sim.speed : 0;
+  const dTheta = revPerS * dt * 2 * Math.PI;
+  const blur = Math.min(1, Math.max(0, (dTheta * sim.cfg.tool.N / (2 * Math.PI) - 0.12) / 0.3));
+  spinAngle += blur >= 1 ? dt * 2 * Math.PI * 0.7 : dTheta; // when fully blurred, a slow drift keeps the highlights alive
   const wall = sim.display.cutting ? sim.wall : null;
   view.updateWallDeform(wall && e.wk ? wall : null, (e.runMeanW || 0) * 1e3 * view.exag);
   view.updateStock();
-  view.updateTool(sim.pos, e.x * 1e3 * view.exag, e.y * 1e3 * view.exag, spinAngle);
+  view.updateTool(sim.pos, e.x * 1e3 * view.exag, e.y * 1e3 * view.exag, spinAngle, blur);
   view.updateNozzle(sim.cfg.coolant, sim.pos);
   view.updateChips(sim.chips, sim.mat);
   view.render();

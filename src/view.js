@@ -188,7 +188,9 @@ export class View {
     this.spin = new T.Group();
     this.pivot.add(this.spin);
     this.scene.add(this.pivot);
-    this.fluteMat = new T.MeshStandardMaterial({ color: 0xb9c0c8, metalness: 0.85, roughness: 0.28 });
+    // ground carbide: polished land and rake face, duller flute gullet (vertex shade)
+    this.fluteMat = new T.MeshStandardMaterial({ color: 0xc4cad2, vertexColors: true, metalness: 0.9, roughness: 0.24, transparent: true });
+    this.shankMat = new T.MeshStandardMaterial({ color: 0xaeb5bd, metalness: 0.85, roughness: 0.35 });
     this.holderMat = new T.MeshStandardMaterial({ color: 0x2f3338, metalness: 0.7, roughness: 0.35 });
   }
 
@@ -196,31 +198,36 @@ export class View {
     const T = THREE;
     this.toolCfg = t;
     for (const c of [...this.spin.children]) { this.spin.remove(c); c.geometry.dispose(); }
-    const R = t.D / 2;
-    // fluted section with helical grooves, built along +z from the tip
-    const segZ = 48, segA = 48, fl = t.fluteLen;
+    if (this.blurGroup) { this.pivot.remove(this.blurGroup); this.blurGroup.traverse(o => o.geometry && o.geometry.dispose()); }
+    const R = t.D / 2, N = t.N, fl = t.fluteLen;
+    // fluted section: every cross-section is the flute profile below, twisted along the helix;
+    // fine angular resolution so the rake face and the cutting edge stay sharp
+    const segZ = 160, segA = N * 48;
     const g = new T.CylinderGeometry(R, R, fl, segA, segZ, false);
     g.rotateX(Math.PI / 2); g.translate(0, 0, fl / 2);
-    const p = g.attributes.position;
+    const p = g.attributes.position, col = new Float32Array(p.count * 3);
     const tanB = Math.tan(t.helixDeg * Math.PI / 180);
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
       const r = Math.hypot(x, y);
-      if (r < 1e-6) continue;
-      let a = Math.atan2(y, x) + z * tanB / R;
-      // groove profile: N flutes, each a smooth dip in radius
-      const ph = ((a * t.N / (2 * Math.PI)) % 1 + 1) % 1;
-      const dip = Math.max(0, Math.sin(ph * Math.PI * 2)) ** 3 * 0.22;
-      let rr = R * (1 - dip);
-      if (t.type === 'ball' && z < R) rr *= Math.sqrt(Math.max(0, 1 - ((R - z) / R) ** 2));
-      const s = rr / r;
-      p.setXY(i, x * s, y * s);
+      let shade = 0.8;
+      if (r > 1e-6) {
+        const a = Math.atan2(y, x) + z * tanB / R;
+        const u = ((a * N / (2 * Math.PI)) % 1 + 1) % 1;
+        const f = fluteProfile(u);
+        let rr = R * f.r;
+        if (t.type === 'ball' && z < R) rr *= Math.sqrt(Math.max(0, 1 - ((R - z) / R) ** 2));
+        p.setXY(i, x * rr / r, y * rr / r);
+        shade = f.shade;
+      }
+      col[i * 3] = shade; col[i * 3 + 1] = shade; col[i * 3 + 2] = shade * 1.02;
     }
+    g.setAttribute('color', new T.BufferAttribute(col, 3));
     g.computeVertexNormals();
     const flute = new T.Mesh(g, this.fluteMat);
     const shankLen = Math.max(1, t.stickout - fl);
-    const sg = new T.CylinderGeometry(R, R, shankLen, 32); sg.rotateX(Math.PI / 2); sg.translate(0, 0, fl + shankLen / 2);
-    const shank = new T.Mesh(sg, this.fluteMat);
+    const sg = new T.CylinderGeometry(R, R, shankLen, 48); sg.rotateX(Math.PI / 2); sg.translate(0, 0, fl + shankLen / 2);
+    const shank = new T.Mesh(sg, this.shankMat);
     // collet nut + holder body above the stickout
     const hg1 = new T.CylinderGeometry(R * 1.9, R * 2.3, 14, 40); hg1.rotateX(Math.PI / 2); hg1.translate(0, 0, t.stickout + 7);
     const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
@@ -229,15 +236,34 @@ export class View {
     this.spin.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // tool hangs from the pivot: children are offset by -stickout
     this.spin.position.set(0, 0, -t.stickout);
+    // motion blur: what the eye integrates over a frame at speed. Nested translucent shells
+    // whose opacity is the fraction of a revolution the flutes fill at that radius.
+    this.blurGroup = new T.Group();
+    this.blurShells = [];
+    const occ = r => { let n = 0; for (let k = 0; k < 400; k++) if (fluteProfile(k / 400).r >= r) n++; return n / 400; };
+    for (const rf of [1, 0.93, 0.85, 0.77, 0.69]) {
+      const cg = new T.CylinderGeometry(R * rf, R * rf, fl, 48, 1, true); cg.rotateX(Math.PI / 2); cg.translate(0, 0, fl / 2 - t.stickout);
+      const m = new T.Mesh(cg, new T.MeshStandardMaterial({ color: 0xb4bbc4, metalness: 0.8, roughness: 0.45, transparent: true, opacity: 0, depthWrite: false }));
+      m.userData.occ = occ(rf - 0.04); m.renderOrder = 2;
+      this.blurShells.push(m); this.blurGroup.add(m);
+    }
+    this.blurGroup.visible = false;
+    this.pivot.add(this.blurGroup);
+    this.flute = flute;
   }
 
   // tool tip nominal position, deflection [mm] (already exaggerated), spin angle
-  updateTool(pos, dx, dy, angle) {
+  // blur: 0 (flutes visible) … 1 (spinning too fast for the eye: a translucent cylinder)
+  updateTool(pos, dx, dy, angle, blur = 0) {
     const L = this.toolCfg.stickout;
     this.pivot.position.set(pos.x, pos.y, pos.z + L);
     const sx = Math.max(-0.9, Math.min(0.9, dy / L)), sy = Math.max(-0.9, Math.min(0.9, dx / L));
     this.pivot.rotation.set(Math.asin(sx), -Math.asin(sy), 0);
     this.spin.rotation.z = -angle; // clockwise seen from above
+    this.blurGroup.visible = blur > 0.01;
+    this.fluteMat.opacity = 1 - 0.8 * blur;
+    this.fluteMat.depthWrite = blur < 0.5;
+    for (const m of this.blurShells) m.material.opacity = blur * Math.min(0.85, m.userData.occ * 0.9);
   }
 
   // ---------- coolant nozzle ----------
@@ -428,6 +454,24 @@ function stockMaterial() {
         }`);
   };
   return m;
+}
+
+// End-mill cross-section over one flute pitch, u = 0 at the cutting edge and increasing
+// against the rotation: cylindrical land (margin), primary and secondary clearance down to
+// the heel, the flute gullet around the core, and the rake face rising back to the edge.
+// Returns radius as a fraction of R and a shade (polished land/rake, duller gullet).
+function fluteProfile(u) {
+  const core = 0.62;
+  if (u < 0.035) return { r: 1, shade: 1.05 };                                     // land
+  if (u < 0.16) return { r: 1 - 0.035 * (u - 0.035) / 0.125, shade: 0.95 };          // primary clearance
+  if (u < 0.42) return { r: 0.965 - 0.075 * (u - 0.16) / 0.26, shade: 0.88 };        // secondary clearance
+  if (u < 0.9) {                                                                     // gullet: smooth bowl to the core
+    const v = (u - 0.42) / 0.48, d = Math.sin(Math.PI * Math.min(1, v * 1.15)) ** 0.8;
+    return { r: 0.89 - (0.89 - core) * d * (v < 0.87 ? 1 : 1 - (v - 0.87) / 0.13 * 0.2), shade: 0.72 };
+  }
+  // rake face: steep, nearly radial rise to the edge (positive rake)
+  const w = (u - 0.9) / 0.1;
+  return { r: core + 0.05 + (1 - core - 0.05) * w ** 0.7, shade: 1.0 };
 }
 
 // perceptual-ish ramp: deep blue → teal → amber → red
