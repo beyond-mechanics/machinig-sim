@@ -119,7 +119,9 @@ function fft(re, im) {
   }
 }
 
+// fn: natural frequency or list of them [Hz]
 export function drawSpectrum(cv, eng, fn) {
+  const fns = [].concat(fn);
   const { g, w, h } = setup(cv);
   const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
   if (!eng.stepsPerTooth) return;
@@ -129,7 +131,7 @@ export function drawSpectrum(cv, eng, fn) {
   for (let i = 0; i < n; i++) { const win = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)); re[i] = (X.arr[i] - mean) * win; }
   fft(re, im);
   const fs = 1 / (eng.dt * eng.decim);
-  const fMax = Math.min(fs / 2, Math.max(fn * 2.2, 3000));
+  const fMax = Math.min(fs / 2, Math.max(Math.max(...fns) * 2.2, 3000));
   const kMax = Math.floor(fMax / fs * n);
   const amp = new Float32Array(kMax);
   let mx = 1e-6; for (let k = 1; k < kMax; k++) { amp[k] = Math.hypot(re[k], im[k]) * 4 / n; mx = Math.max(mx, amp[k]); }
@@ -142,7 +144,8 @@ export function drawSpectrum(cv, eng, fn) {
   const ftp = eng.S * eng.N / 60;
   g.setLineDash([3, 3]); g.strokeStyle = C.mute;
   for (let k = 1; ftp * k < fMax; k++) { g.beginPath(); g.moveTo(xs(ftp * k), box.y); g.lineTo(xs(ftp * k), box.y + box.h); g.stroke(); }
-  g.strokeStyle = C.bad; g.beginPath(); g.moveTo(xs(fn), box.y); g.lineTo(xs(fn), box.y + box.h); g.stroke();
+  g.strokeStyle = C.bad;
+  for (const f of fns) if (f < fMax) { g.beginPath(); g.moveTo(xs(f), box.y); g.lineTo(xs(f), box.y + box.h); g.stroke(); }
   g.setLineDash([]);
   g.fillStyle = C.a; g.globalAlpha = 0.25;
   g.beginPath(); g.moveTo(xs(0), ys(0));
@@ -186,4 +189,27 @@ export function drawLobes(cv, lobes, op, rpmRange) {
     g.fillText(`${Math.round(op.S)} min⁻¹ / ${op.ap.toFixed(2)} mm`, x + (g.textAlign === 'left' ? 8 : -8), y - 4);
   }
   return box;
+}
+
+// Side-wall profile from the tooth-arc envelope (roughness.js); dashed line: ideal scallop height
+export function drawRoughness(cv, prof) {
+  const { g, w, h } = setup(cv);
+  const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
+  if (!prof) { g.fillStyle = C.mute; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('側面を削っているときに表示します', w / 2, h / 2); return; }
+  const Y = niceMax(Math.max(prof.Rz, prof.Rth) * 1.15 || 0.01);
+  const L = prof.length, xs = x => box.x + x / L * box.w, ys = v => box.y + v / Y * box.h; // depth downwards
+  const xt = []; const step = niceMax(L / 4);
+  for (let x = 0; x <= L + 1e-9; x += step) xt.push([`${+x.toFixed(3)}`, xs(x)]);
+  frame(g, box, '送り方向 mm', 'µm (壁の凹凸)', [['0', ys(0)], [`${Y}`, ys(Y)]], xt);
+  g.setLineDash([3, 3]); g.strokeStyle = C.mute;
+  g.beginPath(); g.moveTo(box.x, ys(prof.Rth)); g.lineTo(box.x + box.w, ys(prof.Rth)); g.stroke();
+  g.setLineDash([]);
+  // material side filled
+  g.fillStyle = C.a; g.globalAlpha = 0.25;
+  g.beginPath(); g.moveTo(xs(0), box.y);
+  for (let i = 0; i < prof.x.length; i++) g.lineTo(xs(prof.x[i]), ys(prof.z[i]));
+  g.lineTo(xs(L), box.y); g.fill();
+  g.globalAlpha = 1; g.strokeStyle = C.a; g.lineWidth = 1.3; g.beginPath();
+  for (let i = 0; i < prof.x.length; i++) { const px = xs(prof.x[i]), py = ys(prof.z[i]); i ? g.lineTo(px, py) : g.moveTo(px, py); }
+  g.stroke();
 }

@@ -1,10 +1,17 @@
 // Time-domain milling dynamics: mechanistic cutting forces on axial slices of a helical
-// end mill, a 2-DOF (x, y) tool-tip modal model and regenerative chip thickness through a
+// end mill, a multi-mode (x and y separately) tool-tip modal model and regenerative chip thickness through a
 // one-tooth-period delay. An optional 1-DOF workpiece mode (thin wall) moves along the wall
 // normal; chip thickness uses the tool-to-wall relative displacement.
+// With tool.nonlinear (default) the shearing coefficients follow an exponential size effect
+// K(h) = K·(h0/h)^mc and the flank adds process damping Ci·b·v_n/V_c against the normal
+// vibration velocity, which stabilises low-speed cutting.
 // Lengths in mm, forces in N, modal states in metres (SI).
 
+import { modeSet } from './frf.js';
+
 export const BINS = 180; // angular resolution of the engagement map
+export const H_REF = 0.05; // chip thickness at which the size-effect coefficients equal K [mm]
+const H_MIN = 0.002;       // below this the exponential law is not extrapolated [mm]
 
 export class CuttingEngine {
   constructor() {
@@ -12,10 +19,14 @@ export class CuttingEngine {
     this.stats = newStats();
     this.hist = { n: 4096, i: 0, count: 0, Fx: new Float32Array(4096), Fy: new Float32Array(4096), Fz: new Float32Array(4096), x: new Float32Array(4096), y: new Float32Array(4096) };
     this.toothSamples = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
+    // tool position each time a tooth passes the +v side (φ = 0) and the −v side (φ = π) of the
+    // cutter: these are the moments the two side walls are generated (surface roughness)
+    this.wallSamples = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
+    this.wallSamplesPi = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
     this.chipEvents = [];
   }
 
-  // tool: {N, R, helixDeg, type, fluteLen}, modal: {k [N/mm], fn [Hz], zeta}, mat, S [rpm]
+  // tool: {N, R, helixDeg, type, fluteLen}, modal: {k [N/mm], fn [Hz], zeta[, modesX, modesY]}, mat, S [rpm]
   // fnMax: highest frequency to resolve (tool or workpiece mode)
   configure(tool, modal, mat, S, fnMax = 0) {
     this.tool = tool; this.mat = mat; this.modal = modal;
@@ -23,14 +34,20 @@ export class CuttingEngine {
     this.S = Math.max(100, S);
     this.omega = this.S * 2 * Math.PI / 60;
     const Ttooth = 60 / (this.S * this.N);
-    this.stepsPerTooth = Math.max(48, Math.ceil(Ttooth * Math.max(modal.fn, fnMax) * 24));
+    const ms = modeSet(modal);
+    const fTop = Math.max(...ms.x.map(m => m.fn), ...ms.y.map(m => m.fn));
+    this.stepsPerTooth = Math.max(48, Math.ceil(Ttooth * Math.max(fTop, fnMax) * 24));
     this.dt = Ttooth / this.stepsPerTooth;
     this.Ttooth = Ttooth;
-    const kSI = modal.k * 1e3;
-    const w = 2 * Math.PI * modal.fn;
-    this.m = kSI / (w * w);
-    this.kSI = kSI;
-    this.c = 2 * modal.zeta * Math.sqrt(kSI * this.m);
+    // each mode is a mass-spring-damper driven by the full force; displacement is their sum
+    const pack = modes => {
+      const k = Float64Array.from(modes, m => m.k * 1e3);
+      const mass = Float64Array.from(modes, (m, i) => k[i] / (2 * Math.PI * m.fn) ** 2);
+      const c = Float64Array.from(modes, (m, i) => 2 * m.zeta * Math.sqrt(k[i] * mass[i]));
+      return { k, m: mass, c, q: new Float64Array(modes.length), v: new Float64Array(modes.length) };
+    };
+    this.mx = pack(ms.x); this.my = pack(ms.y);
+    this.x0 = 0; this.y0 = 0; this.vx0 = 0; this.vy0 = 0;
     // surface left by the previous tooth, per slice / tooth / step-in-period (multiple regeneration)
     this.dz = Math.max(0.25, tool.fluteLen / 48);
     this.maxSlices = Math.ceil(tool.fluteLen / this.dz);
@@ -46,6 +63,9 @@ export class CuttingEngine {
     this.toothPhi = new Float64Array(this.N);
     this.toothZ = new Float64Array(this.N);
     this.decim = Math.max(1, Math.round(this.stepsPerTooth / 40));
+    // step within a tooth period at which some tooth sits at φ = π
+    this.piStep = Math.round(((Math.PI % (2 * Math.PI / this.N)) / (2 * Math.PI / this.N)) * this.stepsPerTooth) % this.stepsPerTooth;
+    for (const b of [this.wallSamples, this.wallSamplesPi]) { b.i = 0; b.count = 0; }
     this.stepCount = 0;
   }
 
@@ -83,13 +103,21 @@ export class CuttingEngine {
 
   // Integrate nSteps. Returns nothing; results accumulate in this.stats / hist / chipEvents.
   run(nSteps) {
-    const { N, Hb, mat, dt, m, kSI, c, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap } = this;
+    const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap } = this;
     const ux = this.ux, uy = this.uy, vx = this.vx_, vy = this.vy_, fz = this.fz;
     const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kte = mat.Kte, Kre = mat.Kre, Kae = mat.Kae;
+    const nl = this.tool.nonlinear !== false;
+    const mc = nl ? (mat.mc ?? 0) : 0;
+    // process damping per slice [N·s/m] = Ci·b / V_c, V_c = ω·r
+    const pdK = nl ? (mat.Ci ?? 0) * db * 1e-3 / (this.omega * 1e-3) : 0;
+    const wnx_ = this.wnx, wny_ = this.wny;
     const TWO_PI = 2 * Math.PI, binScale = BINS / TWO_PI, pitch = TWO_PI / N;
     const st = this.stats, hist = this.hist, ts = this.toothSamples;
     const dphi = this.omega * dt;
     const hMax = Math.max(0.1, 3 * fz);
+    const MX = this.mx, MY = this.my, nmx = MX.k.length, nmy = MY.k.length;
+    // a state set from outside (a test kick) since the last run goes into the first mode
+    MX.q[0] += this.x - this.x0; MY.q[0] += this.y - this.y0; MX.v[0] += this.vx - this.vx0; MY.v[0] += this.vy - this.vy0;
     let x = this.x, y = this.y, vxs = this.vx, vys = this.vy, t = this.t, pr = this.pr;
     const wk = this.wk, wm = this.wm, wc = this.wc, wnx = this.wnx, wny = this.wny;
     let w = this.w, wv = this.wv, wSum = 0;
@@ -99,6 +127,8 @@ export class CuttingEngine {
       const rx = x - w * wnx, ry = y - w * wny;
       const xm = rx * 1e3, ym = ry * 1e3;
       let Fx = 0, Fy = 0, Fz = 0, T = 0, Fr2z = 0, Fsum = 0;
+      // relative tool-to-wall velocity [m/s] for process damping
+      const rvx = vxs - wv * wnx_, rvy = vys - wv * wny_;
       for (let i = 0; i < N; i++) {
         let engaged = 0, ph = 0, zsum = 0;
         let pi = pr + i * stepsPerTooth; if (pi >= stepsPerRev) pi -= stepsPerRev;
@@ -118,9 +148,12 @@ export class CuttingEngine {
           surf[idx] = rn;
           // physical cap: beyond this the real tool breaks or jumps out; keeps severe chatter bounded
           if (h > hMax) h = hMax;
-          const Ft = Ktc * h * db + Kte * db;
-          const Fr = Krc * h * db + Kre * db;
-          const Fa = Kac * h * db + Kae * db;
+          const se = mc ? Math.pow(H_REF / (h > H_MIN ? h : H_MIN), mc) : 1;
+          const Ft = Ktc * se * h * db + Kte * db;
+          let Fr = Krc * se * h * db + Kre * db;
+          const Fa = Kac * se * h * db + Kae * db;
+          // flank indentation resists motion along the edge normal (process damping)
+          if (pdK) Fr += pdK / sliceR[k] * (rvx * nxg + rvy * nyg);
           const txg = cs * ux - sn * vx, tyg = cs * uy - sn * vy;
           Fx += -Ft * txg - Fr * nxg;
           Fy += -Ft * tyg - Fr * nyg;
@@ -139,10 +172,15 @@ export class CuttingEngine {
         this.toothEngaged[i] = engaged;
       }
       // modal integration (semi-implicit Euler), SI
-      const ax = (Fx - c * vxs - kSI * x) / m;
-      const ay = (Fy - c * vys - kSI * y) / m;
-      vxs += ax * dt; vys += ay * dt;
-      x += vxs * dt; y += vys * dt;
+      x = 0; y = 0; vxs = 0; vys = 0;
+      for (let j = 0; j < nmx; j++) {
+        MX.v[j] += (Fx - MX.c[j] * MX.v[j] - MX.k[j] * MX.q[j]) / MX.m[j] * dt;
+        MX.q[j] += MX.v[j] * dt; x += MX.q[j]; vxs += MX.v[j];
+      }
+      for (let j = 0; j < nmy; j++) {
+        MY.v[j] += (Fy - MY.c[j] * MY.v[j] - MY.k[j] * MY.q[j]) / MY.m[j] * dt;
+        MY.q[j] += MY.v[j] * dt; y += MY.q[j]; vys += MY.v[j];
+      }
       if (wk) {
         // reaction on the wall: opposite to the force on the tool, projected on the wall normal
         const Fw = -(Fx * wnx + Fy * wny);
@@ -153,9 +191,12 @@ export class CuttingEngine {
         st.sumW += w; st.maxW = Math.max(st.maxW, Math.abs(w)); wSum += w;
       }
       if (++pr === stepsPerRev) pr = 0;
-      if (pr % stepsPerTooth === 0) {
+      const ph = pr % stepsPerTooth;
+      if (ph === 0) {
         ts.x[ts.i] = x - w * wnx; ts.y[ts.i] = y - w * wny; ts.i = (ts.i + 1) % ts.n; ts.count++;
+        const b = this.wallSamples; b.x[b.i] = x - w * wnx; b.y[b.i] = y - w * wny; b.i = (b.i + 1) % b.n; b.count++;
       }
+      if (ph === this.piStep) { const b = this.wallSamplesPi; b.x[b.i] = x - w * wnx; b.y[b.i] = y - w * wny; b.i = (b.i + 1) % b.n; b.count++; }
       t += dt;
       // statistics
       const Fxy = Math.hypot(Fx, Fy);
@@ -172,7 +213,7 @@ export class CuttingEngine {
         hist.i = (j + 1) % hist.n; hist.count++;
       }
     }
-    this.x = x; this.y = y; this.vx = vxs; this.vy = vys; this.t = t; this.pr = pr; this.w = w; this.wv = wv;
+    this.x = this.x0 = x; this.y = this.y0 = y; this.vx = this.vx0 = vxs; this.vy = this.vy0 = vys; this.t = t; this.pr = pr; this.w = w; this.wv = wv;
     this.runMeanW = nSteps ? wSum / nSteps : 0; // mean wall deflection over this call [m]
   }
 
