@@ -10,6 +10,7 @@ import { toolModel, toolStress } from './tool.js';
 import { stabilityLobes, alimAt } from './sld.js';
 import { MATERIALS } from './materials.js';
 import { wallAt, FN_CAP } from './wall.js';
+import { modeSet, staticK } from './frf.js';
 
 export class Simulator {
   constructor() {
@@ -65,7 +66,13 @@ export class Simulator {
     this.lobeKey = '';
   }
 
-  modalNow() { return { k: this.cfg.modal.k, fn: this.cfg.modal.fn, zeta: this.cfg.modal.zeta }; }
+  modalNow() {
+    const m = this.cfg.modal;
+    return { k: m.k, fn: m.fn, zeta: m.zeta, modesX: m.modesX || null, modesY: m.modesY || null };
+  }
+  // all modes of the tool tip in x and y
+  modes() { return modeSet(this.modalNow()); }
+  toolStaticK() { const m = this.modes(); return Math.min(staticK(m.x), staticK(m.y)); }
 
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
@@ -75,7 +82,7 @@ export class Simulator {
   }
 
   lobes(phiSt, phiEx) {
-    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${this.cfg.modal.k}|${this.cfg.modal.fn}|${this.cfg.modal.zeta}|${this.cfg.material}|${this.cfg.tool.N}`;
+    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${this.cfg.modal.k}|${this.cfg.modal.fn}|${this.cfg.modal.zeta}|${JSON.stringify(this.cfg.modal.modesX)}|${JSON.stringify(this.cfg.modal.modesY)}|${this.cfg.material}|${this.cfg.tool.N}`;
     if (key !== this.lobeKey) {
       this.lobeKey = key;
       this.lobeCache = stabilityLobes({ ...this.modalNow(), N: this.cfg.tool.N, Ktc: this.mat.Ktc, Krc: this.mat.Krc, phiSt, phiEx, lobes: 30, rpmMin: 2000, rpmMax: 40000 });
@@ -171,7 +178,7 @@ export class Simulator {
         e.setEngagement(this.u, fzEff, p.z, ap);
         this.fz = fzEff;
         // thin-wall compliance at the force centroid (uniform helix: mid-depth)
-        this.wall = this.cfg.workpieceFlex ? wallAt(this.stock, p, R, e.Hb, this.u, p.z + ap / 2, this.mat, this.cfg.modal.k) : null;
+        this.wall = this.cfg.workpieceFlex ? wallAt(this.stock, p, R, e.Hb, this.u, p.z + ap / 2, this.mat, this.toolStaticK()) : null;
         e.setWork(this.wall);
         // dynamics time for this substep: compressed when the frame budget is short
         const want = Math.max(1, Math.round(dtm / e.dt));

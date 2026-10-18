@@ -1,5 +1,7 @@
 // Stability lobe diagram, zero-order (average tooth period) solution of Altintas & Budak (1995).
-// Symmetric single-mode tool tip in x and y. Returns lobes as arrays of {rpm, alim[mm]}.
+// Tool tip with any number of modes in x and y (cross terms neglected). Returns lobes as
+// arrays of {rpm, alim[mm]}.
+import { modeSet, frf } from './frf.js';
 
 export function directionalCoeffs(Kr, phiSt, phiEx) {
   const F = (p) => ({
@@ -17,18 +19,21 @@ const cmul = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
 const cdiv = (a, b) => { const d = b[0] * b[0] + b[1] * b[1]; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; };
 const csqrt = (a) => { const r = Math.hypot(a[0], a[1]); const re = Math.sqrt((r + a[0]) / 2); const im = Math.sign(a[1] || 1) * Math.sqrt(Math.max(0, (r - a[0]) / 2)); return [re, im]; };
 
-export function stabilityLobes({ k, fn, zeta, N, Ktc, Krc, phiSt, phiEx, lobes = 8, rpmMin = 1000, rpmMax = 40000 }) {
+// modal: {k, fn, zeta[, modesX, modesY]} (see frf.js)
+export function stabilityLobes({ N, Ktc, Krc, phiSt, phiEx, lobes = 8, rpmMin = 1000, rpmMax = 40000, ...modal }) {
   const al = directionalCoeffs(Krc / Ktc, phiSt, phiEx);
   const det = al.xx * al.yy - al.xy * al.yx;
-  const wn = 2 * Math.PI * fn;
+  const ms = modeSet(modal);
+  const fns = [...ms.x, ...ms.y].map(m => m.fn);
+  const f0 = 0.8 * Math.min(...fns), f1 = 1.7 * Math.max(...fns);
   const out = [];
   const pts = [];
-  for (let s = 0; s < 400; s++) {
-    const wc = wn * (0.9 + 0.8 * s / 399);
-    const r = wc / wn;
-    const Phi = cdiv([1, 0], [k * (1 - r * r), k * 2 * zeta * r]); // mm/N
-    const a0 = cmul(cmul(Phi, Phi), [det, 0]);
-    const a1 = [(al.xx + al.yy) * Phi[0], (al.xx + al.yy) * Phi[1]];
+  const NS = 400 * Math.min(4, ms.x.length + ms.y.length - 1);
+  for (let s = 0; s < NS; s++) {
+    const fc = f0 + (f1 - f0) * s / (NS - 1), wc = 2 * Math.PI * fc;
+    const Px = frf(ms.x, fc), Py = frf(ms.y, fc); // mm/N
+    const a0 = cmul(cmul(Px, Py), [det, 0]);
+    const a1 = [al.xx * Px[0] + al.yy * Py[0], al.xx * Px[1] + al.yy * Py[1]];
     const disc = csqrt([cmul(a1, a1)[0] - 4 * a0[0], cmul(a1, a1)[1] - 4 * a0[1]]);
     let best = null;
     for (const sg of [1, -1]) {

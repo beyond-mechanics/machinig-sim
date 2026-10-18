@@ -119,7 +119,9 @@ function fft(re, im) {
   }
 }
 
+// fn: natural frequency or list of them [Hz]
 export function drawSpectrum(cv, eng, fn) {
+  const fns = [].concat(fn);
   const { g, w, h } = setup(cv);
   const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
   if (!eng.stepsPerTooth) return;
@@ -129,7 +131,7 @@ export function drawSpectrum(cv, eng, fn) {
   for (let i = 0; i < n; i++) { const win = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)); re[i] = (X.arr[i] - mean) * win; }
   fft(re, im);
   const fs = 1 / (eng.dt * eng.decim);
-  const fMax = Math.min(fs / 2, Math.max(fn * 2.2, 3000));
+  const fMax = Math.min(fs / 2, Math.max(Math.max(...fns) * 2.2, 3000));
   const kMax = Math.floor(fMax / fs * n);
   const amp = new Float32Array(kMax);
   let mx = 1e-6; for (let k = 1; k < kMax; k++) { amp[k] = Math.hypot(re[k], im[k]) * 4 / n; mx = Math.max(mx, amp[k]); }
@@ -142,7 +144,8 @@ export function drawSpectrum(cv, eng, fn) {
   const ftp = eng.S * eng.N / 60;
   g.setLineDash([3, 3]); g.strokeStyle = C.mute;
   for (let k = 1; ftp * k < fMax; k++) { g.beginPath(); g.moveTo(xs(ftp * k), box.y); g.lineTo(xs(ftp * k), box.y + box.h); g.stroke(); }
-  g.strokeStyle = C.bad; g.beginPath(); g.moveTo(xs(fn), box.y); g.lineTo(xs(fn), box.y + box.h); g.stroke();
+  g.strokeStyle = C.bad;
+  for (const f of fns) if (f < fMax) { g.beginPath(); g.moveTo(xs(f), box.y); g.lineTo(xs(f), box.y + box.h); g.stroke(); }
   g.setLineDash([]);
   g.fillStyle = C.a; g.globalAlpha = 0.25;
   g.beginPath(); g.moveTo(xs(0), ys(0));

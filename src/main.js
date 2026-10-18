@@ -1,5 +1,6 @@
 import { Simulator } from './sim.js';
 import { SimHost } from './host.js';
+import { parseFrfCsv, fitModes, exampleCsv, staticK, dominant } from './frf.js';
 import { View } from './view.js';
 import { MATERIALS } from './materials.js';
 import { SAMPLES } from './samples.js';
@@ -84,16 +85,42 @@ for (const [id, key] of Object.entries(toolInputs)) $(id).onchange = e => {
   toolChanged();
 };
 function toolChanged() { host.config(true); view.setTool(sim.cfg.tool); syncModalInputs(); updateMatHint(); }
-$('mAuto').onchange = e => { sim.cfg.modal.auto = e.target.checked; host.config(true); syncModalInputs(); };
+$('mAuto').onchange = e => { sim.cfg.modal.auto = e.target.checked; if (e.target.checked) clearFrf(); host.config(true); syncModalInputs(); };
 $('mK').onchange = e => { sim.cfg.modal.k = +e.target.value * 1000; manualModal(); };
 $('mFn').onchange = e => { sim.cfg.modal.fn = +e.target.value; manualModal(); };
-$('mZeta').onchange = e => { sim.cfg.modal.zeta = +e.target.value; host.config(true); };
-function manualModal() { sim.cfg.modal.auto = false; $('mAuto').checked = false; host.config(true); syncModalInputs(); }
+$('mZeta').onchange = e => { sim.cfg.modal.zeta = +e.target.value; clearFrf(); host.config(true); };
+function manualModal() { sim.cfg.modal.auto = false; $('mAuto').checked = false; clearFrf(); host.config(true); syncModalInputs(); }
 function syncModalInputs() {
   $('mK').value = (sim.cfg.modal.k / 1000).toFixed(1);
   $('mFn').value = sim.cfg.modal.fn;
+  $('mZeta').value = sim.cfg.modal.zeta;
   $('mK').disabled = $('mFn').disabled = false;
 }
+// measured FRF: fit modes per direction, show the dominant one in the single-mode inputs
+const frfHint = $('frfInfo').innerHTML;
+const fmtModes = ms => ms.map(m => `${Math.round(m.fn)} Hz, ${(m.k / 1000).toFixed(1)} N/µm, ζ ${m.zeta.toFixed(3)}`).join(' ・ ');
+function applyFrf(text, name) {
+  try {
+    const d = parseFrfCsv(text);
+    const mx = fitModes(d.f, d.xx), my = d.yy ? fitModes(d.f, d.yy) : mx;
+    if (!mx.length || !my.length) throw new Error('共振のピークが見つかりません');
+    const m = sim.cfg.modal, dom = dominant([...mx, ...my]);
+    Object.assign(m, { auto: false, modesX: mx, modesY: my, k: Math.round(Math.min(staticK(mx), staticK(my))), fn: Math.round(dom.fn), zeta: +dom.zeta.toFixed(3) });
+    $('mAuto').checked = false;
+    host.config(true); syncModalInputs();
+    $('frfClear').disabled = false;
+    $('frfInfo').textContent = `${name} (${d.f.length} 点, ${d.unit}) から同定\nX: ${fmtModes(mx)}\nY: ${fmtModes(my)}`;
+  } catch (err) { $('frfInfo').textContent = `読み込めませんでした: ${err.message}`; }
+}
+function clearFrf() {
+  if (!sim.cfg.modal.modesX) return;
+  sim.cfg.modal.modesX = sim.cfg.modal.modesY = null;
+  $('frfClear').disabled = true; $('frfInfo').innerHTML = frfHint;
+}
+$('frfLoad').onclick = () => $('frfFile').click();
+$('frfFile').onchange = async e => { const f = e.target.files[0]; if (f) applyFrf(await f.text(), f.name); e.target.value = ''; };
+$('frfExample').onclick = () => applyFrf(exampleCsv(), '例: ホルダ+工具の2モード');
+$('frfClear').onclick = () => { clearFrf(); sim.cfg.modal.auto = true; $('mAuto').checked = true; host.config(true); syncModalInputs(); };
 document.querySelectorAll('[data-cool]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-cool]').forEach(x => x.setAttribute('aria-pressed', x === b));
   sim.cfg.coolant = b.dataset.cool;
@@ -160,7 +187,7 @@ function updateTiles() {
   $('lineInfo').textContent = sim.line ? `N${sim.line}  ${lines[sim.line - 1]?.trim() ?? ''}` : 'プログラム先頭';
   setV('vF', d.F.toFixed(0), 'N'); $('sF').textContent = `最大 ${d.Fmax.toFixed(0)} N · 軸方向 ${d.Fz.toFixed(0)} N`;
   setV('vT', d.torque.toFixed(2), 'N·m'); $('sT').textContent = `${d.power.toFixed(2)} kW · ${Math.round(d.S)} min⁻¹`;
-  setV('vD', d.defl.toFixed(1), 'µm'); $('sD').textContent = `k = ${(sim.cfg.modal.k / 1000).toFixed(1)} N/µm · fn ${sim.cfg.modal.fn} Hz`;
+  setV('vD', d.defl.toFixed(1), 'µm'); $('sD').textContent = sim.cfg.modal.modesX ? `実測FRF · X ${sim.cfg.modal.modesX.length} / Y ${sim.cfg.modal.modesY.length} モード` : `k = ${(sim.cfg.modal.k / 1000).toFixed(1)} N/µm · fn ${sim.cfg.modal.fn} Hz`;
   setV('vW', d.wallDefl.toFixed(1), 'µm');
   $('sW').textContent = !sim.cfg.workpieceFlex ? '計算オフ' : d.wall ? `壁厚 ${d.wall.t.toFixed(1)} · 高さ ${d.wall.hWall.toFixed(0)} mm · k ${(d.wall.k / 1000).toFixed(1)} N/µm` : '剛体として扱い中';
   setV('vV', d.vib.toFixed(1), 'µm'); $('sV').textContent = `同期外成分 ${d.once.toFixed(1)} µm`;
@@ -182,7 +209,7 @@ function updateCharts() {
   const e = sim.engine, d = sim.display;
   drawForces($('cvForce'), e);
   drawOrbit($('cvOrbit'), e);
-  drawSpectrum($('cvSpec'), e, sim.cfg.modal.fn);
+  drawSpectrum($('cvSpec'), e, sim.cfg.modal.modesX ? [...new Set([...sim.cfg.modal.modesX, ...sim.cfg.modal.modesY].map(m => Math.round(m.fn)))] : sim.cfg.modal.fn);
   $('hSpec').textContent = e.S ? `刃通過 ${(e.S * e.N / 60).toFixed(0)} Hz` : '';
   $('hF').textContent = d.cutting ? `平均 ${d.F.toFixed(0)} N` : '';
   const lobes = sim.lobes(d.phiSt ?? 0, d.phiEx ?? Math.PI);

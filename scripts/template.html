@@ -174,6 +174,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="mK">剛性 k <span class="unit">N/µm</span></label><input type="number" id="mK" min="0.5" max="200" step="0.1"></div>
           <div class="row"><label for="mFn">固有振動数 <span class="unit">Hz</span></label><input type="number" id="mFn" min="100" max="20000" step="10"></div>
           <div class="row"><label for="mZeta">減衰比 ζ</label><input type="number" id="mZeta" min="0.005" max="0.3" step="0.005" value="0.04"></div>
+          <div class="seg"><button id="frfLoad" aria-pressed="false">実測FRF (CSV)</button><button id="frfExample" aria-pressed="false">FRFの例</button><button id="frfClear" aria-pressed="false" disabled>外す</button></div>
+          <input type="file" id="frfFile" accept=".csv,.txt,text/csv,text/plain" hidden>
+          <p class="hint" id="frfInfo" style="white-space:pre-line">ハンマリング試験の FRF を読み込むと、X/Y 別の複数モードで振動と安定限界線図を計算します。列は 周波数 [Hz], Re G<sub>xx</sub>, Im G<sub>xx</sub>, Re G<sub>yy</sub>, Im G<sub>yy</sub> (m/N)。Y の列が無ければ X と同じとみなします。</p>
         </fieldset>
         <fieldset>
           <legend>切削モデル</legend>
@@ -207,6 +210,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         <h3>何を計算しているか</h3>
         <ul>
           <li><b>材料除去</b>: 素材を 0.3 mm 格子の高さマップ(Zデクセル)で持ち、工具がたわんだ実際の位置で削ります。3軸ならアンダーカットが無いのでこの表現で形状は正確です。</li>
+          <li><b>工具先端の動特性</b>: 既定は工具形状から求めた 1 モードですが、実測 FRF (CSV) を読み込むと X/Y 別の複数モードで計算します。共振ピークから固有振動数・減衰比・剛性を同定します。</li>
           <li><b>切削力</b>: 刃を軸方向に輪切りにし、各刃・各断面の切りくず厚さ h から接線・半径・軸方向の力を求めます(Altintas の線形エッジ力モデル F = K<sub>c</sub>·h·b + K<sub>e</sub>·b)。ねじれ角による位相遅れも入れています。せん断成分は切りくず厚さの指数則 K(h) = K·(0.05/h)<sup>m</sup> で補正し(寸法効果)、逃げ面の押し込みによる減衰力 C<sub>i</sub>·b·v<sub>n</sub>/V<sub>c</sub> を加えています(プロセスダンピング、低速ほど効く)。</li>
           <li><b>振動とびびり</b>: 工具先端を X・Y の1自由度ずつのばね・質量・減衰系とし、切削力で時間積分します。切りくず厚さには1刃前が残した面との差(再生効果)を入れているので、条件次第で自励びびりが自然に発生します。</li>
           <li><b>安定限界線図</b>: 同じ動特性から Altintas–Budak のゼロ次解で解析的に求めます。時間領域シミュレーションの結果と照らし合わせられます。</li>
