@@ -92,11 +92,14 @@ export class View {
       let r, g, b;
       const cut = z < s.zTop - 0.005;
       if (this.colorMode === 'vibration' && cut) [r, g, b] = ramp(Math.min(1, s.err[k] / 40));
+      else if (this.colorMode === 'wall') [r, g, b] = s.wallErr[k] > 0.5 ? ramp(Math.min(1, s.wallErr[k] / 50)) : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.62];
       else if (this.colorMode === 'depth') [r, g, b] = ramp(Math.min(1, (s.zTop - z) / depth));
       else if (cut) { r = base[0] * 1.12; g = base[1] * 1.12; b = base[2] * 1.15; }
       else { r = base[0] * 0.78; g = base[1] * 0.78; b = base[2] * 0.8; }
       C[k * 3] = r; C[k * 3 + 1] = g; C[k * 3 + 2] = b;
     }
+    // restoring/applying the wall bend touches rows outside the dirty rectangle
+    if (this.deformRows) { j0 = Math.min(j0, this.deformRows[0]); j1 = Math.max(j1, this.deformRows[1]); this.deformRows = null; }
     const off = j0 * nx * 3, cnt = (j1 - j0 + 1) * nx * 3;
     for (const a of [pos, nor, col]) { a.updateRange.offset = all ? 0 : off; a.updateRange.count = all ? -1 : cnt; a.needsUpdate = true; }
     this.updateWalls();
@@ -116,6 +119,43 @@ export class View {
     for (let j = ny - 1; j >= 0; j--) put(0, j);
     this.wallGeo.attributes.position.needsUpdate = true;
     this.wallGeo.computeVertexNormals();
+  }
+
+  // Bend the thin wall in the mesh (exaggerated). wall: {cx,cy,nx,ny,t,a,hWall,bEff,base} or null,
+  // delta: wall deflection at the load height [mm], already exaggerated.
+  updateWallDeform(wall, delta) {
+    const s = this.stock, P = this.topGeo.attributes.position.array, { nx, H } = s;
+    let jMin = Infinity, jMax = -1;
+    // restore last frame's bent vertices to the grid
+    if (this.bent) {
+      for (const k of this.bent) { const i = k % nx, j = (k - i) / nx; P[k * 3] = i * s.hx; P[k * 3 + 1] = j * s.hy; jMin = Math.min(jMin, j); jMax = Math.max(jMax, j); }
+      this.bent = null;
+    }
+    if (wall && Math.abs(delta) > 0.01) {
+      this.bent = [];
+      const half = Math.min(wall.bEff, 60) * 0.75, reach = half + wall.t + 2;
+      const tx = -wall.ny, ty = wall.nx, a = Math.max(wall.a, 0.5);
+      const i0 = Math.max(0, Math.floor((wall.cx - reach) / s.hx)), i1 = Math.min(nx - 1, Math.ceil((wall.cx + reach) / s.hx));
+      const j0 = Math.max(0, Math.floor((wall.cy - reach) / s.hy)), j1 = Math.min(s.ny - 1, Math.ceil((wall.cy + reach) / s.hy));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const k = j * nx + i, z = H[k] - wall.base;
+        if (z <= 0) continue;
+        const dx = i * s.hx - wall.cx, dy = j * s.hy - wall.cy;
+        const along = dx * wall.nx + dy * wall.ny, side = dx * tx + dy * ty;
+        if (along < -0.5 || along > wall.t + 0.5 || Math.abs(side) > half) continue;
+        // cantilever shape: z²(3a−z)/2a³ up to the load, straight above it
+        const f = z <= a ? z * z * (3 * a - z) / (2 * a ** 3) : 1 + 1.5 * (z - a) / a;
+        const fall = Math.cos(Math.PI / 2 * side / half) ** 2;
+        const d = delta * f * fall;
+        P[k * 3] += wall.nx * d; P[k * 3 + 1] += wall.ny * d;
+        this.bent.push(k);
+        jMin = Math.min(jMin, j); jMax = Math.max(jMax, j);
+      }
+    }
+    if (jMax >= 0) {
+      this.deformRows = [jMin, jMax];
+      const d = s.dirty; d.i0 = 0; d.i1 = nx - 1; d.j0 = Math.min(d.j0, jMin); d.j1 = Math.max(d.j1, jMax);
+    }
   }
 
   // ---------- tool ----------

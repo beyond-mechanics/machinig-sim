@@ -96,12 +96,13 @@ document.querySelectorAll('[data-cool]').forEach(b => b.onclick = () => {
 $('exag').oninput = e => { view.exag = +e.target.value; $('exagOut').textContent = `×${e.target.value}`; };
 $('showChips').onchange = e => { view.showChips = e.target.checked; };
 $('showPath').onchange = e => { view.showPath = e.target.checked; };
+$('workFlex').onchange = e => { sim.cfg.workpieceFlex = e.target.checked; sim.reconfigure(); };
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view.setView(b.dataset.view));
 document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-color]').forEach(x => x.setAttribute('aria-pressed', x === b));
   view.colorMode = b.dataset.color;
   $('legend').hidden = view.colorMode === 'material';
-  $('legend1').textContent = view.colorMode === 'vibration' ? '40 µm' : `${sim.stock.zTop - sim.stock.zBottom} mm`;
+  $('legend1').textContent = view.colorMode === 'vibration' ? '40 µm' : view.colorMode === 'wall' ? '50 µm' : `${sim.stock.zTop - sim.stock.zBottom} mm`;
   view.updateStock(true);
 });
 document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
@@ -132,6 +133,8 @@ function frameLoop(now) {
   } else sim.updateChips(0);
   const e = sim.engine;
   if (running && sim.display.cutting) spinAngle += dt * 2 * Math.PI * 3; // visual spin, not true rpm
+  const wall = sim.display.cutting ? sim.wall : null;
+  view.updateWallDeform(wall && e.wk ? wall : null, (e.runMeanW || 0) * 1e3 * view.exag);
   view.updateStock();
   view.updateTool(sim.pos, e.x * 1e3 * view.exag, e.y * 1e3 * view.exag, spinAngle);
   view.updateNozzle(sim.cfg.coolant, sim.pos);
@@ -153,6 +156,8 @@ function updateTiles() {
   setV('vF', d.F.toFixed(0), 'N'); $('sF').textContent = `最大 ${d.Fmax.toFixed(0)} N · 軸方向 ${d.Fz.toFixed(0)} N`;
   setV('vT', d.torque.toFixed(2), 'N·m'); $('sT').textContent = `${d.power.toFixed(2)} kW · ${Math.round(d.S)} min⁻¹`;
   setV('vD', d.defl.toFixed(1), 'µm'); $('sD').textContent = `k = ${(sim.cfg.modal.k / 1000).toFixed(1)} N/µm · fn ${sim.cfg.modal.fn} Hz`;
+  setV('vW', d.wallDefl.toFixed(1), 'µm');
+  $('sW').textContent = !sim.cfg.workpieceFlex ? '計算オフ' : d.wall ? `壁厚 ${d.wall.t.toFixed(1)} · 高さ ${d.wall.hWall.toFixed(0)} mm · k ${(d.wall.k / 1000).toFixed(1)} N/µm` : '剛体として扱い中';
   setV('vV', d.vib.toFixed(1), 'µm'); $('sV').textContent = `同期外成分 ${d.once.toFixed(1)} µm`;
   setV('vS', d.stress.toFixed(0), 'MPa');
   const sr = d.stress / ALLOWABLE_STRESS;
@@ -186,4 +191,5 @@ function updateCharts() {
 
 loadProgram();
 setSpindle(baseS);
+window.machiningSim = sim; // handy for poking at the model from the browser console
 requestAnimationFrame(frameLoop);
