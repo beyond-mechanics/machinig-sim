@@ -26,6 +26,7 @@ export class View {
     this.buildTool();
     this.buildChips();
     this.buildNozzle();
+    this.buildSpray();
     this.bindControls();
   }
 
@@ -290,45 +291,122 @@ export class View {
     this.jet.quaternion.setFromUnitVectors(new T.Vector3(0, -1, 0), dir);
     this.jet.position.copy(from).addScaledVector(dir, L / 2);
     this.jet.material.color.set(coolant === 'flood' ? 0x6fb7ff : 0xdcefff);
-    this.jet.material.opacity = coolant === 'flood' ? 0.28 : 0.12;
+    this.jet.material.opacity = coolant === 'flood' ? 0.1 : 0.05; // the spray particles carry the look
   }
 
   // ---------- chips ----------
   buildChips() {
     const T = THREE;
-    const g = new T.TorusGeometry(1, 0.22, 4, 10, Math.PI * 1.4);
-    this.chipMesh = new T.InstancedMesh(g, new T.MeshStandardMaterial({ metalness: 0.75, roughness: 0.35 }), MAX_CHIPS);
-    this.chipMesh.castShadow = true;
-    this.chipMesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
-    this.chipMesh.frustumCulled = false;
-    this.chipMesh.setColorAt(0, new T.Color(1, 1, 1));
-    this.scene.add(this.chipMesh);
+    // three shape variants per material, each an instanced ribbon helix; chip i goes to
+    // variant i % 3 so a pile shows the natural scatter of chip forms
+    this.chipVariants = [];
+    this.chipCap = Math.ceil(MAX_CHIPS / 3);
+    this.chipMat = new T.MeshStandardMaterial({ metalness: 0.8, roughness: 0.32, side: T.DoubleSide });
+    for (let v = 0; v < 3; v++) {
+      const mesh = new T.InstancedMesh(new T.BufferGeometry(), this.chipMat, this.chipCap);
+      mesh.castShadow = true;
+      mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      mesh.setColorAt(0, new T.Color(1, 1, 1));
+      this.scene.add(mesh); this.chipVariants.push(mesh);
+    }
+    this.chipStyle = '';
     this._m = new T.Matrix4(); this._q = new T.Quaternion(); this._e = new T.Euler(); this._s = new T.Vector3(); this._p = new T.Vector3(); this._c = new T.Color();
+    this._zero = new T.Matrix4().makeScale(0, 0, 0);
+  }
+  setChipStyle(mat) {
+    const key = mat.name;
+    if (key === this.chipStyle) return;
+    this.chipStyle = key;
+    const [turns, pitch, rad] = mat.curl || [1.4, 0.3, 1];
+    [0.7, 1, 1.35].forEach((k, v) => {
+      const mesh = this.chipVariants[v];
+      mesh.geometry.dispose();
+      mesh.geometry = ribbonHelix(turns * k, pitch * (2 - k) * 0.8 + pitch * 0.2, rad * (1.15 - 0.15 * k));
+    });
   }
   updateChips(cs, mat) {
-    const mesh = this.chipMesh;
-    mesh.visible = this.showChips;
+    const vs = this.chipVariants;
+    for (const m of vs) m.visible = this.showChips;
     if (!this.showChips) return;
-    const zero = this._m.makeScale(0, 0, 0).clone();
-    const base = mat.chip;
+    this.setChipStyle(mat);
+    const base = mat.chip, cap = this.chipCap;
     for (let i = 0; i < MAX_CHIPS; i++) {
-      if (!cs.state[i]) { mesh.setMatrixAt(i, zero); continue; }
+      const mesh = vs[i % 3], slot = (i / 3) | 0;
+      if (slot >= cap) continue;
+      if (!cs.state[i]) { mesh.setMatrixAt(slot, this._zero); continue; }
       const o = i * 3;
       this._p.set(cs.p[o], cs.p[o + 1], cs.p[o + 2]);
       this._e.set(cs.rot[o], cs.rot[o + 1], cs.rot[o] * 0.7);
       this._q.setFromEuler(this._e);
       const sz = cs.size[i];
-      this._s.set(sz, sz, sz * 1.2);
+      this._s.set(sz, sz, sz);
       this._m.compose(this._p, this._q, this._s);
-      mesh.setMatrixAt(i, this._m);
-      // hot steel chips glow straw → blue, aluminium stays silver
+      mesh.setMatrixAt(slot, this._m);
+      // hot steel chips show temper colours (straw → blue), aluminium stays silver
       const h = cs.heat[i];
       if (mat.hot && h > 0.05) this._c.setRGB(base[0] + h * 0.5, base[1] + h * 0.25, base[2] - h * 0.1);
       else this._c.setRGB(base[0], base[1], base[2]);
-      mesh.setColorAt(i, this._c);
+      mesh.setColorAt(slot, this._c);
     }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    for (const m of vs) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+  }
+
+  // ---------- coolant spray ----------
+  // Purely visual droplets (flood) or oil mist (air blast) from the nozzle along the jet,
+  // falling under gravity and splashing on the stock or the table.
+  buildSpray() {
+    const T = THREE, n = 3000;
+    this.spray = { n, p: new Float32Array(n * 3), v: new Float32Array(n * 3), life: new Float32Array(n), next: 0, acc: 0 };
+    const g = new T.BufferGeometry();
+    g.setAttribute('position', new T.BufferAttribute(this.spray.p, 3).setUsage(T.DynamicDrawUsage));
+    const c = document.createElement('canvas'); c.width = c.height = 32;
+    const x = c.getContext('2d'), gr = x.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.5, 'rgba(255,255,255,0.6)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = gr; x.fillRect(0, 0, 32, 32);
+    this.sprayPts = new T.Points(g, new T.PointsMaterial({ size: 0.7, map: new T.CanvasTexture(c), transparent: true, depthWrite: false, color: 0x7fc4ff, opacity: 0.6 }));
+    this.sprayPts.frustumCulled = false;
+    this.scene.add(this.sprayPts);
+    this.sprayT = performance.now();
+  }
+  updateSpray(coolant, tip, active) {
+    const now = performance.now(), dt = Math.min(0.05, (now - this.sprayT) / 1000); this.sprayT = now;
+    const S = this.spray, P = S.p, V = S.v, L = S.life, flood = coolant === 'flood';
+    const on = active && coolant !== 'dry' && this.nozzle.visible;
+    this.sprayPts.visible = on || L.some(l => l > 0);
+    if (!this.sprayPts.visible) return;
+    const m = this.sprayPts.material;
+    m.size = flood ? 1.4 : 0.6; m.color.set(flood ? 0x7fc4ff : 0xf2f6fa); m.opacity = flood ? 0.6 : 0.3;
+    if (on) {
+      const from = this.nozzle.position, dx = tip.x - from.x, dy = tip.y - from.y, dz = tip.z - from.z;
+      const len = Math.hypot(dx, dy, dz), sp = flood ? 900 : 1600, spread = flood ? 0.12 : 0.22;
+      S.acc += dt * (flood ? 1800 : 900);
+      while (S.acc >= 1) {
+        S.acc -= 1;
+        const i = S.next; S.next = (S.next + 1) % S.n;
+        P[i * 3] = from.x; P[i * 3 + 1] = from.y; P[i * 3 + 2] = from.z;
+        V[i * 3] = (dx / len + (Math.random() - 0.5) * spread) * sp;
+        V[i * 3 + 1] = (dy / len + (Math.random() - 0.5) * spread) * sp;
+        V[i * 3 + 2] = (dz / len + (Math.random() - 0.5) * spread) * sp;
+        L[i] = flood ? 0.9 : 0.35;
+      }
+    }
+    const drag = flood ? 0.4 : 6; // mist slows quickly in air
+    for (let i = 0; i < S.n; i++) {
+      if (L[i] <= 0) { P[i * 3 + 2] = -1e5; continue; }
+      L[i] -= dt;
+      const o = i * 3;
+      V[o] -= V[o] * drag * dt; V[o + 1] -= V[o + 1] * drag * dt; V[o + 2] -= (9810 + V[o + 2] * drag) * dt;
+      P[o] += V[o] * dt; P[o + 1] += V[o + 1] * dt; P[o + 2] += V[o + 2] * dt;
+      const fz = this.stock ? this.stock.floor(P[o], P[o + 1]) : 0;
+      if (P[o + 2] < fz) {
+        // splash: lose most of the speed, scatter sideways, die soon after
+        P[o + 2] = fz + 0.05; V[o + 2] = Math.abs(V[o + 2]) * 0.15;
+        V[o] = V[o] * 0.3 + (Math.random() - 0.5) * 150; V[o + 1] = V[o + 1] * 0.3 + (Math.random() - 0.5) * 150;
+        L[i] = Math.min(L[i], 0.12);
+      }
+    }
+    this.sprayPts.geometry.attributes.position.needsUpdate = true;
   }
 
   // ---------- tool path ----------
@@ -454,6 +532,32 @@ function stockMaterial() {
         }`);
   };
   return m;
+}
+
+// A chip as a thin ribbon wound into a helix (unit size; scaled per instance). turns: number of
+// coils, pitch: axial rise per turn relative to the coil radius, rad: coil radius factor.
+function ribbonHelix(turns, pitch, rad) {
+  const T = THREE, seg = Math.max(8, Math.ceil(turns * 18)), w = 0.22, t = 0.05;
+  const pos = [], idx = [];
+  const r0 = 0.6 * rad, len = 2 * Math.PI * turns;
+  for (let k = 0; k <= seg; k++) {
+    const a = len * k / seg;
+    const r = r0 * (1 - 0.25 * k / seg); // coils tighten towards the free end
+    // rise per turn: the curl pitch plus the ribbon width so coils do not overlap
+    const rise = pitch * r0 + (turns > 1 ? w * 1.1 : 0);
+    const c = Math.cos(a), s = Math.sin(a), z = rise * (a / (2 * Math.PI) - turns / 2);
+    // ribbon width along the coil axis, thickness radial
+    for (const [dr, dz] of [[-t / 2, -w / 2], [-t / 2, w / 2], [t / 2, w / 2], [t / 2, -w / 2]]) pos.push((r + dr) * c, (r + dr) * s, z + dz);
+  }
+  for (let k = 0; k < seg; k++) for (let f = 0; f < 4; f++) {
+    const a = k * 4 + f, b = k * 4 + (f + 1) % 4, c = a + 4, d = b + 4;
+    idx.push(a, c, b, b, c, d);
+  }
+  const g = new T.BufferGeometry();
+  g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
 }
 
 // End-mill cross-section over one flute pitch, u = 0 at the cutting edge and increasing

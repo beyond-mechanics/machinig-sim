@@ -175,6 +175,7 @@ function frameLoop(now) {
   view.updateStock();
   view.updateTool(sim.pos, e.x * 1e3 * view.exag, e.y * 1e3 * view.exag, spinAngle, blur);
   view.updateNozzle(sim.cfg.coolant, sim.pos);
+  view.updateSpray(sim.cfg.coolant, sim.pos, running && sim.S > 0);
   view.updateChips(sim.chips, sim.mat);
   view.render();
   if (now - uiTick > 120) { uiTick = now; updateTiles(); }
