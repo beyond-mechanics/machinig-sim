@@ -99,6 +99,7 @@ async function openProgram(file) {
   $('code').value = text;
   const n = text.split('\n').length;
   $('sample').value = '';
+  $('gcInfo').dataset.file = file.name;
   $('gcInfo').textContent = `${file.name} · ${n.toLocaleString()} 行 · ${(file.size / 1024).toFixed(0)} KB`;
   loadProgram();
   setSpindle(baseS);
@@ -128,10 +129,16 @@ $('gcOpen').onclick = () => $('gcFile').click();
 $('gcFile').onchange = e => { const f = e.target.files[0]; if (f) openProgram(f); e.target.value = ''; };
 $('stlOpen').onclick = () => $('stlFile').click();
 $('stlFile').onchange = e => { const f = e.target.files[0]; if (f) openStl(f); e.target.value = ''; };
-$('gcSave').onclick = () => {
+// inside the claude.ai viewer a file is offered through the downloads capability; a plain
+// download link is the fallback when the page is opened on its own
+let downloads = null;
+window.claude?.use?.('downloads').then(d => { downloads = d; }).catch(() => {});
+$('gcSave').onclick = async () => {
+  const name = $('gcInfo').dataset.file || 'program.nc', text = $('code').value;
+  if (downloads) { try { await downloads.save({ filename: name, data: text }); } catch { /* declined */ } return; }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([$('code').value], { type: 'text/plain' }));
-  a.download = 'program.nc'; a.click();
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 $('orgSel').onchange = () => { const manual = $('orgSel').value === 'manual'; for (const id of ['oX', 'oY', 'oZ']) $(id).readOnly = !manual; };
