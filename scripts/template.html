@@ -134,6 +134,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
       <div class="overlay bl">
         <button class="chipbtn" data-color="material" aria-pressed="true">材料色</button>
         <button class="chipbtn" data-color="vibration" aria-pressed="false">振動マップ</button>
+        <button class="chipbtn" data-color="wall" aria-pressed="false">ワーク変形</button>
         <button class="chipbtn" data-color="depth" aria-pressed="false">深さ</button>
         <span class="legend" id="legend" hidden><span id="legend0">0</span><i></i><span id="legend1">40 µm</span></span>
       </div>
@@ -175,6 +176,11 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="mZeta">減衰比 ζ</label><input type="number" id="mZeta" min="0.005" max="0.3" step="0.005" value="0.04"></div>
         </fieldset>
         <fieldset>
+          <legend>工作物</legend>
+          <label class="check"><input type="checkbox" id="workFlex" checked> 薄肉壁のたわみを計算する</label>
+          <p class="hint">壁の厚さ・高さ・長さを素材形状から読み取り、片持ち板として剛性と質量を求めます。たわみは「たわみ表示倍率」で誇張して描きます。</p>
+        </fieldset>
+        <fieldset>
           <legend>切粉の排出</legend>
           <div class="seg"><button data-cool="dry" aria-pressed="false">ドライ</button><button data-cool="air" aria-pressed="true">エアブロー</button><button data-cool="flood" aria-pressed="false">クーラント</button></div>
         </fieldset>
@@ -200,16 +206,19 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li><b>振動とびびり</b>: 工具先端を X・Y の1自由度ずつのばね・質量・減衰系とし、切削力で時間積分します。切りくず厚さには1刃前が残した面との差(再生効果)を入れているので、条件次第で自励びびりが自然に発生します。</li>
           <li><b>安定限界線図</b>: 同じ動特性から Altintas–Budak のゼロ次解で解析的に求めます。時間領域シミュレーションの結果と照らし合わせられます。</li>
           <li><b>たわみと応力</b>: 工具を片持ちはり(刃部の等価直径 0.8D、超硬 E=600 GPa)と主軸側ばねの直列で扱い、根元の曲げとねじりから相当応力を出します。</li>
+          <li><b>ワーク(薄肉壁)の変形</b>: 工具が押している壁の厚さ・自由高さ・長さを高さマップから読み取り、根元固定の片持ち板(有効幅は荷重高さの約2倍)として剛性と質量を出します。壁は壁の法線方向の1自由度振動系として工具と連成し、切りくず厚さは工具と壁の相対変位で決まります。壁が逃げた分だけ削り残しが生じます。</li>
           <li><b>切粉</b>: 刃が切れ刃から抜けるたびに体積を持った粒子を放出し、重力・空気やクーラントの流れ・工具の回転・素材形状との衝突で動かします。ポケット内に残った量と再切削の回数を数えます。</li>
         </ul>
         <h3>精度とリアルタイム性のトレードオフ</h3>
         <ul>
           <li>振動の積分には 1 刃あたり数十〜数百ステップが要ります。等倍以下なら加工時間をすべて積分しますが、早送り再生では1フレームあたりの計算量に上限を設け、区間の一部だけを積分して全体を代表させています。びびりの成長速度は実時間より遅く見えることがあります。</li>
           <li>切削係数と動特性は代表値です。実機の値はハンマリング試験(FRF)と切削力測定で同定して入力してください。</li>
-          <li>工作物側の変形(薄肉のたわみ)、底刃の切削力(プランジ)、工具摩耗、熱は未対応です。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
+          <li>薄肉壁は荷重高さの壁厚だけで剛性を見積もる簡易モデルで、テーパ状の壁や床(薄い底面)のたわみは扱いません。壁の固有振動数は時間刻みの都合で 5 kHz を上限にしています。</li>
+          <li>底刃の切削力(プランジ)、工具摩耗、熱は未対応です。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
         <h3>見どころ</h3>
+        <p>サンプル「薄肉リブ」では、厚さ 2 mm・高さ 20 mm のリブを仕上げます。最後の全深さの仕上げで壁が逃げる様子を、「ワーク変形」表示とたわみ表示倍率で確かめられます。</p>
         <p>デモは 12000 min⁻¹ で 0.5 → 1.0 → 2.0 mm のスロットを削ります。1 mm 以上でびびりが出るので、振動マップで面の荒れを確認したあと「安定ポケットに合わせる」を押して再生すると、同じ切込みでも振動が収まる様子が見られます。</p>
       </div>
     </aside>
@@ -220,6 +229,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="tile"><span class="k">主軸トルク / 動力</span><span class="v" id="vT">0.00<small>N·m</small></span><span class="s" id="sT">0.00 kW</span></div>
     <div class="tile"><span class="k">工具たわみ</span><span class="v" id="vD">0.0<small>µm</small></span><span class="s" id="sD">k = 0 N/µm</span></div>
     <div class="tile" id="tileVib"><span class="k">振動振幅</span><span class="v" id="vV">0.0<small>µm</small></span><span class="s" id="sV">同期外成分 0.0 µm</span></div>
+    <div class="tile"><span class="k">ワークたわみ</span><span class="v" id="vW">0.0<small>µm</small></span><span class="s" id="sW">剛体として扱い中</span></div>
     <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s">許容目安 1500 MPa</span></div>
     <div class="tile"><span class="k">除去率</span><span class="v" id="vM">0.0<small>cm³/min</small></span><span class="s" id="sM">ap 0.00 mm · fz 0.000 mm</span></div>
     <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">素材上に残留 0 · 再切削 0 回</span></div>

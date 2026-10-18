@@ -11,6 +11,7 @@ export class Stock {
     this.hy = l / (this.ny - 1);
     this.H = new Float32Array(this.nx * this.ny).fill(this.zTop);
     this.err = new Float32Array(this.nx * this.ny);   // vibration at the moment of cutting [µm]
+    this.wallErr = new Float32Array(this.nx * this.ny); // workpiece (wall) deflection at the moment of cutting [µm]
     this.removed = 0;
     this.clearDirty();
   }
@@ -29,6 +30,22 @@ export class Stock {
   floor(x, y) {
     const s = this.sample(x, y);
     return s === -Infinity ? this.zBottom : s;
+  }
+  // record a value on the wall surface just outside the cutter, on the side facing (nx, ny):
+  // lateral wall offsets are far below the grid size, so they are shown as a map instead
+  markWall(cx, cy, R, nx, ny, val) {
+    const w = 2 * Math.max(this.hx, this.hy), Ro = R + w;
+    const i0 = Math.max(0, Math.floor((cx - Ro) / this.hx)), i1 = Math.min(this.nx - 1, Math.ceil((cx + Ro) / this.hx));
+    const j0 = Math.max(0, Math.floor((cy - Ro) / this.hy)), j1 = Math.min(this.ny - 1, Math.ceil((cy + Ro) / this.hy));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const dx = i * this.hx - cx, dy = j * this.hy - cy, r = Math.hypot(dx, dy);
+      if (r <= R || r > Ro || (dx * nx + dy * ny) < 0.5 * r) continue;
+      this.wallErr[j * this.nx + i] = val;
+    }
+    if (i0 <= i1 && j0 <= j1) {
+      const d = this.dirty;
+      d.i0 = Math.min(d.i0, i0); d.j0 = Math.min(d.j0, j0); d.i1 = Math.max(d.i1, i1); d.j1 = Math.max(d.j1, j1);
+    }
   }
   // remove material under the tool. type 'flat' | 'ball'. Returns removed volume [mm³].
   stamp(cx, cy, tipZ, R, type, errVal) {

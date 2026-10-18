@@ -9,6 +9,7 @@ import { ChipSystem } from './chips.js';
 import { toolModel, toolStress } from './tool.js';
 import { stabilityLobes, alimAt } from './sld.js';
 import { MATERIALS } from './materials.js';
+import { wallAt, FN_CAP } from './wall.js';
 
 export class Simulator {
   constructor() {
@@ -17,7 +18,7 @@ export class Simulator {
     this.cfg = {
       tool: { D: 10, N: 3, helixDeg: 30, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000 },
       modal: { auto: true, k: 0, fn: 0, zeta: 0.04 },
-      material: 'A5052', coolant: 'air',
+      material: 'A5052', coolant: 'air', workpieceFlex: true,
       feedOverride: 1, spindleOverride: 1,
       dynBudget: 220000, // slice-force evaluations per frame (≈ 5 ms of JS)
       cell: 0.3,
@@ -45,6 +46,7 @@ export class Simulator {
     this.seg = 1; this.segS = 0; this.mtime = 0; this.done = this.path.length < 2;
     this.pos = this.path.length ? { ...this.path[0] } : { x: 0, y: 0, z: 50 };
     this.u = [1, 0];
+    this.wall = null;
     this.alerts = new Map();
     this.display = blankDisplay();
     this.ema = null;
@@ -68,7 +70,7 @@ export class Simulator {
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
     const t = this.cfg.tool;
-    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen }, this.modalNow(), this.mat, S);
+    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen }, this.modalNow(), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
     this.lastS = S;
   }
 
@@ -96,13 +98,17 @@ export class Simulator {
   // sample stock height on the cutter periphery for each local angle bin
   fillEngagement(cx, cy, u) {
     const Hb = this.engine.Hb, R = this.cfg.tool.R, vx = -u[1], vy = u[0];
+    const cell = Math.max(this.stock.hx, this.stock.hy);
+    // Sample just inside the cutter radius and one cell ahead along the feed. The grid smears
+    // finished walls by up to a cell; sampling on the radius itself would read them as material
+    // and add spurious edge forces. The cost is missing the last ~15° next to a finished wall,
+    // where the chip is thinnest anyway.
+    const r = R - 0.5 * cell, ax = cx + u[0] * cell, ay = cy + u[1] * cell;
     let hmax = -Infinity;
     for (let b = 0; b < BINS; b++) {
       const phi = (b + 0.5) / BINS * 2 * Math.PI;
       const sn = Math.sin(phi), cs = Math.cos(phi);
-      // sample slightly outside the nominal radius so freshly cut walls read as empty
-      const r = R * 1.0 + 0.02;
-      const h = this.stock.sample(cx + r * (sn * u[0] + cs * vx), cy + r * (sn * u[1] + cs * vy));
+      const h = this.stock.sample(ax + r * (sn * u[0] + cs * vx), ay + r * (sn * u[1] + cs * vy));
       // only the leading half (sinφ > 0) can be in front of the cutter
       Hb[b] = sn > 0.02 ? h : -Infinity;
       if (Hb[b] > hmax) hmax = Hb[b];
@@ -164,6 +170,9 @@ export class Simulator {
         const fzEff = dxy > 1e-6 ? (this.F / (S * tool.N)) * (dxy / segLen) : 0;
         e.setEngagement(this.u, fzEff, p.z, ap);
         this.fz = fzEff;
+        // thin-wall compliance at the force centroid (uniform helix: mid-depth)
+        this.wall = this.cfg.workpieceFlex ? wallAt(this.stock, p, R, e.Hb, this.u, p.z + ap / 2, this.mat, this.cfg.modal.k) : null;
+        e.setWork(this.wall);
         // dynamics time for this substep: compressed when the frame budget is short
         const want = Math.max(1, Math.round(dtm / e.dt));
         const cost = tool.N * Math.max(1, e.nz);
@@ -182,11 +191,15 @@ export class Simulator {
       } else {
         // free decay of the tool vibration when out of cut
         e.x *= 0.5; e.y *= 0.5; e.vx *= 0.5; e.vy *= 0.5;
+        e.w *= 0.5; e.wv *= 0.5;
+        if (e.wk && Math.abs(e.w) < 1e-7) { this.wall = null; e.setWork(null); }
       }
       // actual tool centre includes deflection + vibration (µm → mm)
-      const dx = e.x * 1e3, dy = e.y * 1e3;
+      // relative to the workpiece: a wall pushed away by w is cut less (it springs back thicker)
+      const dx = (e.x - e.w * e.wnx) * 1e3, dy = (e.y - e.w * e.wny) * 1e3;
       const errVal = Math.hypot(e.x, e.y) * 1e6;
       frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z, R, tool.type, errVal);
+      if (this.wall && e.wk) this.stock.markWall(p.x + dx, p.y + dy, R, e.wnx, e.wny, Math.max(0, e.runMeanW * 1e6));
       this.pos = p;
       if (this.segS >= segLen - 1e-9) this.nextSeg();
     }
@@ -237,6 +250,8 @@ export class Simulator {
       defl: cutting ? Math.hypot(st.sumX / st.n, st.sumY / st.n) * 1e6 : 0,
       vib: cutting ? Math.max(st.maxX - st.minX, st.maxY - st.minY) * 1e6 / 2 : 0,
       zc: st.wZc > 0 ? st.sumZc / st.wZc : 0,
+      wall: cutting && e.wk ? st.sumW / st.n * 1e6 : 0,
+      wallMax: cutting && e.wk ? st.maxW * 1e6 : 0,
       mrr: fs.cutTime > 0 ? fs.removed / (dtReal * this.speed) * 60 / 1000 : 0, // cm³/min
     };
     // smooth for display
@@ -252,6 +267,7 @@ export class Simulator {
       cutting, F: m.F, Fmax: m.Fmax, Fz: m.Fz, torque: m.T / 1000, // N·m
       power: m.T * (e.omega || 0) / 1e6, // kW
       defl: m.defl, vib: m.vib, stress: stress.vm, mrr: m.mrr,
+      wallDefl: m.wall, wallMax: m.wallMax, wall: this.wall && cutting ? this.wall : null,
       ap: this.ap || 0, S: this.S || 0, F_: this.F || 0, fz: this.fz || 0,
       // chatter = vibration that is not synchronous with tooth passing (once-per-tooth scatter)
       state: !cutting ? 'idle' : (d.chatterIdx > 0.55 && d.once > 3) ? 'chatter' : (d.chatterIdx > 0.35 && d.once > 1.5) ? 'marginal' : 'stable',
@@ -263,5 +279,5 @@ export class Simulator {
 }
 
 function blankDisplay() {
-  return { cutting: false, F: 0, Fmax: 0, Fz: 0, torque: 0, power: 0, defl: 0, vib: 0, stress: 0, mrr: 0, ap: 0, S: 0, F_: 0, fz: 0, chatterIdx: 0, once: 0, state: 'idle', phiSt: 0, phiEx: Math.PI };
+  return { cutting: false, F: 0, Fmax: 0, Fz: 0, torque: 0, power: 0, defl: 0, vib: 0, stress: 0, mrr: 0, ap: 0, S: 0, F_: 0, fz: 0, chatterIdx: 0, once: 0, wallDefl: 0, wallMax: 0, wall: null, state: 'idle', phiSt: 0, phiEx: Math.PI };
 }

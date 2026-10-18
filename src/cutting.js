@@ -1,6 +1,8 @@
 // Time-domain milling dynamics: mechanistic cutting forces on axial slices of a helical
 // end mill, a 2-DOF (x, y) tool-tip modal model and regenerative chip thickness through a
-// one-tooth-period delay. Lengths in mm, forces in N, modal states in metres (SI).
+// one-tooth-period delay. An optional 1-DOF workpiece mode (thin wall) moves along the wall
+// normal; chip thickness uses the tool-to-wall relative displacement.
+// Lengths in mm, forces in N, modal states in metres (SI).
 
 export const BINS = 180; // angular resolution of the engagement map
 
@@ -14,13 +16,14 @@ export class CuttingEngine {
   }
 
   // tool: {N, R, helixDeg, type, fluteLen}, modal: {k [N/mm], fn [Hz], zeta}, mat, S [rpm]
-  configure(tool, modal, mat, S) {
+  // fnMax: highest frequency to resolve (tool or workpiece mode)
+  configure(tool, modal, mat, S, fnMax = 0) {
     this.tool = tool; this.mat = mat; this.modal = modal;
     this.N = tool.N; this.R = tool.R; this.tanB = Math.tan(tool.helixDeg * Math.PI / 180);
     this.S = Math.max(100, S);
     this.omega = this.S * 2 * Math.PI / 60;
     const Ttooth = 60 / (this.S * this.N);
-    this.stepsPerTooth = Math.max(48, Math.ceil(Ttooth * modal.fn * 24));
+    this.stepsPerTooth = Math.max(48, Math.ceil(Ttooth * Math.max(modal.fn, fnMax) * 24));
     this.dt = Ttooth / this.stepsPerTooth;
     this.Ttooth = Ttooth;
     const kSI = modal.k * 1e3;
@@ -37,12 +40,22 @@ export class CuttingEngine {
     this.surf = new Float32Array(this.maxSlices * this.stepsPerRev);
     this.pr = 0;
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0; this.t = 0;
+    this.setWork(null);
     this.toothEngaged = new Uint8Array(this.N);
     this.toothVol = new Float64Array(this.N);
     this.toothPhi = new Float64Array(this.N);
     this.toothZ = new Float64Array(this.N);
     this.decim = Math.max(1, Math.round(this.stepsPerTooth / 40));
     this.stepCount = 0;
+  }
+
+  // wall: {k [N/mm], m [kg], zeta, nx, ny} or null for a rigid workpiece
+  setWork(wall) {
+    if (!wall) { this.runMeanW = 0; this.wk = 0; this.wm = 1; this.wc = 0; this.w = 0; this.wv = 0; this.wnx = 1; this.wny = 0; return; }
+    // carry the wall state over only while the normal stays roughly the same
+    if (this.wk && wall.nx * this.wnx + wall.ny * this.wny < 0.8) { this.w = 0; this.wv = 0; }
+    this.wk = wall.k * 1e3; this.wm = wall.m; this.wc = 2 * wall.zeta * Math.sqrt(this.wk * wall.m);
+    this.wnx = wall.nx; this.wny = wall.ny;
   }
 
   // Hb filled by caller: material height at the cutter periphery for each local angle bin.
@@ -78,9 +91,13 @@ export class CuttingEngine {
     const dphi = this.omega * dt;
     const hMax = Math.max(0.1, 3 * fz);
     let x = this.x, y = this.y, vxs = this.vx, vys = this.vy, t = this.t, pr = this.pr;
+    const wk = this.wk, wm = this.wm, wc = this.wc, wnx = this.wnx, wny = this.wny;
+    let w = this.w, wv = this.wv, wSum = 0;
     for (let s = 0; s < nSteps; s++) {
       const theta = pr * dphi;
-      const xm = x * 1e3, ym = y * 1e3; // tool deflection [mm]
+      // tool position relative to the (possibly deflected) workpiece [mm]
+      const rx = x - w * wnx, ry = y - w * wny;
+      const xm = rx * 1e3, ym = ry * 1e3;
       let Fx = 0, Fy = 0, Fz = 0, T = 0, Fr2z = 0, Fsum = 0;
       for (let i = 0; i < N; i++) {
         let engaged = 0, ph = 0, zsum = 0;
@@ -126,9 +143,18 @@ export class CuttingEngine {
       const ay = (Fy - c * vys - kSI * y) / m;
       vxs += ax * dt; vys += ay * dt;
       x += vxs * dt; y += vys * dt;
+      if (wk) {
+        // reaction on the wall: opposite to the force on the tool, projected on the wall normal
+        const Fw = -(Fx * wnx + Fy * wny);
+        wv += (Fw - wc * wv - wk * w) / wm * dt;
+        w += wv * dt;
+        // the wall cannot be pushed further than the material the cutter is engaged in
+        if (w > 5e-4) { w = 5e-4; if (wv > 0) wv = 0; } else if (w < -2e-4) { w = -2e-4; if (wv < 0) wv = 0; }
+        st.sumW += w; st.maxW = Math.max(st.maxW, Math.abs(w)); wSum += w;
+      }
       if (++pr === stepsPerRev) pr = 0;
       if (pr % stepsPerTooth === 0) {
-        ts.x[ts.i] = x; ts.y[ts.i] = y; ts.i = (ts.i + 1) % ts.n; ts.count++;
+        ts.x[ts.i] = x - w * wnx; ts.y[ts.i] = y - w * wny; ts.i = (ts.i + 1) % ts.n; ts.count++;
       }
       t += dt;
       // statistics
@@ -142,11 +168,12 @@ export class CuttingEngine {
       if (Fsum > 0) { st.sumZc += Fr2z / Fsum * Fxy; st.wZc += Fxy; }
       if (++this.stepCount % this.decim === 0) {
         const j = hist.i;
-        hist.Fx[j] = Fx; hist.Fy[j] = Fy; hist.Fz[j] = Fz; hist.x[j] = x * 1e6; hist.y[j] = y * 1e6;
+        hist.Fx[j] = Fx; hist.Fy[j] = Fy; hist.Fz[j] = Fz; hist.x[j] = (x - w * wnx) * 1e6; hist.y[j] = (y - w * wny) * 1e6;
         hist.i = (j + 1) % hist.n; hist.count++;
       }
     }
-    this.x = x; this.y = y; this.vx = vxs; this.vy = vys; this.t = t; this.pr = pr;
+    this.x = x; this.y = y; this.vx = vxs; this.vy = vys; this.t = t; this.pr = pr; this.w = w; this.wv = wv;
+    this.runMeanW = nSteps ? wSum / nSteps : 0; // mean wall deflection over this call [m]
   }
 
   // Ratio of once-per-tooth-period scatter to total vibration: ~0 for forced vibration, large for chatter.
@@ -176,5 +203,5 @@ export class CuttingEngine {
 
 function newStats() {
   return { n: 0, sumF: 0, maxF: 0, sumFx: 0, sumFy: 0, sumFz: 0, maxFz: 0, sumT: 0, maxT: 0, sumX: 0, sumY: 0,
-    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0 };
+    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0 };
 }
