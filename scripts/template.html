@@ -1,0 +1,236 @@
+<title>3軸加工シミュレーター</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@400;500;700&display=swap">
+<style>
+/* Layout: machine-HMI page. Header bar with run controls, 3D viewport + condition panel, then readouts and charts. */
+:root {
+  --bg: #e9ecef; --panel: #f7f8f9; --panel-2: #dfe3e8; --ink: #1d2329; --ink-mute: #5b6670; --rule: #c6cdd4;
+  --accent: #a86f00; --accent-ink: #ffffff; --ok: #2f7d4f; --warn: #a86f00; --bad: #b3352b;
+  --series-a: #2c6fb0; --series-b: #b05a2c; --series-c: #6a7c2a;
+  --font-body: "IBM Plex Sans JP", "Hiragino Sans", "Noto Sans JP", "Yu Gothic", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --view-bg: radial-gradient(120% 90% at 30% 20%, #f4f6f8 0%, #cfd6dd 100%);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15191d; --panel: #1d2329; --panel-2: #262d34; --ink: #e3e8ec; --ink-mute: #93a0ab; --rule: #333c45;
+  --accent: #f0b429; --accent-ink: #1a1400; --ok: #5cc28a; --warn: #f0b429; --bad: #ff6f61;
+  --series-a: #6fb1f0; --series-b: #f09a6f; --series-c: #b9cf6a;
+  --view-bg: radial-gradient(120% 90% at 30% 20%, #2a323a 0%, #111518 100%); color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #15191d; --panel: #1d2329; --panel-2: #262d34; --ink: #e3e8ec; --ink-mute: #93a0ab; --rule: #333c45;
+  --accent: #f0b429; --accent-ink: #1a1400; --ok: #5cc28a; --warn: #f0b429; --bad: #ff6f61;
+  --series-a: #6fb1f0; --series-b: #f09a6f; --series-c: #b9cf6a;
+  --view-bg: radial-gradient(120% 90% at 30% 20%, #2a323a 0%, #111518 100%); color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.5; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 12px 32px; max-width: 1600px; margin: 0 auto; display: grid; gap: 12px; }
+header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 4px; }
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
+.brand h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: 0.04em; text-wrap: balance; }
+.brand .sub { color: var(--ink-mute); font-size: 12px; }
+.pill { font: 500 12px/1 var(--font-mono); padding: 6px 10px; border-radius: 999px; border: 1px solid currentColor; letter-spacing: 0.05em; white-space: nowrap; }
+.pill[data-s="stable"] { color: var(--ok); } .pill[data-s="marginal"] { color: var(--warn); } .pill[data-s="chatter"] { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); } .pill[data-s="idle"] { color: var(--ink-mute); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select, input, textarea { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--ink-mute); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; min-width: 92px; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select, input[type=number] { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+.clock { font: 500 13px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-mute); white-space: nowrap; }
+.progress { height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
+.progress > i { display: block; height: 100%; width: 0; background: var(--accent); }
+
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; align-items: start; }
+@media (max-width: 980px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.viewport { position: relative; height: clamp(340px, 64vh, 760px); border-radius: 8px; overflow: hidden; background: var(--view-bg); border: 1px solid var(--rule); }
+.viewport canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.overlay { position: absolute; display: flex; gap: 6px; flex-wrap: wrap; }
+.overlay.tl { top: 10px; left: 10px; right: 10px; flex-direction: column; align-items: flex-start; pointer-events: none; }
+.overlay.tr { top: 10px; right: 10px; }
+.overlay.bl { bottom: 10px; left: 10px; right: 10px; align-items: center; }
+.chipbtn { font-size: 12px; padding: 4px 9px; background: color-mix(in srgb, var(--panel) 85%, transparent); backdrop-filter: blur(4px); }
+.chipbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.alert { font-size: 12px; background: color-mix(in srgb, var(--panel) 90%, transparent); border-left: 3px solid var(--bad); padding: 4px 8px; border-radius: 3px; max-width: 100%; }
+.lineinfo { font: 12px var(--font-mono); background: color-mix(in srgb, var(--panel) 85%, transparent); padding: 4px 8px; border-radius: 4px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend { display: flex; align-items: center; gap: 6px; font: 11px var(--font-mono); background: color-mix(in srgb, var(--panel) 85%, transparent); padding: 4px 8px; border-radius: 4px; }
+.legend i { display: inline-block; width: 90px; height: 8px; border-radius: 2px; background: linear-gradient(90deg, #29468c, #21999e, #f2b833, #d93326); }
+
+aside.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; min-width: 0; }
+.tabs { display: flex; border-bottom: 1px solid var(--rule); }
+.tabs button { flex: 1; border: 0; border-radius: 0; background: transparent; padding: 10px 6px; color: var(--ink-mute); font-weight: 500; }
+.tabs button[aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.tabpane { padding: 14px; display: grid; gap: 14px; max-height: calc(64vh - 40px); min-height: 300px; overflow: auto; }
+@media (max-width: 980px) { .tabpane { max-height: none; } }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
+legend { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--ink-mute); margin-bottom: 4px; padding: 0; }
+.row { display: grid; grid-template-columns: 1fr 112px; gap: 8px; align-items: center; }
+.row label { font-size: 13px; }
+.row .unit { font: 11px var(--font-mono); color: var(--ink-mute); }
+.row input[type=number], .row select { width: 100%; }
+.row.wide { grid-template-columns: 1fr; }
+.slider { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+.slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+.slider output { font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 6px 4px; font-size: 13px; background: transparent; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.hint { font-size: 12px; color: var(--ink-mute); margin: 0; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 8px; font: 12px/1.5 var(--font-mono); tab-size: 2; white-space: pre; }
+.warnings { font-size: 12px; color: var(--warn); margin: 0; padding-left: 18px; }
+.prose { font-size: 13px; line-height: 1.7; }
+.prose h3 { font-size: 13px; margin: 14px 0 4px; letter-spacing: 0.03em; }
+.prose p, .prose ul { margin: 0 0 8px; }
+.prose ul { padding-left: 18px; }
+.prose code { font: 12px var(--font-mono); }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.tile { background: var(--panel); padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
+.tile .k { font-size: 11px; letter-spacing: 0.06em; color: var(--ink-mute); }
+.tile .v { font: 500 22px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile .v small { font-size: 12px; color: var(--ink-mute); margin-left: 3px; }
+.tile .s { font: 11px var(--font-mono); color: var(--ink-mute); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .meter { height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.tile .meter i { display: block; height: 100%; width: 0; background: var(--ok); }
+.tile[data-s="marginal"] .v { color: var(--warn); } .tile[data-s="chatter"] .v { color: var(--bad); }
+
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.chart { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px 8px; min-width: 0; display: grid; gap: 4px; }
+.chart h2 { font-size: 13px; margin: 0; font-weight: 700; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.chart h2 span { font: 11px var(--font-mono); color: var(--ink-mute); font-weight: 400; }
+.chart canvas { width: 100%; height: 190px; display: block; }
+#cvLobes { cursor: crosshair; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+  <header class="bar">
+    <div class="brand"><h1>3軸加工シミュレーター</h1><span class="sub">切削力 · びびり振動 · たわみ · 切粉</span></div>
+    <span class="pill" id="statePill" data-s="idle">待機中</span>
+    <div class="controls">
+      <button class="primary" id="btnPlay">▶ 開始</button>
+      <button id="btnReset">はじめから</button>
+      <label class="hint" for="speed">速度</label>
+      <select id="speed">
+        <option value="0.25">×0.25</option><option value="0.5">×0.5</option><option value="1">×1 実時間</option>
+        <option value="2" selected>×2</option><option value="5">×5</option><option value="10">×10</option><option value="25">×25</option>
+      </select>
+      <span class="clock" id="clock">0.0 / 0.0 s</span>
+    </div>
+  </header>
+  <div class="progress" aria-hidden="true"><i id="prog"></i></div>
+
+  <div class="main">
+    <div class="viewport">
+      <canvas id="view" aria-label="加工の3D表示。ドラッグで回転、右ドラッグかShift+ドラッグで移動、ホイールで拡大縮小"></canvas>
+      <div class="overlay tl"><div class="lineinfo" id="lineInfo">N-- </div><div id="alerts" style="display:grid;gap:4px"></div></div>
+      <div class="overlay tr">
+        <button class="chipbtn" data-view="iso">斜め</button><button class="chipbtn" data-view="top">上面</button><button class="chipbtn" data-view="front">正面</button>
+      </div>
+      <div class="overlay bl">
+        <button class="chipbtn" data-color="material" aria-pressed="true">材料色</button>
+        <button class="chipbtn" data-color="vibration" aria-pressed="false">振動マップ</button>
+        <button class="chipbtn" data-color="depth" aria-pressed="false">深さ</button>
+        <span class="legend" id="legend" hidden><span id="legend0">0</span><i></i><span id="legend1">40 µm</span></span>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="cond">加工条件</button>
+        <button role="tab" aria-selected="false" data-tab="prog">プログラム</button>
+        <button role="tab" aria-selected="false" data-tab="about">モデル解説</button>
+      </div>
+      <div class="tabpane" data-pane="cond">
+        <fieldset>
+          <legend>主軸・送り</legend>
+          <div class="slider"><label for="ovS">主軸回転</label><output id="ovSOut">12000 min⁻¹</output><input type="range" id="ovS" min="2000" max="30000" step="100" value="12000"></div>
+          <button id="btnPocket">安定ポケットに合わせる</button>
+          <p class="hint" id="pocketHint">安定限界線図の山(安定ポケット)へ主軸回転を移します。線図をクリックしても変更できます。</p>
+          <div class="slider"><label for="ovF">送りオーバーライド</label><output id="ovFOut">100 %</output><input type="range" id="ovF" min="10" max="200" step="5" value="100"></div>
+        </fieldset>
+        <fieldset>
+          <legend>被削材</legend>
+          <div class="row wide"><select id="material"></select></div>
+          <p class="hint" id="matHint"></p>
+        </fieldset>
+        <fieldset>
+          <legend>工具</legend>
+          <div class="seg" style="grid-template-columns:repeat(2,1fr)"><button data-ttype="flat" aria-pressed="true">フラット</button><button data-ttype="ball" aria-pressed="false">ボール</button></div>
+          <div class="row"><label for="tD">直径 D <span class="unit">mm</span></label><input type="number" id="tD" min="1" max="32" step="0.5" value="10"></div>
+          <div class="row"><label for="tN">刃数</label><input type="number" id="tN" min="1" max="8" step="1" value="3"></div>
+          <div class="row"><label for="tHelix">ねじれ角 <span class="unit">°</span></label><input type="number" id="tHelix" min="0" max="60" step="1" value="30"></div>
+          <div class="row"><label for="tFlute">刃長 <span class="unit">mm</span></label><input type="number" id="tFlute" min="2" max="80" step="1" value="25"></div>
+          <div class="row"><label for="tStick">突出し長 <span class="unit">mm</span></label><input type="number" id="tStick" min="5" max="150" step="1" value="30"></div>
+        </fieldset>
+        <fieldset>
+          <legend>工具先端の動特性</legend>
+          <label class="check"><input type="checkbox" id="mAuto" checked> 工具形状から自動計算</label>
+          <div class="row"><label for="mK">剛性 k <span class="unit">N/µm</span></label><input type="number" id="mK" min="0.5" max="200" step="0.1"></div>
+          <div class="row"><label for="mFn">固有振動数 <span class="unit">Hz</span></label><input type="number" id="mFn" min="100" max="20000" step="10"></div>
+          <div class="row"><label for="mZeta">減衰比 ζ</label><input type="number" id="mZeta" min="0.005" max="0.3" step="0.005" value="0.04"></div>
+        </fieldset>
+        <fieldset>
+          <legend>切粉の排出</legend>
+          <div class="seg"><button data-cool="dry" aria-pressed="false">ドライ</button><button data-cool="air" aria-pressed="true">エアブロー</button><button data-cool="flood" aria-pressed="false">クーラント</button></div>
+        </fieldset>
+        <fieldset>
+          <legend>表示</legend>
+          <div class="slider"><label for="exag">たわみ表示倍率</label><output id="exagOut">×100</output><input type="range" id="exag" min="1" max="500" step="1" value="100"></div>
+          <label class="check"><input type="checkbox" id="showChips" checked> 切粉を表示</label>
+          <label class="check"><input type="checkbox" id="showPath" checked> 工具経路を表示</label>
+        </fieldset>
+      </div>
+      <div class="tabpane" data-pane="prog" hidden>
+        <div class="row wide"><select id="sample" aria-label="サンプルプログラム"></select></div>
+        <textarea id="code" spellcheck="false" aria-label="Gコード"></textarea>
+        <button class="primary" id="btnLoad">このプログラムで再シミュレーション</button>
+        <p class="hint">対応: G0 G1 G2 G3 (I J / R)、G17 G20 G21 G90 G91、F S M3 M5 M30。<code>(STOCK 幅 奥行 高さ)</code> で素材寸法を指定します。素材上面が Z0、左下手前が X0 Y0 です。</p>
+        <ul class="warnings" id="warnings"></ul>
+      </div>
+      <div class="tabpane prose" data-pane="about" hidden>
+        <h3>何を計算しているか</h3>
+        <ul>
+          <li><b>材料除去</b>: 素材を 0.3 mm 格子の高さマップ(Zデクセル)で持ち、工具がたわんだ実際の位置で削ります。3軸ならアンダーカットが無いのでこの表現で形状は正確です。</li>
+          <li><b>切削力</b>: 刃を軸方向に輪切りにし、各刃・各断面の切りくず厚さ h から接線・半径・軸方向の力を求めます(Altintas の線形エッジ力モデル F = K<sub>c</sub>·h·b + K<sub>e</sub>·b)。ねじれ角による位相遅れも入れています。</li>
+          <li><b>振動とびびり</b>: 工具先端を X・Y の1自由度ずつのばね・質量・減衰系とし、切削力で時間積分します。切りくず厚さには1刃前が残した面との差(再生効果)を入れているので、条件次第で自励びびりが自然に発生します。</li>
+          <li><b>安定限界線図</b>: 同じ動特性から Altintas–Budak のゼロ次解で解析的に求めます。時間領域シミュレーションの結果と照らし合わせられます。</li>
+          <li><b>たわみと応力</b>: 工具を片持ちはり(刃部の等価直径 0.8D、超硬 E=600 GPa)と主軸側ばねの直列で扱い、根元の曲げとねじりから相当応力を出します。</li>
+          <li><b>切粉</b>: 刃が切れ刃から抜けるたびに体積を持った粒子を放出し、重力・空気やクーラントの流れ・工具の回転・素材形状との衝突で動かします。ポケット内に残った量と再切削の回数を数えます。</li>
+        </ul>
+        <h3>精度とリアルタイム性のトレードオフ</h3>
+        <ul>
+          <li>振動の積分には 1 刃あたり数十〜数百ステップが要ります。等倍以下なら加工時間をすべて積分しますが、早送り再生では1フレームあたりの計算量に上限を設け、区間の一部だけを積分して全体を代表させています。びびりの成長速度は実時間より遅く見えることがあります。</li>
+          <li>切削係数と動特性は代表値です。実機の値はハンマリング試験(FRF)と切削力測定で同定して入力してください。</li>
+          <li>工作物側の変形(薄肉のたわみ)、底刃の切削力(プランジ)、工具摩耗、熱は未対応です。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
+          <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
+        </ul>
+        <h3>見どころ</h3>
+        <p>デモは 12000 min⁻¹ で 0.5 → 1.0 → 2.0 mm のスロットを削ります。1 mm 以上でびびりが出るので、振動マップで面の荒れを確認したあと「安定ポケットに合わせる」を押して再生すると、同じ切込みでも振動が収まる様子が見られます。</p>
+      </div>
+    </aside>
+  </div>
+
+  <section class="tiles" aria-label="計測値">
+    <div class="tile"><span class="k">切削抵抗 XY</span><span class="v" id="vF">0<small>N</small></span><span class="s" id="sF">最大 0 N · 軸方向 0 N</span></div>
+    <div class="tile"><span class="k">主軸トルク / 動力</span><span class="v" id="vT">0.00<small>N·m</small></span><span class="s" id="sT">0.00 kW</span></div>
+    <div class="tile"><span class="k">工具たわみ</span><span class="v" id="vD">0.0<small>µm</small></span><span class="s" id="sD">k = 0 N/µm</span></div>
+    <div class="tile" id="tileVib"><span class="k">振動振幅</span><span class="v" id="vV">0.0<small>µm</small></span><span class="s" id="sV">同期外成分 0.0 µm</span></div>
+    <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s">許容目安 1500 MPa</span></div>
+    <div class="tile"><span class="k">除去率</span><span class="v" id="vM">0.0<small>cm³/min</small></span><span class="s" id="sM">ap 0.00 mm · fz 0.000 mm</span></div>
+    <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">素材上に残留 0 · 再切削 0 回</span></div>
+  </section>
+
+  <section class="charts">
+    <div class="chart"><h2>切削抵抗 <span id="hF"></span></h2><canvas id="cvForce"></canvas></div>
+    <div class="chart"><h2>工具先端の軌跡 <span>● 1刃ごとの位置</span></h2><canvas id="cvOrbit"></canvas></div>
+    <div class="chart"><h2>振動スペクトル <span id="hSpec"></span></h2><canvas id="cvSpec"></canvas></div>
+    <div class="chart"><h2>安定限界線図 <span id="hLobe">クリックで主軸回転を変更</span></h2><canvas id="cvLobes"></canvas></div>
+  </section>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>/*APP*/</script>
