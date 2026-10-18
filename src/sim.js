@@ -205,7 +205,7 @@ export class Simulator {
       // relative to the workpiece: a wall pushed away by w is cut less (it springs back thicker)
       const dx = (e.x - e.w * e.wnx) * 1e3, dy = (e.y - e.w * e.wny) * 1e3;
       const errVal = Math.hypot(e.x, e.y) * 1e6;
-      frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z, R, tool.type, errVal);
+      frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z, R, tool.type, errVal, { ux: this.u[0], uy: this.u[1], f: (this.fz || 0) * tool.N });
       if (this.wall && e.wk) this.stock.markWall(p.x + dx, p.y + dy, R, e.wnx, e.wny, Math.max(0, e.runMeanW * 1e6));
       this.pos = p;
       if (this.segS >= segLen - 1e-9) this.nextSeg();

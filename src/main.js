@@ -223,5 +223,5 @@ function updateCharts() {
 
 loadProgram();
 setSpindle(baseS);
-window.machiningSim = sim; // handy for poking at the model from the browser console
+window.machiningSim = sim; window.machiningView = view; // handy for poking at the model from the browser console
 requestAnimationFrame(frameLoop);

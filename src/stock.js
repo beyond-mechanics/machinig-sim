@@ -12,6 +12,11 @@ export class Stock {
     this.H = new Float32Array(this.nx * this.ny).fill(this.zTop);
     this.err = new Float32Array(this.nx * this.ny);   // vibration at the moment of cutting [µm]
     this.wallErr = new Float32Array(this.nx * this.ny); // workpiece (wall) deflection at the moment of cutting [µm]
+    // feed marks on the floor: phase position [mm] of the trailing-edge arc through each cell and
+    // the mark spacing [mm] (0 = no mark). Marks are the arcs that the cutter's trailing edge
+    // leaves once per revolution (radial runout makes one tooth dominate), feed/rev apart.
+    this.markS = new Float32Array(this.nx * this.ny);
+    this.markF = new Float32Array(this.nx * this.ny);
     this.removed = 0;
     this.clearDirty();
   }
@@ -48,12 +53,14 @@ export class Stock {
     }
   }
   // remove material under the tool. type 'flat' | 'ball'. Returns removed volume [mm³].
-  stamp(cx, cy, tipZ, R, type, errVal) {
+  // mark: {ux, uy, f} feed direction and feed per revolution for the floor marks
+  stamp(cx, cy, tipZ, R, type, errVal, mark = null) {
     if (tipZ >= this.zTop) return 0;
     const i0 = Math.max(0, Math.floor((cx - R) / this.hx)), i1 = Math.min(this.nx - 1, Math.ceil((cx + R) / this.hx));
     const j0 = Math.max(0, Math.floor((cy - R) / this.hy)), j1 = Math.min(this.ny - 1, Math.ceil((cy + R) / this.hy));
     if (i0 > i1 || j0 > j1) return 0;
-    const H = this.H, E = this.err, n = this.nx, R2 = R * R;
+    const H = this.H, E = this.err, n = this.nx, R2 = R * R, MS = this.markS, MF = this.markF;
+    const mf = mark && mark.f > 0 && type === 'flat' ? mark.f : 0;
     let vol = 0, touched = false;
     for (let j = j0; j <= j1; j++) {
       const dy = j * this.hy - cy;
@@ -64,6 +71,11 @@ export class Stock {
         const z = type === 'ball' ? tipZ + R - Math.sqrt(R2 - r2) : tipZ;
         const k = j * n + i;
         if (H[k] > z) { vol += H[k] - z; H[k] = Math.max(z, this.zBottom); E[k] = errVal; touched = true; }
+        // the last pass over a floor at this depth leaves its trailing-edge arcs
+        if (mf && H[k] > z - 0.002) {
+          const xs = i * this.hx, ys = j * this.hy, p = -dx * mark.uy + dy * mark.ux;
+          MS[k] = xs * mark.ux + ys * mark.uy + Math.sqrt(Math.max(0, R2 - p * p)); MF[k] = mf; touched = true;
+        }
       }
     }
     if (touched) {

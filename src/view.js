@@ -11,9 +11,15 @@ export class View {
     this.camera = new T.PerspectiveCamera(38, 1, 1, 5000);
     this.camera.up.set(0, 0, 1);
     this.orbit = { target: new T.Vector3(60, 40, -10), dist: 230, az: -0.95, el: 0.72 };
-    this.scene.add(new T.HemisphereLight(0xdfe8f2, 0x3a3f47, 0.75));
-    const sun = new T.DirectionalLight(0xffffff, 0.75); sun.position.set(-80, -120, 200); this.scene.add(sun);
-    const rim = new T.DirectionalLight(0xffe2b0, 0.35); rim.position.set(150, 120, 80); this.scene.add(rim);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = T.PCFSoftShadowMap;
+    this.scene.environment = buildEnvironment(this.renderer);
+    this.scene.add(new T.HemisphereLight(0xdfe8f2, 0x3a3f47, 0.45));
+    // key light casts shadows (tool on the stock, walls into pockets); its frustum follows the stock
+    const sun = new T.DirectionalLight(0xffffff, 0.8); sun.position.set(-80, -120, 200);
+    sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.3;
+    this.scene.add(sun, sun.target); this.sun = sun;
+    const rim = new T.DirectionalLight(0xffe2b0, 0.3); rim.position.set(150, 120, 80); this.scene.add(rim);
     this.colorMode = 'material';
     this.exag = 100;
     this.showChips = true; this.showPath = true;
@@ -45,10 +51,12 @@ export class View {
     g.setAttribute('position', new T.BufferAttribute(pos, 3).setUsage(T.DynamicDrawUsage));
     g.setAttribute('normal', new T.BufferAttribute(nor, 3).setUsage(T.DynamicDrawUsage));
     g.setAttribute('color', new T.BufferAttribute(col, 3).setUsage(T.DynamicDrawUsage));
+    g.setAttribute('mark', new T.BufferAttribute(new Float32Array(n * 2), 2).setUsage(T.DynamicDrawUsage));
+    g.setAttribute('rough', new T.BufferAttribute(new Float32Array(n), 1).setUsage(T.DynamicDrawUsage));
     g.setIndex(new T.BufferAttribute(idx, 1));
     this.topGeo = g;
-    const m = new T.MeshStandardMaterial({ vertexColors: true, metalness: 0.35, roughness: 0.5 });
-    this.top = new T.Mesh(g, m);
+    this.top = new T.Mesh(g, stockMaterial());
+    this.top.castShadow = this.top.receiveShadow = true;
     // side walls follow the edge heights
     const per = 2 * (nx + ny);
     const wg = new T.BufferGeometry();
@@ -58,10 +66,17 @@ export class View {
     wg.setIndex(wi);
     this.wallGeo = wg;
     const base = new T.Color(...mat.chip).multiplyScalar(0.8);
-    this.walls = new T.Mesh(wg, new T.MeshStandardMaterial({ color: base, metalness: 0.3, roughness: 0.65, side: T.DoubleSide }));
+    this.walls = new T.Mesh(wg, new T.MeshStandardMaterial({ color: base, metalness: 0.45, roughness: 0.62, side: T.DoubleSide }));
+    this.walls.castShadow = this.walls.receiveShadow = true;
     // machine table under the stock
     const table = new T.Mesh(new T.PlaneGeometry(stock.w + 160, stock.l + 160), new T.MeshStandardMaterial({ color: 0x5a636e, metalness: 0.4, roughness: 0.7 }));
     table.position.set(stock.w / 2, stock.l / 2, stock.zBottom - 0.05);
+    table.receiveShadow = true;
+    // fit the shadow frustum to the stock plus the tool above it
+    const sc = this.sun.shadow.camera, half = Math.hypot(stock.w, stock.l) / 2 + 40;
+    sc.left = sc.bottom = -half; sc.right = sc.top = half; sc.near = 1; sc.far = 800; sc.updateProjectionMatrix();
+    this.sun.target.position.set(stock.w / 2, stock.l / 2, stock.zBottom / 2);
+    this.sun.position.set(stock.w / 2 - 120, stock.l / 2 - 180, 300);
     const grid = new T.GridHelper(Math.max(stock.w, stock.l) + 160, 24, 0x7c8794, 0x6a737e);
     grid.rotation.x = Math.PI / 2; grid.position.set(stock.w / 2, stock.l / 2, stock.zBottom);
     this.stockGroup = new T.Group();
@@ -80,6 +95,7 @@ export class View {
     i0 = Math.max(0, i0 - 1); j0 = Math.max(0, j0 - 1); i1 = Math.min(nx - 1, i1 + 1); j1 = Math.min(ny - 1, j1 + 1);
     const pos = this.topGeo.attributes.position, nor = this.topGeo.attributes.normal, col = this.topGeo.attributes.color;
     const P = pos.array, N = nor.array, C = col.array;
+    const mk = this.topGeo.attributes.mark, rg = this.topGeo.attributes.rough, M = mk.array, RG = rg.array;
     const base = this.mat.chip, depth = s.zTop - s.zBottom;
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
       const k = j * nx + i, z = H[k];
@@ -94,14 +110,21 @@ export class View {
       if (this.colorMode === 'vibration' && cut) [r, g, b] = ramp(Math.min(1, s.err[k] / 40));
       else if (this.colorMode === 'wall') [r, g, b] = s.wallErr[k] > 0.5 ? ramp(Math.min(1, s.wallErr[k] / 50)) : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.62];
       else if (this.colorMode === 'depth') [r, g, b] = ramp(Math.min(1, (s.zTop - z) / depth));
-      else if (cut) { r = base[0] * 1.12; g = base[1] * 1.12; b = base[2] * 1.15; }
+      else if (cut) { r = base[0] * 0.98; g = base[1] * 0.98; b = base[2] * 1.0; }
       else { r = base[0] * 0.78; g = base[1] * 0.78; b = base[2] * 0.8; }
       C[k * 3] = r; C[k * 3 + 1] = g; C[k * 3 + 2] = b;
+      // machined faces are bright and fairly smooth; chatter leaves a dull, rough band;
+      // raw stock keeps its matte rolled surface
+      const vib = Math.min(1, s.err[k] / 30);
+      RG[k] = cut ? 0.26 + 0.42 * vib : 0.62;
+      M[k * 2] = s.markS[k]; M[k * 2 + 1] = this.colorMode === 'material' && cut ? s.markF[k] : 0;
     }
     // restoring/applying the wall bend touches rows outside the dirty rectangle
     if (this.deformRows) { j0 = Math.min(j0, this.deformRows[0]); j1 = Math.max(j1, this.deformRows[1]); this.deformRows = null; }
     const off = j0 * nx * 3, cnt = (j1 - j0 + 1) * nx * 3;
     for (const a of [pos, nor, col]) { a.updateRange.offset = all ? 0 : off; a.updateRange.count = all ? -1 : cnt; a.needsUpdate = true; }
+    mk.updateRange.offset = all ? 0 : off / 3 * 2; mk.updateRange.count = all ? -1 : cnt / 3 * 2; mk.needsUpdate = true;
+    rg.updateRange.offset = all ? 0 : off / 3; rg.updateRange.count = all ? -1 : cnt / 3; rg.needsUpdate = true;
     this.updateWalls();
     s.clearDirty();
   }
@@ -203,6 +226,7 @@ export class View {
     const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
     const hg3 = new T.CylinderGeometry(R * 4.4, R * 4.4, 30, 40); hg3.rotateX(Math.PI / 2); hg3.translate(0, 0, t.stickout + 51);
     this.spin.add(flute, shank, new T.Mesh(hg1, this.holderMat), new T.Mesh(hg2, this.holderMat), new T.Mesh(hg3, this.holderMat));
+    this.spin.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // tool hangs from the pivot: children are offset by -stickout
     this.spin.position.set(0, 0, -t.stickout);
   }
@@ -248,6 +272,7 @@ export class View {
     const T = THREE;
     const g = new T.TorusGeometry(1, 0.22, 4, 10, Math.PI * 1.4);
     this.chipMesh = new T.InstancedMesh(g, new T.MeshStandardMaterial({ metalness: 0.75, roughness: 0.35 }), MAX_CHIPS);
+    this.chipMesh.castShadow = true;
     this.chipMesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
     this.chipMesh.frustumCulled = false;
     this.chipMesh.setColorAt(0, new T.Color(1, 1, 1));
@@ -353,6 +378,57 @@ export class View {
 }
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// Image-based lighting for the metals: a soft studio (bright ceiling panels, grey walls,
+// dark floor) prefiltered once into a PMREM environment map.
+function buildEnvironment(renderer) {
+  const T = THREE, env = new T.Scene();
+  const g = new T.SphereGeometry(100, 32, 16), col = [];
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const t = p.getZ(i) / 100; // z up
+    const c = t > 0 ? 0.55 + 0.25 * t : 0.18 + 0.37 * (1 + t);
+    col.push(c, c * 1.02, c * 1.06);
+  }
+  g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
+  env.add(new T.Mesh(g, new T.MeshBasicMaterial({ vertexColors: true, side: T.BackSide })));
+  const panel = new T.MeshBasicMaterial({ color: 0xffffff });
+  for (const [x, y, z, sx, sy] of [[-30, -40, 85, 60, 25], [40, 30, 80, 30, 50]]) {
+    const m = new T.Mesh(new T.PlaneGeometry(sx, sy), panel); m.position.set(x, y, z); m.lookAt(0, 0, 0); env.add(m);
+  }
+  const pm = new T.PMREMGenerator(renderer);
+  const tex = pm.fromScene(env, 0.02).texture;
+  pm.dispose();
+  return tex;
+}
+
+// Stock top surface: per-vertex roughness (dull where chatter hit) and the feed marks the
+// trailing edge leaves on flat floors, drawn procedurally at their true spacing and faded
+// out where they are finer than a pixel (zoom in to see them).
+function stockMaterial() {
+  const T = THREE;
+  const m = new T.MeshStandardMaterial({ vertexColors: true, metalness: 0.55, roughness: 0.5, envMapIntensity: 0.55 });
+  m.extensions = { derivatives: true };
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 mark; attribute float rough; varying vec2 vMark; varying float vRough; varying float vUp;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMark = mark; vRough = rough; vUp = normal.z;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vMark; varying float vRough; varying float vUp;')
+      .replace('#include <roughnessmap_fragment>', `float roughnessFactor = vRough;
+        float markAmp = 0.0, markPh = 0.0;
+        if (vMark.y > 0.0) {
+          markPh = vMark.x / vMark.y;
+          float fw = fwidth(markPh);
+          markAmp = clamp(1.6 - 2.0 * fw, 0.0, 1.0) * smoothstep(0.92, 0.99, vUp);
+          // sharp crest of each arc, as left by the trailing edge
+          float crest = pow(abs(cos(3.14159265 * markPh)), 6.0);
+          diffuseColor.rgb *= 1.0 - 0.22 * markAmp * crest;
+          roughnessFactor += 0.18 * markAmp * crest;
+        }`);
+  };
+  return m;
+}
 
 // perceptual-ish ramp: deep blue → teal → amber → red
 function ramp(t) {
