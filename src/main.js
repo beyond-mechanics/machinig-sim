@@ -1,4 +1,5 @@
 import { Simulator } from './sim.js';
+import { SimHost } from './host.js';
 import { View } from './view.js';
 import { MATERIALS } from './materials.js';
 import { SAMPLES } from './samples.js';
@@ -8,6 +9,7 @@ import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes } from './
 
 const $ = id => document.getElementById(id);
 const sim = new Simulator();
+const host = new SimHost(sim);
 const view = new View($('view'));
 let running = false, baseS = 12000;
 
@@ -17,9 +19,10 @@ for (const [k, s] of Object.entries(SAMPLES)) $('sample').add(new Option(s.name,
 $('code').value = SAMPLES.demo.code;
 
 function loadProgram() {
-  sim.load($('code').value);
+  host.load($('code').value);
   baseS = firstSpindle(sim.path) || 12000;
   sim.cfg.spindleOverride = +$('ovS').value / baseS;
+  host.config();
   view.setStock(sim.stock, sim.mat);
   view.setTool(sim.cfg.tool);
   view.setPath(sim.path);
@@ -30,18 +33,19 @@ function loadProgram() {
 }
 function firstSpindle(path) { const p = path.find(q => !q.rapid); return p ? p.S : path[0]?.S; }
 
-function restart() { sim.reset(); view.setStock(sim.stock, sim.mat); }
+function restart() { host.reset(); view.setStock(sim.stock, sim.mat); }
 
 // ---------- controls ----------
 $('btnPlay').onclick = () => {
   if (sim.done) restart();
   running = !running;
+  host.setRunning(running);
   $('btnPlay').textContent = running ? '❚❚ 一時停止' : '▶ 再開';
 };
-$('btnReset').onclick = () => { restart(); running = false; $('btnPlay').textContent = '▶ 開始'; };
-$('speed').onchange = e => { sim.speed = +e.target.value; };
-sim.speed = +$('speed').value;
-$('btnLoad').onclick = () => { loadProgram(); running = true; $('btnPlay').textContent = '❚❚ 一時停止'; };
+$('btnReset').onclick = () => { restart(); running = false; host.setRunning(false); $('btnPlay').textContent = '▶ 開始'; };
+$('speed').onchange = e => host.setSpeed(+e.target.value);
+host.setSpeed(+$('speed').value);
+$('btnLoad').onclick = () => { loadProgram(); running = true; host.setRunning(true); $('btnPlay').textContent = '❚❚ 一時停止'; };
 $('sample').onchange = e => {
   $('code').value = SAMPLES[e.target.value].code;
   loadProgram();
@@ -53,16 +57,17 @@ function setSpindle(S) {
   $('ovS').value = S;
   $('ovSOut').textContent = `${S} min⁻¹`;
   sim.cfg.spindleOverride = S / baseS;
+  host.config();
 }
 $('ovS').oninput = e => setSpindle(+e.target.value);
-$('ovF').oninput = e => { sim.cfg.feedOverride = e.target.value / 100; $('ovFOut').textContent = `${e.target.value} %`; };
+$('ovF').oninput = e => { sim.cfg.feedOverride = e.target.value / 100; host.config(); $('ovFOut').textContent = `${e.target.value} %`; };
 $('btnPocket').onclick = () => {
   const cur = +$('ovS').value;
   const r = sim.bestSpindle(cur);
   setSpindle(r.S);
   $('pocketHint').textContent = `${cur} → ${r.S} min⁻¹(この切込み条件での安定限界 ${r.alim.toFixed(2)} mm)。`;
 };
-$('material').onchange = e => { sim.cfg.material = e.target.value; sim.reconfigure(); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); };
+$('material').onchange = e => { sim.cfg.material = e.target.value; host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); };
 function updateMatHint() {
   const m = sim.mat;
   $('matHint').textContent = `Ktc ${m.Ktc} / Krc ${m.Krc} N/mm² · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.cfg.tool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.cfg.tool.D))} min⁻¹)`;
@@ -78,12 +83,12 @@ for (const [id, key] of Object.entries(toolInputs)) $(id).onchange = e => {
   if (sim.cfg.tool.stickout < sim.cfg.tool.fluteLen) { sim.cfg.tool.stickout = sim.cfg.tool.fluteLen + 2; $('tStick').value = sim.cfg.tool.stickout; }
   toolChanged();
 };
-function toolChanged() { sim.reconfigure(); view.setTool(sim.cfg.tool); syncModalInputs(); updateMatHint(); }
-$('mAuto').onchange = e => { sim.cfg.modal.auto = e.target.checked; sim.reconfigure(); syncModalInputs(); };
+function toolChanged() { host.config(true); view.setTool(sim.cfg.tool); syncModalInputs(); updateMatHint(); }
+$('mAuto').onchange = e => { sim.cfg.modal.auto = e.target.checked; host.config(true); syncModalInputs(); };
 $('mK').onchange = e => { sim.cfg.modal.k = +e.target.value * 1000; manualModal(); };
 $('mFn').onchange = e => { sim.cfg.modal.fn = +e.target.value; manualModal(); };
-$('mZeta').onchange = e => { sim.cfg.modal.zeta = +e.target.value; sim.reconfigure(); };
-function manualModal() { sim.cfg.modal.auto = false; $('mAuto').checked = false; sim.reconfigure(); syncModalInputs(); }
+$('mZeta').onchange = e => { sim.cfg.modal.zeta = +e.target.value; host.config(true); };
+function manualModal() { sim.cfg.modal.auto = false; $('mAuto').checked = false; host.config(true); syncModalInputs(); }
 function syncModalInputs() {
   $('mK').value = (sim.cfg.modal.k / 1000).toFixed(1);
   $('mFn').value = sim.cfg.modal.fn;
@@ -92,11 +97,12 @@ function syncModalInputs() {
 document.querySelectorAll('[data-cool]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-cool]').forEach(x => x.setAttribute('aria-pressed', x === b));
   sim.cfg.coolant = b.dataset.cool;
+  host.config();
 });
 $('exag').oninput = e => { view.exag = +e.target.value; $('exagOut').textContent = `×${e.target.value}`; };
 $('showChips').onchange = e => { view.showChips = e.target.checked; };
 $('showPath').onchange = e => { view.showPath = e.target.checked; };
-$('workFlex').onchange = e => { sim.cfg.workpieceFlex = e.target.checked; sim.reconfigure(); };
+$('workFlex').onchange = e => { sim.cfg.workpieceFlex = e.target.checked; host.config(true); };
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view.setView(b.dataset.view));
 document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-color]').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -127,10 +133,8 @@ const STATE_LABEL = { idle: '待機中', stable: '安定切削', marginal: '振�
 let last = performance.now(), uiTick = 0, chartTick = 0, spinAngle = 0;
 function frameLoop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (running) {
-    sim.step(dt);
-    if (sim.done && running) { running = false; $('btnPlay').textContent = '▶ もう一度'; }
-  } else sim.updateChips(0);
+  host.frame(dt, running);
+  if (running && sim.done) { running = false; host.setRunning(false); $('btnPlay').textContent = '▶ もう一度'; }
   const e = sim.engine;
   if (running && sim.display.cutting) spinAngle += dt * 2 * Math.PI * 3; // visual spin, not true rpm
   const wall = sim.display.cutting ? sim.wall : null;
