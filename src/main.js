@@ -5,6 +5,8 @@ import { parseFrfCsv, fitModes, exampleCsv, staticK, dominant } from './frf.js';
 import { View } from './view.js';
 import { MATERIALS } from './materials.js';
 import { SAMPLES } from './samples.js';
+import { decodeText } from './gcode.js';
+import { parseStl } from './workpiece.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness } from './charts.js';
@@ -13,25 +15,60 @@ const $ = id => document.getElementById(id);
 const sim = new Simulator();
 const host = new SimHost(sim);
 const view = new View($('view'));
-let running = false, baseS = 12000;
+let running = false, baseS = 12000, viewToolVersion = -1;
 
 // ---------- setup ----------
 for (const [k, m] of Object.entries(MATERIALS)) $('material').add(new Option(m.name, k));
+$('sample').add(new Option('サンプルプログラムを選ぶ…', '')); $('sample').options[0].disabled = true;
 for (const [k, s] of Object.entries(SAMPLES)) $('sample').add(new Option(s.name, k));
+$('sample').value = 'demo';
 $('code').value = SAMPLES.demo.code;
 
+let stockMode = 'prog', stlSpec = null, codeLines = [];
+function stockSetup() {
+  const num = id => +$(id).value;
+  let stock = null;
+  if (stockMode === 'box') stock = { type: 'box', w: num('stW'), l: num('stL'), h: num('stH') };
+  else if (stockMode === 'cyl') stock = { type: 'cyl', d: num('cD'), h: num('cH') };
+  else if (stockMode === 'stl' && stlSpec) stock = stlSpec;
+  const kind = $('orgSel').value;
+  const origin = kind === 'manual' ? { x: num('oX'), y: num('oY'), z: num('oZ') } : kind;
+  return { stock, origin };
+}
 function loadProgram() {
-  host.load($('code').value);
+  const setup = stockSetup();
+  host.load($('code').value, setup);
+  codeLines = $('code').value.split('\n');
   baseS = firstSpindle(sim.path) || 12000;
   sim.cfg.spindleOverride = +$('ovS').value / baseS;
   host.config();
   view.setStock(sim.stock, sim.mat);
-  view.setTool(sim.cfg.tool);
+  view.setTool(sim.activeTool); viewToolVersion = sim.toolVersion;
   view.setPath(sim.path);
   const w = $('warnings'); w.innerHTML = '';
-  for (const msg of sim.warnings) { const li = document.createElement('li'); li.textContent = msg; w.appendChild(li); }
+  const msgs = [...sim.warnings];
+  if (stockMode === 'stl' && !stlSpec) msgs.unshift('STL が未選択のため、プログラムの指定で素材を作りました');
+  for (const msg of msgs) { const li = document.createElement('li'); li.textContent = msg; w.appendChild(li); }
+  // the origin actually used, in the inputs (they stay as typed in manual mode)
+  if ($('orgSel').value !== 'manual') for (const k of ['x', 'y', 'z']) $('o' + k.toUpperCase()).value = +sim.origin[k].toFixed(3);
+  const sz = sim.stockSize, sp = sim.stockSpec;
+  const shape = sp.type === 'cyl' ? `丸棒 φ${sp.d} × ${sp.h} mm` : sp.type === 'stl' ? `STL ${sp.name || ''} ${sz.w.toFixed(1)} × ${sz.l.toFixed(1)} × ${sz.h.toFixed(1)} mm (${sp.count.toLocaleString()} 三角形)` : `直方体 ${sz.w} × ${sz.l} × ${sz.h} mm`;
+  $('stockInfo').textContent = `${shape} · 格子 ${sim.stockCell} mm`;
+  showTools();
   syncModalInputs();
   updateMatHint();
+}
+function showTools() {
+  const used = [...new Set(sim.path.map(p => p.tool).filter(t => t != null))];
+  $('toolBox').hidden = !used.length;
+  const ul = $('toolList'); ul.innerHTML = '';
+  for (const T of used) {
+    const t = sim.toolFor(T), def = sim.tools?.[T];
+    const li = document.createElement('li');
+    li.textContent = def ? `T${T}: φ${t.D} ${t.type === 'ball' ? 'ボール' : 'フラット'} ${t.N}枚刃 · 刃長 ${t.fluteLen} · 突出し ${t.stickout} mm${def.drill ? ' (ドリルはフラットとして計算)' : ''}${def.cornerR ? ` (コーナーR${def.cornerR} はフラットとして計算)` : ''}`
+      : `T${T}: 寸法の記載なし → 加工条件の工具 φ${t.D}`;
+    ul.appendChild(li);
+  }
 }
 function firstSpindle(path) { const p = path.find(q => !q.rapid); return p ? p.S : path[0]?.S; }
 
@@ -49,10 +86,73 @@ $('speed').onchange = e => host.setSpeed(+e.target.value);
 host.setSpeed(+$('speed').value);
 $('btnLoad').onclick = () => { loadProgram(); running = true; host.setRunning(true); $('btnPlay').textContent = '❚❚ 一時停止'; };
 $('sample').onchange = e => {
+  setStockMode('prog'); $('orgSel').value = 'auto'; $('orgSel').onchange();
+  $('gcInfo').textContent = SAMPLES[e.target.value].name;
   $('code').value = SAMPLES[e.target.value].code;
   loadProgram();
   setSpindle(baseS);
 };
+
+// ---------- files ----------
+async function openProgram(file) {
+  const text = decodeText(await file.arrayBuffer());
+  $('code').value = text;
+  const n = text.split('\n').length;
+  $('sample').value = '';
+  $('gcInfo').textContent = `${file.name} · ${n.toLocaleString()} 行 · ${(file.size / 1024).toFixed(0)} KB`;
+  loadProgram();
+  setSpindle(baseS);
+}
+async function openStl(file) {
+  try {
+    const m = parseStl(await file.arrayBuffer());
+    stlSpec = { type: 'stl', ...m, name: file.name };
+    setStockMode('stl');
+    const size = m.max.map((v, k) => v - m.min[k]);
+    if (Math.max(...size) < 2) $('gcInfo').textContent = `${file.name}: 大きさが ${size.map(v => v.toFixed(3)).join(' × ')} です。STL の単位は mm として読みます (m や inch で保存されていないか確認してください)。`;
+    loadProgram();
+  } catch (err) { $('stockInfo').textContent = `${file.name} を読み込めませんでした: ${err.message}`; }
+}
+function setStockMode(mode) {
+  stockMode = mode;
+  document.querySelectorAll('[data-stock]').forEach(b => b.setAttribute('aria-pressed', b.dataset.stock === mode));
+  document.querySelectorAll('[data-for]').forEach(d => d.hidden = d.dataset.for !== mode);
+  $('orgSel').querySelector('[value="model"]').disabled = mode !== 'stl';
+  if (mode !== 'stl' && $('orgSel').value === 'model') $('orgSel').value = 'auto';
+}
+document.querySelectorAll('[data-stock]').forEach(b => b.onclick = () => {
+  setStockMode(b.dataset.stock);
+  if (b.dataset.stock === 'stl' && !stlSpec) $('stlFile').click();
+});
+$('gcOpen').onclick = () => $('gcFile').click();
+$('gcFile').onchange = e => { const f = e.target.files[0]; if (f) openProgram(f); e.target.value = ''; };
+$('stlOpen').onclick = () => $('stlFile').click();
+$('stlFile').onchange = e => { const f = e.target.files[0]; if (f) openStl(f); e.target.value = ''; };
+$('gcSave').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([$('code').value], { type: 'text/plain' }));
+  a.download = 'program.nc'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('orgSel').onchange = () => { const manual = $('orgSel').value === 'manual'; for (const id of ['oX', 'oY', 'oZ']) $(id).readOnly = !manual; };
+for (const id of ['oX', 'oY', 'oZ']) $(id).addEventListener('input', () => { $('orgSel').value = 'manual'; });
+// drop a program or an STL anywhere on the page
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $('dropzone').hidden = false; });
+addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('dropzone').hidden = true; } });
+addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $('dropzone').hidden = true;
+  const files = [...e.dataTransfer.files];
+  const stl = files.find(f => /\.stl$/i.test(f.name)), prog = files.find(f => !/\.stl$/i.test(f.name));
+  (async () => {
+    if (stl) await openStl(stl);
+    if (prog) await openProgram(prog);
+    document.querySelector('[data-tab="prog"]').click();
+  })();
+});
 
 function setSpindle(S) {
   S = Math.round(Math.max(2000, Math.min(30000, S)));
@@ -72,7 +172,7 @@ $('btnPocket').onclick = () => {
 $('material').onchange = e => { sim.cfg.material = e.target.value; host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); };
 function updateMatHint() {
   const m = sim.mat;
-  $('matHint').textContent = `Ktc ${m.Ktc} / Krc ${m.Krc} N/mm² · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.cfg.tool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.cfg.tool.D))} min⁻¹)`;
+  $('matHint').textContent = `Ktc ${m.Ktc} / Krc ${m.Krc} N/mm² · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.activeTool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.activeTool.D))} min⁻¹)`;
 }
 document.querySelectorAll('[data-ttype]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-ttype]').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -85,7 +185,7 @@ for (const [id, key] of Object.entries(toolInputs)) $(id).onchange = e => {
   if (sim.cfg.tool.stickout < sim.cfg.tool.fluteLen) { sim.cfg.tool.stickout = sim.cfg.tool.fluteLen + 2; $('tStick').value = sim.cfg.tool.stickout; }
   toolChanged();
 };
-function toolChanged() { host.config(true); view.setTool(sim.cfg.tool); syncModalInputs(); updateMatHint(); }
+function toolChanged() { host.config(true); showTools(); }
 $('mAuto').onchange = e => { sim.cfg.modal.auto = e.target.checked; if (e.target.checked) clearFrf(); host.config(true); syncModalInputs(); };
 $('mK').onchange = e => { sim.cfg.modal.k = +e.target.value * 1000; manualModal(); };
 $('mFn').onchange = e => { sim.cfg.modal.fn = +e.target.value; manualModal(); };
@@ -169,8 +269,9 @@ function frameLoop(now) {
   // the flutes alias, so the view switches to a motion-blurred cylinder
   const revPerS = running && sim.S > 0 ? sim.S / 60 * sim.speed : 0;
   const dTheta = revPerS * dt * 2 * Math.PI;
-  const blur = Math.min(1, Math.max(0, (dTheta * sim.cfg.tool.N / (2 * Math.PI) - 0.12) / 0.3));
+  const blur = Math.min(1, Math.max(0, (dTheta * sim.activeTool.N / (2 * Math.PI) - 0.12) / 0.3));
   spinAngle += blur >= 1 ? dt * 2 * Math.PI * 0.7 : dTheta; // when fully blurred, a slow drift keeps the highlights alive
+  if (sim.toolVersion !== viewToolVersion) { viewToolVersion = sim.toolVersion; view.setTool(sim.activeTool); syncModalInputs(); updateMatHint(); }
   const wall = sim.display.cutting ? sim.wall : null;
   view.updateWallDeform(wall && e.wk ? wall : null, (e.runMeanW || 0) * 1e3 * view.exag);
   view.updateStock();
@@ -190,8 +291,8 @@ function updateTiles() {
   $('tileVib').dataset.s = d.state;
   $('clock').textContent = `${sim.mtime.toFixed(1)} / ${sim.totalTime.toFixed(1)} s`;
   $('prog').style.width = `${Math.min(100, sim.mtime / (sim.totalTime || 1) * 100)}%`;
-  const lines = $('code').value.split('\n');
-  $('lineInfo').textContent = sim.line ? `N${sim.line}  ${lines[sim.line - 1]?.trim() ?? ''}` : 'プログラム先頭';
+  const tl = sim.activeT != null ? `T${sim.activeT} ` : '';
+  $('lineInfo').textContent = sim.line ? `${tl}${sim.line}行  ${codeLines[sim.line - 1]?.trim() ?? ''}` : 'プログラム先頭';
   setV('vF', d.F.toFixed(0), 'N'); $('sF').textContent = `最大 ${d.Fmax.toFixed(0)} N · 軸方向 ${d.Fz.toFixed(0)} N`;
   setV('vT', d.torque.toFixed(2), 'N·m'); $('sT').textContent = `${d.power.toFixed(2)} kW · ${Math.round(d.S)} min⁻¹`;
   setV('vD', d.defl.toFixed(1), 'µm'); $('sD').textContent = sim.cfg.modal.modesX ? `実測FRF · X ${sim.cfg.modal.modesX.length} / Y ${sim.cfg.modal.modesY.length} モード` : `k = ${(sim.cfg.modal.k / 1000).toFixed(1)} N/µm · fn ${sim.cfg.modal.fn} Hz`;
@@ -229,7 +330,7 @@ function updateCharts() {
   let prof = null;
   if (d.cutting && e.wallSamples && d.fz > 0) {
     for (const side of wallSides(d.phiSt ?? 0, d.phiEx ?? Math.PI)) {
-      const p = wallProfile(side > 0 ? e.wallSamples : e.wallSamplesPi, [e.ux, e.uy], side, sim.cfg.tool.R, d.fz);
+      const p = wallProfile(side > 0 ? e.wallSamples : e.wallSamplesPi, [e.ux, e.uy], side, sim.activeTool.R, d.fz);
       if (p && (!prof || p.Rz > prof.Rz)) prof = p;
     }
   }
@@ -242,6 +343,7 @@ function updateCharts() {
   $('hLobe').textContent = `接触角 ${immDeg}° · 限界 ${lim === Infinity ? '—' : lim.toFixed(2) + ' mm'}`;
 }
 
+setStockMode('prog'); $('orgSel').onchange();
 loadProgram();
 setSpindle(baseS);
 window.machiningSim = sim; window.machiningView = view; // handy for poking at the model from the browser console

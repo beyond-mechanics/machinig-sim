@@ -4,6 +4,7 @@
 
 import { parseGcode, discretize, segmentTime } from './gcode.js';
 import { Stock } from './stock.js';
+import { buildStock, stockExtents, cellFor, stockFromPath, originPreset, bestOrigin, ORIGIN_LABEL } from './workpiece.js';
 import { CuttingEngine, BINS } from './cutting.js';
 import { ChipSystem } from './chips.js';
 import { toolModel, toolStress } from './tool.js';
@@ -28,12 +29,37 @@ export class Simulator {
     this.program = '';
   }
 
-  load(program, stockSize) {
+  // setup.stock: workpiece spec (workpiece.js) or null to take it from a (STOCK ...) comment, or
+  // failing that from the extent of the cutting moves. setup.origin: position of the program
+  // zero in the stock frame (stock top-left-front corner = 0,0,0).
+  load(program, setup = {}) {
     this.program = program;
-    const parsed = parseGcode(program, { x: 0, y: 0, z: 50 });
-    this.warnings = parsed.warnings;
-    this.stockSize = parsed.meta.stock || stockSize || { w: 120, l: 80, h: 30 };
+    let parsed = parseGcode(program);
+    const warnings = [];
+    let spec = setup.stock || parsed.meta.stock || null, origin = setup.origin && setup.origin !== 'auto' ? setup.origin : null;
+    if (!spec) {
+      const auto = stockFromPath(discretize(parsed.moves, 2));
+      if (auto) { spec = auto.spec; origin = origin || auto.origin; warnings.push(`素材の指定が無いため、切削送りの範囲から ${spec.w}×${spec.l}×${spec.h} mm の直方体を仮定しました`); }
+      else spec = { type: 'box', w: 120, l: 80, h: 30 };
+    }
+    if (typeof origin === 'string' && origin !== 'auto') origin = originPreset(spec, origin);
+    if (!origin) {
+      const R = Math.max(this.cfg.tool.D, ...Object.values(parsed.meta.tools).map(t => t.D)) / 2;
+      const fit = bestOrigin(spec, discretize(parsed.moves, 2), R);
+      origin = fit.origin;
+      if (fit.kind !== 'corner') warnings.push(`プログラム原点を「${ORIGIN_LABEL[fit.kind]}」に合わせました (切削送りが素材に最もよく収まる位置)`);
+    }
+    // start and home 50 mm above the stock top, which is at program Z = -origin.z
+    if (origin.z !== 0) parsed = parseGcode(program, { start: { x: 0, y: 0, z: 50 - origin.z } });
+    this.warnings = [...warnings, ...parsed.warnings];
+    this.stockSpec = spec; this.origin = origin;
+    this.stockSize = stockExtents(spec);
+    this.stockCell = cellFor(spec, this.cfg.cell);
+    if (this.stockCell > this.cfg.cell) this.warnings.unshift(`素材が大きいため格子を ${this.stockCell} mm に粗くしました`);
+    this.baseH = buildStock(spec, this.cfg.cell).H;
+    this.tools = parsed.meta.tools;
     this.path = discretize(parsed.moves, 0.5);
+    for (const p of this.path) { p.x += origin.x; p.y += origin.y; p.z += origin.z; }
     this.times = [0];
     for (let i = 1; i < this.path.length; i++) this.times.push(this.times[i - 1] + segmentTime(this.path[i - 1], this.path[i]));
     this.totalTime = this.times[this.times.length - 1] || 0;
@@ -42,7 +68,8 @@ export class Simulator {
 
   reset() {
     const s = this.stockSize;
-    this.stock = new Stock(s.w, s.l, s.h, this.cfg.cell);
+    this.stock = new Stock(s.w, s.l, s.h, this.stockCell || this.cfg.cell);
+    if (this.baseH && this.baseH.length === this.stock.H.length) this.stock.H.set(this.baseH);
     this.chips.reset();
     this.seg = 1; this.segS = 0; this.mtime = 0; this.done = this.path.length < 2;
     this.pos = this.path.length ? { ...this.path[0] } : { x: 0, y: 0, z: 50 };
@@ -52,13 +79,34 @@ export class Simulator {
     this.display = blankDisplay();
     this.ema = null;
     this.lastS = -1;
+    this.activeT = this.path.find(p => p.tool != null)?.tool ?? null;
     this.reconfigure();
+  }
+
+  // the tool a T number stands for: its definition from the program comments on top of the
+  // tool set up in the panel (which also serves every undefined T number)
+  toolFor(T) {
+    const base = this.cfg.tool, d = T != null ? this.tools?.[T] : null;
+    if (!d) return { ...base, T };
+    const t = { ...base, T, D: d.D, type: d.type, N: d.N ?? base.N, fluteLen: d.fluteLen ?? base.fluteLen, stickout: d.stickout ?? base.stickout, label: d.label };
+    if (t.stickout < t.fluteLen + 2) t.stickout = t.fluteLen + 2;
+    return t;
+  }
+  setActiveTool(T) {
+    if (T === this.activeT) return;
+    this.activeT = T;
+    this.reconfigure();
+    // a different tool: its vibration and chip history do not carry over
+    const e = this.engine;
+    e.x = e.y = e.vx = e.vy = 0;
   }
 
   // recompute tool/modal model and lobes; called when parameters change
   reconfigure() {
-    const t = this.cfg.tool;
+    this.cfg.tool.R = this.cfg.tool.D / 2;
+    const t = this.activeTool = this.toolFor(this.activeT ?? null);
     t.R = t.D / 2;
+    this.toolVersion = (this.toolVersion || 0) + 1;
     this.tm = toolModel(t);
     if (this.cfg.modal.auto) { this.cfg.modal.k = Math.round(this.tm.k); this.cfg.modal.fn = Math.round(this.tm.fn); }
     this.mat = MATERIALS[this.cfg.material];
@@ -76,16 +124,16 @@ export class Simulator {
 
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
-    const t = this.cfg.tool;
+    const t = this.activeTool;
     this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear }, this.modalNow(), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
     this.lastS = S;
   }
 
   lobes(phiSt, phiEx) {
-    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${this.cfg.modal.k}|${this.cfg.modal.fn}|${this.cfg.modal.zeta}|${JSON.stringify(this.cfg.modal.modesX)}|${JSON.stringify(this.cfg.modal.modesY)}|${this.cfg.material}|${this.cfg.tool.N}`;
+    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${this.cfg.modal.k}|${this.cfg.modal.fn}|${this.cfg.modal.zeta}|${JSON.stringify(this.cfg.modal.modesX)}|${JSON.stringify(this.cfg.modal.modesY)}|${this.cfg.material}|${this.activeTool.N}`;
     if (key !== this.lobeKey) {
       this.lobeKey = key;
-      this.lobeCache = stabilityLobes({ ...this.modalNow(), N: this.cfg.tool.N, Ktc: this.mat.Ktc, Krc: this.mat.Krc, phiSt, phiEx, lobes: 30, rpmMin: 2000, rpmMax: 40000 });
+      this.lobeCache = stabilityLobes({ ...this.modalNow(), N: this.activeTool.N, Ktc: this.mat.Ktc, Krc: this.mat.Krc, phiSt, phiEx, lobes: 30, rpmMin: 2000, rpmMax: 40000 });
     }
     return this.lobeCache;
   }
@@ -104,7 +152,7 @@ export class Simulator {
 
   // sample stock height on the cutter periphery for each local angle bin
   fillEngagement(cx, cy, u) {
-    const Hb = this.engine.Hb, R = this.cfg.tool.R, vx = -u[1], vy = u[0];
+    const Hb = this.engine.Hb, R = this.activeTool.R, vx = -u[1], vy = u[0];
     const cell = Math.max(this.stock.hx, this.stock.hy);
     // Sample just inside the cutter radius and one cell ahead along the feed. The grid smears
     // finished walls by up to a cell; sampling on the radius itself would read them as material
@@ -134,7 +182,7 @@ export class Simulator {
   // advance by one animation frame of wall-clock time dtReal [s]
   step(dtReal) {
     if (this.done) { this.updateChips(dtReal); return; }
-    const tool = this.cfg.tool, R = tool.R;
+    const tool = this.activeTool, R = tool.R;
     let budgetT = dtReal * this.speed;  // machine time to cover this frame
     const stampStep = Math.min(this.stock.hx, 0.4) * 0.6;
     // estimate substeps so that the dynamics budget can be spread over the frame
@@ -159,6 +207,7 @@ export class Simulator {
       this.line = b.line;
       const dxy = Math.hypot(b.x - a.x, b.y - a.y);
       if (dxy > 1e-6) this.u = [(b.x - a.x) / dxy, (b.y - a.y) / dxy];
+      if (b.tool !== undefined && b.tool !== this.activeT) this.setActiveTool(b.tool);
       const S = b.S * this.cfg.spindleOverride;
       this.S = S;
       this.F = b.F * this.cfg.feedOverride;
@@ -222,7 +271,7 @@ export class Simulator {
   spawnChips(e, from, compress, p) {
     const ev = e.chipEvents;
     if (ev.length <= from) return;
-    const tool = this.cfg.tool, R = tool.R;
+    const tool = this.activeTool, R = tool.R;
     const Vc = e.omega * R; // mm/s
     const heat = this.mat.hot ? Math.min(1, Vc / 1000 / 3) : 0.15;
     for (let k = from; k < ev.length; k++) {
@@ -240,7 +289,7 @@ export class Simulator {
   }
 
   updateChips(dtReal) {
-    const tool = this.cfg.tool, e = this.engine;
+    const tool = this.activeTool, e = this.engine;
     this.chips.flush(10);
     const t = { x: this.pos.x + e.x * 1e3, y: this.pos.y + e.y * 1e3, tipZ: this.pos.z, R: tool.R, len: tool.stickout, omega: e.omega || 0, cutTop: this.pos.z + (this.ap || 0), cutting: (this.ap || 0) > 0.01 };
     // chips move in machine time, capped so that fast-forward stays smooth
@@ -269,7 +318,7 @@ export class Simulator {
     const ci = cutting ? e.chatterIndex() : { index: 0, amp: 0 };
     d.chatterIdx += ((cutting ? ci.index : 0) - d.chatterIdx) * 0.2;
     d.once += ((cutting ? ci.once || 0 : 0) - d.once) * 0.2;
-    const stress = toolStress(this.cfg.tool, this.tm.I, this.tm.De, m.Fmax, m.zc, m.Tmax);
+    const stress = toolStress(this.activeTool, this.tm.I, this.tm.De, m.Fmax, m.zc, m.Tmax);
     Object.assign(d, {
       cutting, F: m.F, Fmax: m.Fmax, Fz: m.Fz, torque: m.T / 1000, // N·m
       power: m.T * (e.omega || 0) / 1e6, // kW
