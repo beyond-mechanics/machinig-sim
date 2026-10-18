@@ -1,12 +1,13 @@
 import { Simulator } from './sim.js';
 import { SimHost } from './host.js';
+import { wallProfile, wallSides } from './roughness.js';
 import { parseFrfCsv, fitModes, exampleCsv, staticK, dominant } from './frf.js';
 import { View } from './view.js';
 import { MATERIALS } from './materials.js';
 import { SAMPLES } from './samples.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
-import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes } from './charts.js';
+import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness } from './charts.js';
 
 const $ = id => document.getElementById(id);
 const sim = new Simulator();
@@ -211,6 +212,7 @@ function updateTiles() {
 }
 function setV(id, v, unit) { const el = $(id); el.firstChild.nodeValue = v; el.lastChild.textContent = unit; }
 
+let lastRough = null;
 function updateCharts() {
   const e = sim.engine, d = sim.display;
   drawForces($('cvForce'), e);
@@ -223,6 +225,19 @@ function updateCharts() {
   const ap = d.cutting ? d.ap : 0;
   const lim = alimAt(lobes, S);
   lobeBox = drawLobes($('cvLobes'), lobes, { S, ap, stable: ap <= lim }, LOBE_RANGE);
+  // side-wall roughness: the rougher of the walls this cut generates
+  let prof = null;
+  if (d.cutting && e.wallSamples && d.fz > 0) {
+    for (const side of wallSides(d.phiSt ?? 0, d.phiEx ?? Math.PI)) {
+      const p = wallProfile(side > 0 ? e.wallSamples : e.wallSamplesPi, [e.ux, e.uy], side, sim.cfg.tool.R, d.fz);
+      if (p && (!prof || p.Rz > prof.Rz)) prof = p;
+    }
+  }
+  // keep showing the last wall that was cut while the tool is elsewhere
+  const fresh = !!prof;
+  if (prof) lastRough = prof; else prof = sim.mtime > 0 ? lastRough : (lastRough = null);
+  drawRoughness($('cvRough'), prof);
+  $('hRough').textContent = prof ? `${fresh ? '' : '直前の側面 · '}Rz ${prof.Rz.toFixed(2)} µm · Ra ${prof.Ra.toFixed(2)} µm (理論 ${prof.Rth.toFixed(2)})` : '';
   const immDeg = ((d.phiEx - d.phiSt) * 180 / Math.PI).toFixed(0);
   $('hLobe').textContent = `接触角 ${immDeg}° · 限界 ${lim === Infinity ? '—' : lim.toFixed(2) + ' mm'}`;
 }

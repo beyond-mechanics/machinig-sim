@@ -99,6 +99,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 .tile[data-s="marginal"] .v { color: var(--warn); } .tile[data-s="chatter"] .v { color: var(--bad); }
 
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.chart.wide { grid-column: 1 / -1; }
 .chart { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px 8px; min-width: 0; display: grid; gap: 4px; }
 .chart h2 { font-size: 13px; margin: 0; font-weight: 700; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .chart h2 span { font: 11px var(--font-mono); color: var(--ink-mute); font-weight: 400; }
@@ -210,6 +211,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         <h3>何を計算しているか</h3>
         <ul>
           <li><b>材料除去</b>: 素材を 0.3 mm 格子の高さマップ(Zデクセル)で持ち、工具がたわんだ実際の位置で削ります。3軸ならアンダーカットが無いのでこの表現で形状は正確です。</li>
+          <li><b>側面の仕上げ面</b>: 刃が壁を通る瞬間の工具位置 (送り+振動) から、各刃が残す円弧の包絡として壁の凹凸を計算します。点線は振動がないときの理論値 fz²/(8R) です。</li>
           <li><b>見た目</b>: 底面の円弧状の筋は 1 回転送りの間隔で描いています。実際の間隔は 0.1 mm 前後なので、拡大すると見えます。びびりが出た面はくすんで見えます。</li>
           <li><b>工具先端の動特性</b>: 既定は工具形状から求めた 1 モードですが、実測 FRF (CSV) を読み込むと X/Y 別の複数モードで計算します。共振ピークから固有振動数・減衰比・剛性を同定します。</li>
           <li><b>切削力</b>: 刃を軸方向に輪切りにし、各刃・各断面の切りくず厚さ h から接線・半径・軸方向の力を求めます(Altintas の線形エッジ力モデル F = K<sub>c</sub>·h·b + K<sub>e</sub>·b)。ねじれ角による位相遅れも入れています。せん断成分は切りくず厚さの指数則 K(h) = K·(0.05/h)<sup>m</sup> で補正し(寸法効果)、逃げ面の押し込みによる減衰力 C<sub>i</sub>·b·v<sub>n</sub>/V<sub>c</sub> を加えています(プロセスダンピング、低速ほど効く)。</li>
@@ -250,6 +252,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="chart"><h2>工具先端の軌跡 <span>● 1刃ごとの位置</span></h2><canvas id="cvOrbit"></canvas></div>
     <div class="chart"><h2>振動スペクトル <span id="hSpec"></span></h2><canvas id="cvSpec"></canvas></div>
     <div class="chart"><h2>安定限界線図 <span id="hLobe">クリックで主軸回転を変更</span></h2><canvas id="cvLobes"></canvas></div>
+    <div class="chart wide"><h2>側面の仕上げ面 <span id="hRough"></span></h2><canvas id="cvRough"></canvas></div>
   </section>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

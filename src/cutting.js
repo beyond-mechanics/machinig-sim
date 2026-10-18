@@ -19,6 +19,10 @@ export class CuttingEngine {
     this.stats = newStats();
     this.hist = { n: 4096, i: 0, count: 0, Fx: new Float32Array(4096), Fy: new Float32Array(4096), Fz: new Float32Array(4096), x: new Float32Array(4096), y: new Float32Array(4096) };
     this.toothSamples = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
+    // tool position each time a tooth passes the +v side (φ = 0) and the −v side (φ = π) of the
+    // cutter: these are the moments the two side walls are generated (surface roughness)
+    this.wallSamples = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
+    this.wallSamplesPi = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
     this.chipEvents = [];
   }
 
@@ -59,6 +63,9 @@ export class CuttingEngine {
     this.toothPhi = new Float64Array(this.N);
     this.toothZ = new Float64Array(this.N);
     this.decim = Math.max(1, Math.round(this.stepsPerTooth / 40));
+    // step within a tooth period at which some tooth sits at φ = π
+    this.piStep = Math.round(((Math.PI % (2 * Math.PI / this.N)) / (2 * Math.PI / this.N)) * this.stepsPerTooth) % this.stepsPerTooth;
+    for (const b of [this.wallSamples, this.wallSamplesPi]) { b.i = 0; b.count = 0; }
     this.stepCount = 0;
   }
 
@@ -184,9 +191,12 @@ export class CuttingEngine {
         st.sumW += w; st.maxW = Math.max(st.maxW, Math.abs(w)); wSum += w;
       }
       if (++pr === stepsPerRev) pr = 0;
-      if (pr % stepsPerTooth === 0) {
+      const ph = pr % stepsPerTooth;
+      if (ph === 0) {
         ts.x[ts.i] = x - w * wnx; ts.y[ts.i] = y - w * wny; ts.i = (ts.i + 1) % ts.n; ts.count++;
+        const b = this.wallSamples; b.x[b.i] = x - w * wnx; b.y[b.i] = y - w * wny; b.i = (b.i + 1) % b.n; b.count++;
       }
+      if (ph === this.piStep) { const b = this.wallSamplesPi; b.x[b.i] = x - w * wnx; b.y[b.i] = y - w * wny; b.i = (b.i + 1) % b.n; b.count++; }
       t += dt;
       // statistics
       const Fxy = Math.hypot(Fx, Fy);
