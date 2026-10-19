@@ -33,7 +33,7 @@ export const DEFAULTS = {
   // wh [mm]) or 'custom' (profile: closed polygon [[u, w] m], from profile.js importProfile).
   tool: 'wedge', land: 0.1, landDeg: -20, gw: 0.35, gd: 0.05, wallDeg: 35, wh: 0.06, profile: null,
   // Ductile fracture (Johnson-Cook damage) and a multiplier on the fracture strain.
-  fracture: true, efScale: 1,
+  fracture: true, efScale: 1, flowScale: 1,
   // Thermal expansion in the pressure (needed for the residual stress of the machined surface).
   thermalExp: false,
   // Residual stress (orthogonal cutting): thermal expansion on, a deeper work piece, and after the
@@ -49,7 +49,8 @@ export class CuttingSim {
   constructor(cfg = {}) {
     const c = this.cfg = { ...DEFAULTS, ...cfg };
     if (c.residual && c.mode === 'ortho') { c.thermalExp = true; c.depth = Math.max(c.depth || 0, 0.8, 5 * c.h); }
-    const mat = this.mat = MATERIALS[c.mat];
+    // flowScale: multiplier on the whole flow stress (A and B), to calibrate against a measured force.
+    const mat = this.mat = c.flowScale > 0 && c.flowScale !== 1 ? { ...MATERIALS[c.mat], A: MATERIALS[c.mat].A * c.flowScale, B: MATERIALS[c.mat].B * c.flowScale } : MATERIALS[c.mat];
     if (c.mu == null) c.mu = mat.mu;
     if (c.avAlpha == null) c.avAlpha = mat.av ?? 1;
     if (c.avBeta == null) c.avBeta = mat.av ?? 1;

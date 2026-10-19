@@ -30,7 +30,7 @@ import { Mill } from './process.js';
 export const DEFAULTS3D = {
   mat: 'S45C', vc: 200, h: 0.1, b: 0.3, lambda: 15, rake: 5, clearance: 7, edgeRadius: 10, mu: null,
   nh: 5, cutLen: 0.5, T0: 20, beta: 0.9, heatToWork: 0.5, avAlpha: null, avBeta: null, sides: 'periodic',
-  fracture: true, efScale: 1, toolMat: 'WC', hc: 1e8,
+  fracture: true, efScale: 1, flowScale: 1, toolMat: 'WC', hc: 1e8,
   // Helical end mill (mode 'helix'): diameter, flutes, feed per tooth, radial and axial depth [mm],
   // helix angle [°], up/down milling, degrees followed after the tooth leaves the work.
   D: 2, z: 3, fz: 0.1, ae: 0.2, ap: 0.3, helix: 30, dir: 'down', track: 5,
@@ -41,7 +41,8 @@ const PI = Math.PI, DEG = PI / 180;
 export class Cutting3D {
   constructor(cfg = {}) {
     const c = this.cfg = { ...DEFAULTS3D, ...cfg };
-    const mat = this.mat = MATERIALS[c.mat];
+    // flowScale: multiplier on the whole flow stress (A and B), to calibrate against a measured force.
+    const mat = this.mat = c.flowScale > 0 && c.flowScale !== 1 ? { ...MATERIALS[c.mat], A: MATERIALS[c.mat].A * c.flowScale, B: MATERIALS[c.mat].B * c.flowScale } : MATERIALS[c.mat];
     if (c.mu == null) c.mu = mat.mu;
     if (c.avAlpha == null) c.avAlpha = mat.av ?? 1;
     if (c.avBeta == null) c.avBeta = mat.av ?? 1;

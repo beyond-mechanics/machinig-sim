@@ -75,11 +75,11 @@ function readCfg() {
   const shape = $('shape').value;
   if (mode === 'helix') return {
     mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'),
-    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), floor: $('floor').checked, dir: $('dir').value, track: num('track'), fracture: $('fracture').checked, efScale: num('efs'),
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), floor: $('floor').checked, dir: $('dir').value, track: num('track'), fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
   };
   if (mode === '3d') return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), b: num('b3'), lambda: num('lambda'), rake: num('rake'),
-    clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'), cutLen: num('len'), sides: $('sides').value, fracture: $('fracture').checked, efScale: num('efs'),
+    clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'), cutLen: num('len'), sides: $('sides').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
   };
   return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
@@ -87,11 +87,11 @@ function readCfg() {
     D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'), passes: num('passes'),
     tool: shape === 'custom' && !custom.profile ? 'wedge' : shape, land: num('land'), landDeg: num('landDeg'),
     gw: num('gw'), gd: num('gd'), wallDeg: num('wallDeg'), wh: num('wh'), profile: shape === 'custom' ? custom.profile : null,
-    fracture: $('fracture').checked, efScale: num('efs'), residual: mode === 'ortho' && $('residual').checked,
+    fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'), residual: mode === 'ortho' && $('residual').checked,
   };
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
-  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual']) $(id).addEventListener('change', reset);
+  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
 const custom = { text: null, name: '', rot: 0, flip: false, profile: null, wornMin: 0 };
@@ -561,7 +561,7 @@ function exportCoeffs() {
   const out = {
     source: 'cutting-sim', mode: c.mode, material: c.mat,
     conditions: { vc: c.vc, D: c.D, flutes: c.z, fz: c.fz, ae: c.ae, ap: c.mode === 'helix' ? c.ap : c.width, helix: c.mode === 'helix' ? c.helix : 0,
-      dir: c.dir, rake: c.rake, edgeRadius: c.edgeRadius },
+      dir: c.dir, rake: c.rake, edgeRadius: c.edgeRadius, flowScale: c.flowScale },
     coefficients: { Ktc: r(s.Ktc), Krc: r(s.Krc), Kac: c.mode === 'helix' ? r(s.Kac) : null, Kte: r(s.Kte), Kre: r(s.Kre), Kae: c.mode === 'helix' ? r(s.Kae) : null },
     units: { K_c: 'N/mm²', K_e: 'N/mm' },
   };
