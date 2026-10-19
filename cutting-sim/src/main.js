@@ -529,15 +529,26 @@ function exportCoeffs() {
     units: { K_c: 'N/mm²', K_e: 'N/mm' },
   };
   const text = JSON.stringify(out, null, 2);
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-  a.download = `coeffs_${c.mat}_${c.mode}.json`;
-  document.body.appendChild(a); a.click(); a.remove();
-  $('exhint').textContent = 'JSON を保存しました。';
+  const name = `coeffs_${c.mat}_${c.mode}.json`;
+  if (downloads) {
+    // Published page: the viewer confirms the save.
+    downloads.save({ filename: name, data: text }).then(
+      () => { $('exhint').textContent = 'JSON を保存しました。'; },
+      (e) => { $('exhint').textContent = e && e.code === 'declined' ? '保存を取りやめました。' : 'この表示では保存できません。'; });
+  } else {
+    // Offline file: a plain download link.
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    $('exhint').textContent = 'JSON を保存しました。';
+  }
   // Also to the clipboard where the page may write it (embedded pages often may not).
   const clip = navigator.clipboard && navigator.clipboard.writeText(text);
   if (clip) clip.then(() => { $('exhint').textContent = 'JSON を保存し、クリップボードにもコピーしました。'; }, () => {});
 }
+let downloads = null;
+if (window.claude && window.claude.use) window.claude.use('downloads').then((d) => { downloads = d; }, () => {});
 $('export').addEventListener('click', exportCoeffs);
 
 function readouts() {
