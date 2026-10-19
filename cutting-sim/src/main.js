@@ -513,6 +513,7 @@ const CELLS = {
     ['背分力 Ft', (s) => f0(s.ft), 'N', () => '工具を押し上げる向き'],
     ['比切削抵抗 kc', (s) => f0(s.kc), 'N/mm²', (s) => `便覧値の目安 ${s.kcRef}`],
     ['切りくず厚さ hc', (s) => (s.ratio > 0 ? f3(s.hc) : '—'), 'mm', (s) => `切りくず厚さ比 ${s.ratio > 0 ? s.ratio.toFixed(2) : '—'}`],
+    ['工具と切りくずの接触長さ', (s) => (s.contactLen != null ? f3(s.contactLen) : '—'), 'mm', (s) => (s.contactLen != null ? `切取り厚さの ${(s.contactLen / cfg.h).toFixed(1)} 倍。すくい面で平均圧力が最大の 5 % を超える範囲` : '計算が終わると表示')],
     ['せん断角 φ', (s) => (s.phi > 0 ? f1(s.phi) : '—'), '°', (s) => `Merchant の式 ${f1(s.phiMerchant)}°`],
     ['最高温度（被削材）', (s) => f0(s.tmax), '°C', (s) => `すくい面接触部 ${f0(s.trake)} °C`],
     ['工具の最高温度', (s) => f0(s.toolSteadyT ?? s.toolT), '°C', (s) => (s.toolSteadyT != null ? `定常推定。切削終了時点 ${f0(s.toolT)} °C` : '切削中の値（定常推定は終了後）')],

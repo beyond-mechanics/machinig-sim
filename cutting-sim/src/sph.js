@@ -621,12 +621,17 @@ export class CuttingSim {
       pieces: this.chipInfo ? this.chipInfo.pieces : 0, failed: this.chipInfo ? this.chipInfo.failed : 0,
       evacuated: this.nEvac, toolRake: this.tool.a * 180 / PI,
     };
-    let wearCrater = 0, wearFlank = 0;
-    if (this.done) for (const r of this.heat.profile()) {
+    let wearCrater = 0, wearFlank = 0, pMax = 0, contactLen = null;
+    const prof = this.done ? this.heat.profile() : [];
+    for (const r of prof) {
       if (r.s > 0 && r.wear > wearCrater) wearCrater = r.wear;
       if (r.s <= 0 && r.wear > wearFlank) wearFlank = r.wear;
+      if (r.s > 0 && r.p > pMax) pMax = r.p;
     }
-    base.wearCrater = wearCrater; base.wearFlank = wearFlank;
+    // Tool-chip contact length on the rake face: the farthest point (arc length from the edge)
+    // still carrying 5 % of the peak mean pressure.
+    if (pMax > 0) { contactLen = 0; for (const r of prof) if (r.s > 0 && r.p > 0.05 * pMax) contactLen = Math.max(contactLen, r.s * 1e-3); }
+    base.wearCrater = wearCrater; base.wearFlank = wearFlank; base.contactLen = contactLen;
     if (this.proc instanceof Mill) {
       const pr = this.proc;
       // Least squares over samples with 15 % < h < 90 % of hmax. Near h = 0 the edge only ploughs;

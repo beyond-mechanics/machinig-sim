@@ -85,6 +85,8 @@ test('S45C reference cut: forces, chip, temperatures, tool heat and wear', () =>
   // Specific cutting force of medium carbon steel at h = 0.1 mm: about 1,800–2,600 N/mm².
   assert.ok(r.kc > 1500 && r.kc < 2800, `kc ${r.kc.toFixed(0)}`);
   assert.ok(r.ft > 0.1 * r.fc && r.ft < r.fc, `Ft/Fc ${(r.ft / r.fc).toFixed(2)}`);
+  // Tool-chip contact on the rake face: 1.5-3 h for steel (Toropov-Ko gives 2.6 h here).
+  assert.ok(r.contactLen > 1.2 * 0.1 && r.contactLen < 3 * 0.1, `contact length ${r.contactLen} mm`);
   assert.ok(r.ratio > 1.3 && r.ratio < 2.8, `chip ratio ${r.ratio.toFixed(2)}`);
   assert.ok(r.tmax > 350 && r.tmax < 1000, `Tmax ${r.tmax.toFixed(0)}`);
   // Most cutting work ends up as heat (plastic heating at 90 %, friction at 100 %).
