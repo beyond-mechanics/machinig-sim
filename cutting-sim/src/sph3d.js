@@ -72,7 +72,7 @@ export class Cutting3D {
 
     this.ad = 1 / (PI * this.hk ** 3);
     this.Wdx = this.kernelW(dx / this.hk);
-    this.dt = 0.3 * this.hk / (this.cs + this.V);
+    this.dt = (c.cfl ?? 0.3) * this.hk / (this.cs + this.V);
     this.dtTh = 0.08 * mat.rho * mat.c * this.hk * this.hk / mat.k;
     this.nSub = Math.max(1, Math.ceil(this.dt / this.dtTh));
     this.cap = N * 40; this.allocPairs(this.cap);
@@ -212,8 +212,52 @@ export class Cutting3D {
     }
   }
 
+  // Neighbour pairs from a Verlet list: candidates within 2h + skin, searched again only when
+  // some particle has moved more than half the skin (or one was removed); every step keeps the
+  // candidates inside the kernel support and evaluates the kernel.
   buildPairs() {
-    const { N, x, y, z, hk, dead } = this, cell = 2 * hk;
+    const { N, x, y, z, dead } = this, skin = 0.3 * this.hk, per = this.periodic, P = this.bz;
+    let need = !this.xr || this.nDead !== this.deadRef;
+    if (!need) {
+      const lim = 0.25 * skin * skin, xr = this.xr, yr = this.yr, zr = this.zr;
+      for (let i = 0; i < N; i++) {
+        if (dead[i]) continue;
+        let dz = z[i] - zr[i];
+        if (per) { if (dz > 0.5 * P) dz -= P; else if (dz < -0.5 * P) dz += P; }
+        const dx = x[i] - xr[i], dy = y[i] - yr[i];
+        if (dx * dx + dy * dy + dz * dz > lim) { need = true; break; }
+      }
+    }
+    if (need) {
+      this.searchPairs(2 * this.hk + skin);
+      this.xr = x.slice(); this.yr = y.slice(); this.zr = z.slice(); this.deadRef = this.nDead;
+    }
+    const { ci, cj, nc } = this, hk = this.hk, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
+    let np = 0;
+    for (let k = 0; k < nc; k++) {
+      const i = ci[k], j = cj[k];
+      if (dead[i] || dead[j]) continue;
+      const rx = x[i] - x[j], ry = y[i] - y[j];
+      let rz = z[i] - z[j];
+      if (per) { if (rz > 0.5 * P) rz -= P; else if (rz < -0.5 * P) rz += P; }
+      const r2 = rx * rx + ry * ry + rz * rz;
+      if (r2 >= r2max || r2 === 0) continue;
+      if (np >= this.cap) this.growPairs();
+      const r = Math.sqrt(r2), q = r * inv;
+      let w, dw;
+      if (q < 1) { w = ad * (1 - 1.5 * q * q + 0.75 * q * q * q); dw = ad * inv * (-3 * q + 2.25 * q * q); }
+      else { const s = 2 - q; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
+      this.pi[np] = i; this.pj[np] = j; this.prx[np] = rx; this.pry[np] = ry; this.prz[np] = rz;
+      const g = dw / r; this.gx[np] = g * rx; this.gy[np] = g * ry; this.gz[np] = g * rz;
+      this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
+      np++;
+    }
+    this.np = np;
+  }
+
+  // Cell search for all pairs closer than `cell` (also sorts the particles by cell now and then).
+  searchPairs(cell) {
+    const { N, x, y, z, dead } = this;
     let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
     for (let i = 0; i < N; i++) {
       if (dead[i]) continue;
@@ -222,23 +266,25 @@ export class Cutting3D {
       if (z[i] < z0) z0 = z[i]; if (z[i] > z1) z1 = z[i];
     }
     const cw = Math.floor((x1 - x0) / cell) + 1, ch = Math.floor((y1 - y0) / cell) + 1;
-    // Periodic: z cells tile the period exactly (each at least one kernel support wide) and wrap.
+    // Periodic: z cells tile the period exactly (each at least one search radius wide) and wrap.
     const per = this.periodic, P = this.bz;
     let cd, czs;
     if (per) { cd = Math.max(3, Math.floor(P / cell)); czs = P / cd; z0 = -0.5 * P; }
     else { czs = cell; cd = Math.floor((z1 - z0) / cell) + 1; }
-    const nc = cw * ch * cd;
-    if (this.steps % 50 === 0) this.reorder((i) => Math.floor((x[i] - x0) / cell) + cw * (Math.floor((y[i] - y0) / cell) + ch * Math.min(cd - 1, Math.floor((z[i] - z0) / czs))), nc);
-    if (this.head.length < nc) this.head = new Int32Array(nc * 2);
+    const ncell = cw * ch * cd;
+    const key = (i) => Math.floor((x[i] - x0) / cell) + cw * (Math.floor((y[i] - y0) / cell) + ch * Math.min(cd - 1, Math.floor((z[i] - z0) / czs)));
+    if (this.steps - (this.lastSort ?? -1e9) >= 50) { this.reorder(key, ncell); this.lastSort = this.steps; }
+    if (this.head.length < ncell) this.head = new Int32Array(ncell * 2);
     const head = this.head, next = this.next;
-    head.fill(-1, 0, nc);
+    head.fill(-1, 0, ncell);
     for (let i = 0; i < N; i++) {
       if (dead[i]) continue;
-      const ci = Math.floor((x[i] - x0) / cell) + cw * (Math.floor((y[i] - y0) / cell) + ch * Math.min(cd - 1, Math.floor((z[i] - z0) / czs)));
-      next[i] = head[ci]; head[ci] = i;
+      const c = key(i);
+      next[i] = head[c]; head[c] = i;
     }
-    const r2max = cell * cell, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
-    let np = 0;
+    if (!this.ci) { this.ccap = this.cap; this.ci = new Int32Array(this.ccap); this.cj = new Int32Array(this.ccap); }
+    const r2max = cell * cell;
+    let nc = 0;
     for (let kz = 0; kz < cd; kz++) for (let ky = 0; ky < ch; ky++) for (let kx = 0; kx < cw; kx++) {
       const c0 = kx + cw * (ky + ch * kz);
       for (let i = head[c0]; i >= 0; i = next[i]) {
@@ -254,22 +300,18 @@ export class Cutting3D {
             const rx = x[i] - x[j], ry = y[i] - y[j];
             let rz = z[i] - z[j];
             if (per) { if (rz > 0.5 * P) rz -= P; else if (rz < -0.5 * P) rz += P; }
-            const r2 = rx * rx + ry * ry + rz * rz;
-            if (r2 >= r2max || r2 === 0) continue;
-            if (np >= this.cap) this.growPairs();
-            const r = Math.sqrt(r2), q = r * inv;
-            let w, dw;
-            if (q < 1) { w = ad * (1 - 1.5 * q * q + 0.75 * q * q * q); dw = ad * inv * (-3 * q + 2.25 * q * q); }
-            else { const s = 2 - q; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
-            this.pi[np] = i; this.pj[np] = j; this.prx[np] = rx; this.pry[np] = ry; this.prz[np] = rz;
-            const g = dw / r; this.gx[np] = g * rx; this.gy[np] = g * ry; this.gz[np] = g * rz;
-            this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
-            np++;
+            if (rx * rx + ry * ry + rz * rz >= r2max) continue;
+            if (nc >= this.ccap) {
+              const oi = this.ci, oj = this.cj;
+              this.ccap *= 2; this.ci = new Int32Array(this.ccap); this.cj = new Int32Array(this.ccap);
+              this.ci.set(oi); this.cj.set(oj);
+            }
+            this.ci[nc] = i; this.cj[nc] = j; nc++;
           }
         }
       }
     }
-    this.np = np;
+    this.nc = nc;
   }
 
   step() {
