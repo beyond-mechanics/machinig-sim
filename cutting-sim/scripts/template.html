@@ -215,7 +215,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row" data-only="ortho 3d"><label for="len">切削長さ<small>mm</small></label><input id="len" type="number" min="0.2" max="4" step="0.1" value="0.6"></div>
         <div class="row" data-only="mill helix" hidden><label for="track">刃が抜けた後の追跡<small>°</small></label><input id="track" type="number" min="0" max="40" step="2" value="10"></div>
         <label class="check"><input id="fracture" type="checkbox" checked>延性破壊（切りくずの分断）</label>
-        <label class="check" data-only="ortho"><input id="residual" type="checkbox">残留応力（熱膨張あり、切削後に除荷・冷却。被削材を 0.8 mm 以上の深さにするので計算は 2 倍ほど）</label>
+        <label class="check" data-only="ortho"><input id="residual" type="checkbox">残留応力（試験的。熱膨張あり、切削後に除荷・冷却。計算は 2 倍ほど）</label>
         <div class="row"><label for="efs">破壊ひずみの倍率</label><input id="efs" type="number" min="0.2" max="5" step="0.1" value="1"></div>
         <div class="row"><label for="res">解像度</label>
           <select id="res"><option value="3">ごく粗い（h/3）</option><option value="4">かなり粗い（h/4）</option><option value="5">とても粗い（h/5）</option><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option><option value="16">とても細かい（h/16）</option></select></div>
@@ -298,7 +298,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <li>チップブレーカで切りくずが折れるのは、カールした切りくずが被削材や工具に当たってからなので、切削長さを 1.5 mm 以上にして見てください。工具ホルダーや溝の中での切りくずの詰まりは 3D の現象なので、3軸加工シミュレーター側で扱います。</li>
         <li>3D は粒子数が2Dの数倍〜10倍になるので、標準は h/5 と粗めで、計算に数分かかります。3D の工具温度は、切れ刃に沿って平均した接触の熱を2Dの工具断面の格子に入れて解きます。</li>
         <li>標準解像度では切取り厚さを 8 粒子で表すため、温度のピークや刃先丸みの効果は粗く出ます。定量比較には「細かい」を使ってください。Johnson-Cook 定数は文献値で、同じ材料でも文献によって 2 割以上違います。</li>
-        <li>残留応力は、切削後に切りくずを外し、全体を一様に室温まで冷やして落ち着かせた状態で測ります。表面の引張（熱い表層が冷えて縮む分）は文献の鋼の値に近いですが、その下の圧縮は弱く、解像度や切削長さで大きく変わります。表面の値と条件の比較に使ってください。</li>
+        <li>残留応力は、切削後に切りくずを外し、全体を一様に室温まで冷やして落ち着かせた状態で測ります。表面の引張（熱い表層が冷えて縮む分）は文献の鋼の値に近いですが、その下の圧縮は弱く、解像度や切削長さで大きく変わります。また、加工面を凍結する位置を変えると表面の値の符号まで変わるため、今は試験的な機能で、定量評価には使えません。</li>
         <li>条件スイープの Kienzle 指数 mc は 0.1 前後と、鋼の文献値（0.15〜0.25 程度）より小さめに出ます。薄い切込みでの刃先丸みのすき取りが粒子 1 個程度でしか表せないためで、解像度を上げ刃先丸みを大きくすると近づきます。Taylor 指数 n も 0.5 程度と超硬の実測（0.2〜0.3）より大きく、速度を上げたときの寿命の落ち方を緩めに見積もります。傾向の比較に使ってください。</li>
       </ul>
     </div>
