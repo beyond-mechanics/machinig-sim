@@ -164,7 +164,10 @@ function drawPreview() {
   c.fillRect(W - 8 - bar * s, H - 10, bar * s, 2); c.textAlign = 'right'; c.fillText(`${bar * 1e3} mm`, W - 8, H - 14);
 }
 
+// The last finished run of each mode, drawn dashed under the current one for comparison.
+let prev = null;
 function reset() {
+  if (frame && frame.summary && frame.summary.done) prev = { mode: cfg.mode, hist: frame.hist };
   cfg = readCfg();
   drawPreview();
   status = 'idle'; frame = null;
@@ -384,10 +387,12 @@ function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty, si
   if (empty && !series.some((s) => s.data.length)) { c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(empty, L + pw / 2, T + ph / 2); return; }
   for (const s of series) {
     if (!s.data.length) continue;
-    c.strokeStyle = css.getPropertyValue(s.color); c.lineWidth = 2; c.beginPath();
+    const sx = s.xs || xs;
+    c.strokeStyle = css.getPropertyValue(s.color); c.lineWidth = s.dash ? 1.25 : 2; c.setLineDash(s.dash ? [5, 4] : []); c.beginPath();
     let started = false;
-    s.data.forEach((v, i) => { if (v == null) return; if (started) c.lineTo(X(xs[i]), Y(v)); else { c.moveTo(X(xs[i]), Y(v)); started = true; } });
-    c.stroke();
+    s.data.forEach((v, i) => { if (v == null || sx[i] < xmin || sx[i] > xmax) return; if (started) c.lineTo(X(sx[i]), Y(v)); else { c.moveTo(X(sx[i]), Y(v)); started = true; } });
+    c.stroke(); c.setLineDash([]);
+    if (s.dash) continue;
     const i = s.data.length - 1;
     if (s.data[i] != null && s.dot !== false) { c.fillStyle = css.getPropertyValue(s.color); c.beginPath(); c.arc(X(xs[i]), Y(s.data[i]), 3, 0, 7); c.fill(); }
   }
@@ -401,13 +406,16 @@ function wearChart() {
 }
 function drawCharts() {
   const d3 = cfg && cfg.mode === '3d', hx = cfg && cfg.mode === 'helix';
+  const on = prev && cfg && prev.mode === cfg.mode && $('overlay').checked;
+  const pv = (key, color) => (on && prev.hist[key] ? [{ data: prev.hist[key], xs: prev.hist.axis, color, dash: true }] : []);
+  $('cf-prev').hidden = !on;
   $('cf-c-wrap').hidden = !(d3 || hx);
   if (hx) {
     const h = frame && frame.dim === 3 ? frame.hist : { axis: [], fc: [], ft: [], fr: [], tmax: [], flow: [] };
     const xmax = frame && frame.dim === 3 ? Math.max(1, frame.summary.arc + frame.summary.lag + frame.summary.track + 6) : 40;
     const xl = '横軸 刃の回転角 [°]（下端の刃、最下点から）';
-    lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
-    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+    lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), ...pv('fr', '--s3'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
+    lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
     wearChart();
     lineChart($('chart-ts'), h.axis, [{ data: h.flow.map((v) => (v == null ? null : Math.max(0, v))), color: '--s1' }, { data: h.axis.map(() => cfg.helix), color: '--s2', dot: false }],
       { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します' });
@@ -420,8 +428,8 @@ function drawCharts() {
     const h = frame && frame.dim === 3 ? frame.hist : { axis: [], fc: [], ft: [], fr: [], tmax: [], flow: [] };
     const xmax = frame && frame.dim === 3 ? Math.max(cfg.cutLen, frame.summary.travel, ...h.axis) : cfg.cutLen;
     const xl = '横軸 工具の移動量 [mm]';
-    lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
-    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+    lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), ...pv('fr', '--s3'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
+    lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
     wearChart();
     lineChart($('chart-ts'), h.axis, [{ data: h.flow.map((v) => (v == null ? null : Math.max(0, v))), color: '--s1' }, { data: h.axis.map(() => cfg.lambda), color: '--s2', dot: false }],
       { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します' });
@@ -436,8 +444,8 @@ function drawCharts() {
   const h = frame ? frame.hist : { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [] };
   const xmax = mill ? (frame ? Math.max(1, frame.summary.arc + frame.summary.track + 6) : 40) : cfg ? cfg.cutLen : 1;
   const xl = mill ? '横軸 刃の回転角 [°]' : '横軸 切削長さ [mm]';
-  lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], { xmax, unit: 'N', xlabel: xl });
-  lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }, { data: h.ttool, color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+  lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], { xmax, unit: 'N', xlabel: xl });
+  lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('trake', '--s1'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }, { data: h.ttool, color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
   const pr = frame && frame.profile ? frame.profile.filter((r) => r.s > -400 && r.s < 500) : [];
   const ps = pr.map((r) => r.s), xr = pr.length ? [Math.min(...ps), Math.max(...ps)] : [-200, 300];
   lineChart($('chart-ts'), ps, [{ data: pr.map((r) => r.T), color: '--s2', dot: false }, { data: pr.map((r) => r.Tst), color: '--s1', dot: false }],
@@ -588,6 +596,7 @@ function saveResult() {
   else { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); $('savehint').textContent = 'CSV を保存しました。'; }
 }
 $('saveres').addEventListener('click', saveResult);
+$('overlay').addEventListener('change', drawCharts);
 
 // Worn tool: move the outline into the tool by the computed wear rate × the chosen time, switch
 // to that outline and cut again (repeat to follow the wear step by step).
