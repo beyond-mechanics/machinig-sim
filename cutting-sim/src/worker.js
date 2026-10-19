@@ -4,12 +4,12 @@ import { Mill } from './process.js';
 import { toolOutline } from './tool.js';
 import { Cutting3D } from './sph3d.js';
 
-let sim = null, running = false, t0 = 0, wall = 0;
+let sim = null, running = false, t0 = 0, wall = 0, runN = 0;   // runN: the latest run request, echoed in frames
 
 onmessage = (e) => {
   const d = e.data;
   if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; send(); }
-  else if (d.type === 'run') { if (sim && !sim.done && !running) { running = true; t0 = performance.now(); loop(); } }
+  else if (d.type === 'run') { runN = d.n || 0; if (sim && !sim.done && !running) { running = true; t0 = performance.now(); loop(); } }
   else if (d.type === 'pause') { if (running) wall += performance.now() - t0; running = false; send(); }
   else if (d.type === 'sweep') { sweep = { cfg: d.cfg, key: d.key, values: d.values, i: 0, sim: null }; sweepLoop(); }
   else if (d.type === 'sweepStop') sweep = null;
@@ -69,7 +69,7 @@ function send() {
     toolGrid: { nu: h.nu, nw: h.nw, u0: h.u0 * 1e3, w0: h.w0 * 1e3, a: h.a * 1e3, T: tg, inside: h.inside, steady: !!h.steadyT },
     mill: s.proc instanceof Mill ? { cx: s.proc.cx * 1e3, cy: s.proc.cy * 1e3, R: s.proc.R * 1e3 } : null,
     profile: s.done ? h.profile() : null,
-    hist: s.hist, summary: s.summary(), running, wall: now, dt: s.dt,
+    hist: s.hist, summary: s.summary(), running, runN, wall: now, dt: s.dt,
   }, [x.buffer, y.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, D.buffer, flag.buffer, tg.buffer]);
 }
 
@@ -102,6 +102,6 @@ function send3d() {
     tool,
     box: [s.L * 1e3, s.H * 1e3, s.bz * 1e3],
     profile: s.done ? s.heat.profile() : null,
-    hist: s.hist, summary: s.summary(), running, wall: now, dt: s.dt,
+    hist: s.hist, summary: s.summary(), running, runN, wall: now, dt: s.dt,
   }, [x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer, D.buffer]);
 }

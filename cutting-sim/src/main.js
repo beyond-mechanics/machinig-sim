@@ -35,7 +35,7 @@ const FIELDS = {
 };
 
 // ---- State ----
-let frame = null, field = 'T', zoom = 'tip', status = 'idle', cfg = null, mode = 'ortho';
+let frame = null, field = 'T', zoom = 'tip', status = 'idle', cfg = null, mode = 'ortho', runN = 0;
 const is3 = (m = mode) => m === '3d' || m === 'helix';   // 3D solver modes
 const view = $('view'), vctx = view.getContext('2d');
 
@@ -177,8 +177,8 @@ function reset() {
 }
 $('run').addEventListener('click', () => {
   if (status === 'running') { worker.postMessage({ type: 'pause' }); status = 'paused'; }
-  else if (status === 'done') { reset(); worker.postMessage({ type: 'run' }); status = 'running'; }
-  else { worker.postMessage({ type: 'run' }); status = 'running'; }
+  else if (status === 'done') { reset(); worker.postMessage({ type: 'run', n: ++runN }); status = 'running'; }
+  else { worker.postMessage({ type: 'run', n: ++runN }); status = 'running'; }
   updateRunButton();
 });
 $('reset').addEventListener('click', reset);
@@ -210,7 +210,9 @@ $('section').addEventListener('click', () => { section = !section; $('section').
 worker.onmessage = (e) => {
   if (e.data.type !== 'frame') return;
   frame = e.data;
-  if (status === 'running' && !frame.running) status = frame.summary.done ? 'done' : 'paused';
+  // A frame sent before the worker saw the latest run request (the one from a reset just before
+  // the click, when an edited field loses focus to the button) must not read as a pause.
+  if (status === 'running' && !frame.running && frame.runN === runN) status = frame.summary.done ? 'done' : 'paused';
   updateRunButton();
   draw(); drawCharts(); readouts();
 };
@@ -622,7 +624,7 @@ $('wear').addEventListener('click', () => {
   $('pinfo').textContent = `${custom.name}：Usui 式の摩耗速度 × 時間だけ工具表面を後退させた形。摩耗係数は仮の値なので、時間は目安です。`;
   $('pinfo').classList.remove('err');
   reset();
-  worker.postMessage({ type: 'run' }); status = 'running'; updateRunButton();
+  worker.postMessage({ type: 'run', n: ++runN }); status = 'running'; updateRunButton();
 });
 
 function readouts() {
