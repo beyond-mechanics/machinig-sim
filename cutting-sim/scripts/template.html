@@ -102,6 +102,19 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .chart h2 span { font: 11.5px var(--font-mono); font-weight: 400; color: var(--ink-mute); display: inline-flex; align-items: center; gap: 5px; }
 .chart h2 span i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 .chart canvas { width: 100%; height: 190px; display: block; }
+.sweep { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; display: grid; gap: 10px; min-width: 0; }
+.sweep h2 { font-size: 13.5px; margin: 0; }
+.sweep .ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; }
+.sweep .ctl input[type=text] { flex: 1 1 180px; min-width: 0; width: auto; }
+.sweep .ctl select { flex: 0 1 auto; width: auto; }
+.sweep .ctl button { flex: 0 0 auto; }
+.sweep .grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; }
+@media (max-width: 760px) { .sweep .grid { grid-template-columns: minmax(0, 1fr); } }
+.sweep .tbl { overflow-x: auto; }
+.sweep table { border-collapse: collapse; width: 100%; font: 12px var(--font-mono); }
+.sweep th, .sweep td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.sweep th { font-family: var(--font-body); font-weight: 600; color: var(--ink-mute); font-size: 11.5px; }
+.sweep canvas { width: 100%; height: 190px; display: block; }
 
 .notes { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 28px; }
 .notes h2 { font-size: 14px; margin: 0 0 6px; }
@@ -230,6 +243,22 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
     <div class="chart">
       <h2>工具表面の摩耗速度<span><i style="background: var(--s3)"></i>Usui 式</span></h2>
       <canvas id="chart-w" aria-label="工具表面の摩耗速度分布"></canvas>
+    </div>
+  </section>
+
+  <section class="sweep" data-only="ortho" aria-label="条件スイープ">
+    <h2>条件スイープ（直交切削）</h2>
+    <div class="ctl">
+      <label for="swkey">変える条件</label>
+      <select id="swkey"><option value="h">切込み厚さ h [mm]</option><option value="vc">切削速度 [m/min]</option><option value="rake">すくい角 [°]</option><option value="edgeRadius">刃先丸み [µm]</option><option value="mu">摩擦係数 μ</option></select>
+      <input id="swvals" type="text" value="0.05, 0.1, 0.15, 0.2" aria-label="値（カンマ区切り）">
+      <button id="swrun" type="button">スイープ開始</button>
+      <button id="swcsv" type="button" disabled>CSV を保存</button>
+    </div>
+    <p class="hint" id="swhint">ほかの条件は左の設定のまま、値ごとに1回ずつ最後まで計算します（上の計算とは別に裏で進みます）。h を変えるときは粒子間隔を左の h と解像度で決まる値に固定し（h が大きいほど粒子が増えます）、Kienzle 式 kc = kc1.1 · h^(−mc) を当てはめます。</p>
+    <div class="grid">
+      <div class="tbl"><table><thead><tr><th id="swth">h</th><th>Fc N/mm</th><th>Ft N/mm</th><th>kc N/mm²</th><th>φ °</th><th>hc/h</th><th>最高温度 °C</th><th>工具最高 °C</th></tr></thead><tbody id="swbody"></tbody></table></div>
+      <canvas id="chart-sw" aria-label="スイープ結果のグラフ"></canvas>
     </div>
   </section>
 

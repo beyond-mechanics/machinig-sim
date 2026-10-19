@@ -6,7 +6,8 @@ import { makeTool, toolOutline } from './tool.js';
 import { View3D } from './view3d.js';
 
 const $ = (id) => document.getElementById(id);
-const worker = new Worker(URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' })));
+const workerUrl = URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' }));
+const worker = new Worker(workerUrl);
 
 // ---- Colour maps ----
 function turbo(t) {
@@ -576,5 +577,73 @@ function readouts() {
   $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ`
     + (is3(cfg.mode) ? ' · 3D は計算に数分〜十数分かかります' : '');
 }
+
+// ---- Condition sweep (orthogonal cutting, its own worker) ----
+const SWEEP = {
+  h: { label: 'h', unit: 'mm', vals: '0.05, 0.1, 0.15, 0.2' }, vc: { label: '切削速度', unit: 'm/min', vals: '100, 200, 300, 400' },
+  rake: { label: 'すくい角', unit: '°', vals: '-5, 0, 5, 10, 15' }, edgeRadius: { label: '刃先丸み', unit: 'µm', vals: '5, 10, 20, 40' },
+  mu: { label: 'μ', unit: '', vals: '0.2, 0.4, 0.6, 0.8' },
+};
+let sweeper = null, sw = null;
+$('swkey').addEventListener('change', () => { if (!sw || sw.done) $('swvals').value = SWEEP[$('swkey').value].vals; });
+// Kienzle fit by least squares in log–log: ln kc = ln kc1.1 − mc ln h.
+function kienzle(rows) {
+  const p = rows.filter((r) => r.s && r.v > 0 && r.s.kc > 0);
+  if (p.length < 2) return null;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const r of p) { const x = Math.log(r.v), y = Math.log(r.s.kc); sx += x; sy += y; sxx += x * x; sxy += x * y; }
+  const n = p.length, b = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+  return { kc11: Math.exp((sy - b * sx) / n), mc: -b };
+}
+function sweepTable() {
+  const k = SWEEP[sw.key], body = $('swbody');
+  $('swth').textContent = `${k.label}${k.unit ? ' ' + k.unit : ''}`;
+  body.textContent = '';
+  for (const r of sw.rows) {
+    const tr = document.createElement('tr'), s = r.s;
+    const cells = [String(r.v), ...(s ? [f1(s.fc / sw.cfg.width), f1(s.ft / sw.cfg.width), f0(s.kc), f1(s.phi), s.ratio.toFixed(2), f0(s.tmax), f0(s.toolSteadyT ?? s.toolT)]
+      : [r.p == null ? '待ち' : `計算中 ${f0(r.p * 100)} %`, '', '', '', '', '', ''])];
+    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+    body.appendChild(tr);
+  }
+  const done = sw.rows.filter((r) => r.s), xs = done.map((r) => r.v);
+  const lo = Math.min(...sw.rows.map((r) => r.v)), hi = Math.max(...sw.rows.map((r) => r.v));
+  lineChart($('chart-sw'), xs, [{ data: done.map((r) => r.s.kc), color: '--s1' }],
+    { xmin: Math.min(0, lo), xmax: hi > lo ? hi : lo + 1, unit: 'kc N/mm²', xlabel: `${k.label}${k.unit ? ' [' + k.unit + ']' : ''}`, empty: '計算中' });
+  const kz = sw.key === 'h' && sw.done ? kienzle(sw.rows) : null;
+  $('swhint').textContent = sw.done
+    ? (kz ? `完了。Kienzle 式：kc1.1 = ${f0(kz.kc11)} N/mm²、mc = ${kz.mc.toFixed(2)}（材料の便覧値 kc ≈ ${frame ? f0(frame.summary.kcRef) : '—'} N/mm² @ h 0.1）。` : '完了。')
+    : `計算中：${sw.rows.filter((r) => r.s).length} / ${sw.rows.length}`;
+  $('swcsv').disabled = !done.length;
+}
+$('swrun').addEventListener('click', () => {
+  if (sw && !sw.done) { sweeper.postMessage({ type: 'sweepStop' }); sw.done = true; $('swrun').textContent = 'スイープ開始'; sweepTable(); return; }
+  const key = $('swkey').value, values = $('swvals').value.split(/[,\s、]+/).map(Number).filter((v) => isFinite(v));
+  if (!values.length) { $('swhint').textContent = '値をカンマ区切りで入れてください。'; return; }
+  if (!sweeper) {
+    sweeper = new Worker(workerUrl);
+    sweeper.onmessage = (e) => {
+      const d = e.data;
+      if (!sw || sw.done) return;
+      if (d.type === 'sweep') { const r = sw.rows[d.i]; r.p = d.progress; if (d.summary) r.s = d.summary; }
+      else if (d.type === 'sweepDone') { sw.done = true; $('swrun').textContent = 'スイープ開始'; }
+      sweepTable();
+    };
+  }
+  const base = readCfg();
+  sw = { key, rows: values.map((v) => ({ v, p: null, s: null })), done: false, cfg: base };
+  sweeper.postMessage({ type: 'sweep', cfg: { ...base, mode: 'ortho' }, key, values });
+  $('swrun').textContent = 'スイープを止める';
+  sweepTable();
+});
+$('swcsv').addEventListener('click', () => {
+  const k = SWEEP[sw.key];
+  const lines = [`${sw.key} [${k.unit}],Fc [N/mm],Ft [N/mm],kc [N/mm2],phi [deg],hc/h,Tmax [C],tool Tmax [C]`];
+  for (const r of sw.rows) if (r.s) { const s = r.s; lines.push([r.v, s.fc / sw.cfg.width, s.ft / sw.cfg.width, s.kc, s.phi, s.ratio, s.tmax, s.toolSteadyT ?? s.toolT].map((v) => (typeof v === 'number' ? +v.toPrecision(5) : v)).join(',')); }
+  const text = `# cutting-sim sweep, ${sw.cfg.mat}, ${JSON.stringify({ vc: sw.cfg.vc, h: sw.cfg.h, rake: sw.cfg.rake, edgeRadius: sw.cfg.edgeRadius, mu: sw.cfg.mu, nh: sw.cfg.nh })}\n` + lines.join('\n') + '\n';
+  const name = `sweep_${sw.cfg.mat}_${sw.key}.csv`;
+  if (downloads) downloads.save({ filename: name, data: text }).then(() => { $('swhint').textContent = 'CSV を保存しました。'; }, (e) => { $('swhint').textContent = e && e.code === 'declined' ? '保存を取りやめました。' : 'この表示では保存できません。'; });
+  else { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+});
 
 reset();

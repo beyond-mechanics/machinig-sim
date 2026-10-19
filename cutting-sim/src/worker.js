@@ -11,7 +11,29 @@ onmessage = (e) => {
   if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; send(); }
   else if (d.type === 'run') { if (sim && !sim.done && !running) { running = true; t0 = performance.now(); loop(); } }
   else if (d.type === 'pause') { if (running) wall += performance.now() - t0; running = false; send(); }
+  else if (d.type === 'sweep') { sweep = { cfg: d.cfg, key: d.key, values: d.values, i: 0, sim: null }; sweepLoop(); }
+  else if (d.type === 'sweepStop') sweep = null;
 };
+
+// Condition sweep (a worker of its own): one 2D cut per value of cfg[key], run to the end; a
+// short message after each slice so a stop request gets through.
+let sweep = null;
+function sweepLoop() {
+  const w = sweep;
+  if (!w) return;
+  // Thickness sweep at a fixed particle spacing (that of the form's h and resolution): a spacing
+  // that scales with h would make every cut self-similar and hide the size effect of the edge.
+  const v = w.values[w.i], nh = w.key === 'h' ? Math.max(4, Math.round(w.cfg.nh * v / w.cfg.h)) : w.cfg.nh;
+  if (!w.sim) w.sim = new CuttingSim({ ...w.cfg, [w.key]: v, nh });
+  const s = w.sim, start = performance.now();
+  while (performance.now() - start < 200 && !s.done) s.stepSample();
+  postMessage({ type: 'sweep', i: w.i, progress: Math.min(1, s.proc.progress(s)), summary: s.done ? s.summary() : null });
+  if (s.done) {
+    w.i++; w.sim = null;
+    if (w.i >= w.values.length) { sweep = null; postMessage({ type: 'sweepDone' }); return; }
+  }
+  setTimeout(sweepLoop, 0);
+}
 
 function loop() {
   if (!running || !sim) return;
