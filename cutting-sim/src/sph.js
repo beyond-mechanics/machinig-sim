@@ -125,12 +125,48 @@ export class CuttingSim {
     return 0;
   }
 
-  // Cell-list neighbour search: builds the pair list with kernel values and gradients ∇_i W_ij.
+  // Neighbour pairs from a Verlet list: candidates within 2h + skin, searched again only when
+  // some particle has moved more than half the skin (or one was removed); every step keeps the
+  // candidates inside the kernel support and evaluates the kernel and its gradient ∇_i W_ij.
   buildPairs() {
-    const { N, x, y, hk } = this;
-    const cell = 2 * hk;
+    const { N, x, y, hk, dead } = this, skin = 0.3 * hk;
+    let need = !this.xr || this.nDead + this.nEvac !== this.deadRef;
+    if (!need) {
+      const lim = 0.25 * skin * skin, xr = this.xr, yr = this.yr;
+      for (let i = 0; i < N; i++) {
+        if (dead[i]) continue;
+        const dx = x[i] - xr[i], dy = y[i] - yr[i];
+        if (dx * dx + dy * dy > lim) { need = true; break; }
+      }
+    }
+    if (need) {
+      this.searchPairs(2 * hk + skin);
+      this.xr = x.slice(); this.yr = y.slice(); this.deadRef = this.nDead + this.nEvac;
+    }
+    const { ci, cj, nc } = this, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
+    let np = 0;
+    for (let k = 0; k < nc; k++) {
+      const i = ci[k], j = cj[k];
+      if (dead[i] || dead[j]) continue;
+      const rx = x[i] - x[j], ry = y[i] - y[j], r2 = rx * rx + ry * ry;
+      if (r2 >= r2max || r2 === 0) continue;
+      if (np >= this.cap) this.growPairs();
+      const r = Math.sqrt(r2), q = r * inv;
+      let w, dw;
+      if (q < 1) { w = ad * (1 - 1.5 * q * q + 0.75 * q * q * q); dw = ad * inv * (-3 * q + 2.25 * q * q); }
+      else { const s = 2 - q; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
+      this.pi[np] = i; this.pj[np] = j;
+      this.gx[np] = dw * rx / r; this.gy[np] = dw * ry / r;
+      this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
+      np++;
+    }
+    this.np = np;
+  }
+
+  // Cell-list search for all candidate pairs closer than `cell`.
+  searchPairs(cell) {
+    const { N, x, y, dead } = this;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    const dead = this.dead;
     for (let i = 0; i < N; i++) {
       if (dead[i]) continue;
       if (x[i] < x0) x0 = x[i]; if (x[i] > x1) x1 = x[i];
@@ -142,35 +178,32 @@ export class CuttingSim {
     head.fill(-1, 0, cw * ch);
     for (let i = 0; i < N; i++) {
       if (dead[i]) continue;
-      const ci = Math.floor((x[i] - x0) / cell) + Math.floor((y[i] - y0) / cell) * cw;
-      next[i] = head[ci]; head[ci] = i;
+      const c = Math.floor((x[i] - x0) / cell) + Math.floor((y[i] - y0) / cell) * cw;
+      next[i] = head[c]; head[c] = i;
     }
-    const r2max = cell * cell, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
-    let np = 0;
+    if (!this.ci) { this.ccap = this.cap; this.ci = new Int32Array(this.ccap); this.cj = new Int32Array(this.ccap); }
+    const r2max = cell * cell;
+    let nc = 0;
     for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
       for (let i = head[cx + cy * cw]; i >= 0; i = next[i]) {
         for (let oy = 0; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
           if (oy === 0 && ox < 0) continue;
           const nx = cx + ox, ny = cy + oy;
           if (nx < 0 || nx >= cw || ny >= ch) continue;
-          const same = ox === 0 && oy === 0;
-          for (let j = same ? next[i] : head[nx + ny * cw]; j >= 0; j = next[j]) {
-            const rx = x[i] - x[j], ry = y[i] - y[j], r2 = rx * rx + ry * ry;
-            if (r2 >= r2max || r2 === 0) continue;
-            if (np >= this.cap) this.growPairs();
-            const r = Math.sqrt(r2), q = r * inv;
-            let w, dw;
-            if (q < 1) { w = ad * (1 - 1.5 * q * q + 0.75 * q * q * q); dw = ad * inv * (-3 * q + 2.25 * q * q); }
-            else { const s = 2 - q; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
-            this.pi[np] = i; this.pj[np] = j;
-            this.gx[np] = dw * rx / r; this.gy[np] = dw * ry / r;
-            this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
-            np++;
+          for (let j = ox === 0 && oy === 0 ? next[i] : head[nx + ny * cw]; j >= 0; j = next[j]) {
+            const rx = x[i] - x[j], ry = y[i] - y[j];
+            if (rx * rx + ry * ry >= r2max) continue;
+            if (nc >= this.ccap) {
+              const a = this.ci, b = this.cj;
+              this.ccap *= 2; this.ci = new Int32Array(this.ccap); this.cj = new Int32Array(this.ccap);
+              this.ci.set(a); this.cj.set(b);
+            }
+            this.ci[nc] = i; this.cj[nc] = j; nc++;
           }
         }
       }
     }
-    this.np = np;
+    this.nc = nc;
   }
 
   growPairs() {
