@@ -248,11 +248,16 @@ export class Cutting3D {
       this.searchPairs(2 * this.hk + skin);
       this.xr = x.slice(); this.yr = y.slice(); this.zr = z.slice(); this.deadRef = this.nDead + this.nEvac;
     }
-    const { ci, cj, nc } = this, hk = this.hk, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
-    let np = 0;
+    // Pairs with a moving particle come first (np), pairs of two held particles (supports or the
+    // frozen surface) after them (up to npAll): the momentum loop needs only the first block.
+    const { ci, cj, nc, fixed } = this, hk = this.hk, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
+    let np = 0, nq = 0;
+    if (!this.qi || this.qi.length < nc) { this.qi = new Int32Array(nc + 1024); }
+    const qi = this.qi;
     for (let k = 0; k < nc; k++) {
       const i = ci[k], j = cj[k];
       if (dead[i] || dead[j]) continue;
+      if (fixed[i] && fixed[j]) { qi[nq++] = k; continue; }
       const rx = x[i] - x[j], ry = y[i] - y[j];
       let rz = z[i] - z[j];
       if (per) { if (rz > 0.5 * P) rz -= P; else if (rz < -0.5 * P) rz += P; }
@@ -263,6 +268,24 @@ export class Cutting3D {
       let w, dw;
       if (q < 1) { w = ad * (1 - 1.5 * q * q + 0.75 * q * q * q); dw = ad * inv * (-3 * q + 2.25 * q * q); }
       else { const s = 2 - q; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
+      this.pi[np] = i; this.pj[np] = j; this.prx[np] = rx; this.pry[np] = ry; this.prz[np] = rz;
+      const g = dw / r; this.gx[np] = g * rx; this.gy[np] = g * ry; this.gz[np] = g * rz;
+      this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
+      np++;
+    }
+    this.npMove = np;
+    for (let q = 0; q < nq; q++) {
+      const k = qi[q], i = ci[k], j = cj[k];
+      const rx = x[i] - x[j], ry = y[i] - y[j];
+      let rz = z[i] - z[j];
+      if (per) { if (rz > 0.5 * P) rz -= P; else if (rz < -0.5 * P) rz += P; }
+      const r2 = rx * rx + ry * ry + rz * rz;
+      if (r2 >= r2max || r2 === 0) continue;
+      if (np >= this.cap) this.growPairs();
+      const r = Math.sqrt(r2), qq = r * inv;
+      let w, dw;
+      if (qq < 1) { w = ad * (1 - 1.5 * qq * qq + 0.75 * qq * qq * qq); dw = ad * inv * (-3 * qq + 2.25 * qq * qq); }
+      else { const s = 2 - qq; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
       this.pi[np] = i; this.pj[np] = j; this.prx[np] = rx; this.pry[np] = ry; this.prz[np] = rz;
       const g = dw / r; this.gx[np] = g * rx; this.gy[np] = g * ry; this.gz[np] = g * rz;
       this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
@@ -340,7 +363,7 @@ export class Cutting3D {
 
     // 1. Velocity gradient L = −Σ V_j (v_i − v_j) ⊗ ∇W, correction matrix M and dρ/dt.
     LM.fill(0);
-    for (let k = 0; k < np; k++) {
+    for (let k = 0, nm = this.npMove; k < nm; k++) {
       const qi = 4 * pi[k], qj = 4 * pj[k], Vi = m / Q[qi + 3], Vj = m / Q[qj + 3];
       const dvx = Q[qi] - Q[qj], dvy = Q[qi + 1] - Q[qj + 1], dvz = Q[qi + 2] - Q[qj + 2];
       const rx = prx[k], ry = pry[k], rz = prz[k], g1 = gx[k], g2 = gy[k], g3 = gz[k];
@@ -357,6 +380,21 @@ export class Cutting3D {
       LM[o + 6] -= Vi * a6; LM[o + 7] -= Vi * a7; LM[o + 8] -= Vi * a8;
       LM[o + 9] -= Vi * b0; LM[o + 10] -= Vi * b1; LM[o + 11] -= Vi * b2; LM[o + 12] -= Vi * b3; LM[o + 13] -= Vi * b4; LM[o + 14] -= Vi * b5;
       LM[o + 15] -= Vi * b6; LM[o + 16] -= Vi * b7; LM[o + 17] -= Vi * b8; LM[o + 18] += dr;
+    }
+    // Pairs of two held particles: no relative velocity, so only the correction matrix M of the
+    // supports (the frozen surface skips the constitutive update).
+    for (let k = this.npMove; k < np; k++) {
+      const i = pi[k], j = pj[k];
+      if (fixed[i] === 2 && fixed[j] === 2) continue;
+      const Vi = m / Q[4 * i + 3], Vj = m / Q[4 * j + 3];
+      const rx = prx[k], ry = pry[k], rz = prz[k], g1 = gx[k], g2 = gy[k], g3 = gz[k];
+      const b0 = rx * g1, b1 = rx * g2, b2 = rx * g3, b3 = ry * g1, b4 = ry * g2, b5 = ry * g3, b6 = rz * g1, b7 = rz * g2, b8 = rz * g3;
+      let o = 19 * i + 9;
+      LM[o] -= Vj * b0; LM[o + 1] -= Vj * b1; LM[o + 2] -= Vj * b2; LM[o + 3] -= Vj * b3; LM[o + 4] -= Vj * b4; LM[o + 5] -= Vj * b5;
+      LM[o + 6] -= Vj * b6; LM[o + 7] -= Vj * b7; LM[o + 8] -= Vj * b8;
+      o = 19 * j + 9;
+      LM[o] -= Vi * b0; LM[o + 1] -= Vi * b1; LM[o + 2] -= Vi * b2; LM[o + 3] -= Vi * b3; LM[o + 4] -= Vi * b4; LM[o + 5] -= Vi * b5;
+      LM[o + 6] -= Vi * b6; LM[o + 7] -= Vi * b7; LM[o + 8] -= Vi * b8;
     }
     if (this.steps % 20 === 0) this.shepard();
 
@@ -441,7 +479,7 @@ export class Cutting3D {
     const xs = 0.5 * m;
     AC.fill(0);
     const hk = this.hk, cs = this.cs, eta = 0.01 * hk * hk, alpha = cfg.avAlpha, betaV = cfg.avBeta, iWdx = 1 / this.Wdx;
-    for (let k = 0; k < np; k++) {
+    for (let k = 0, nm = this.npMove; k < nm; k++) {
       const i = pi[k], j = pj[k], si = 9 * i, sj = 9 * j, qi = 4 * i, qj = 4 * j;
       let txx = PK[si] + PK[sj], tyy = PK[si + 1] + PK[sj + 1], tzz = PK[si + 2] + PK[sj + 2];
       const txy = PK[si + 3] + PK[sj + 3], tyz = PK[si + 4] + PK[sj + 4], txz = PK[si + 5] + PK[sj + 5];
