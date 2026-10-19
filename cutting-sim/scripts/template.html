@@ -27,6 +27,7 @@
   --tool-a: #4d565e; --tool-b: #8e979f; --tool-edge: #d6dce1; --guide: rgba(226, 231, 235, 0.35);
   --view-bg: #0e1114; color-scheme: dark; }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.55; }
 .wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px 40px; max-width: 1500px; margin: 0 auto; display: grid; gap: 14px; }
 header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
@@ -69,6 +70,12 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .row label { font-size: 13px; }
 .row label small { color: var(--ink-mute); font: 11px var(--font-mono); margin-left: 4px; }
 .row.wide { grid-template-columns: 1fr; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 7px 4px; background: transparent; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.hint { margin: 0; font-size: 12px; color: var(--ink-mute); }
+.static { font-size: 13px; text-align: right; }
 .meta { font: 11px/1.6 var(--font-mono); color: var(--ink-mute); }
 
 .results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
@@ -82,6 +89,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 .chart { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; min-width: 0; }
 .chart h2 { font-size: 13.5px; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.chart h2 span b { font-weight: 400; }
 .chart h2 span { font: 11.5px var(--font-mono); font-weight: 400; color: var(--ink-mute); display: inline-flex; align-items: center; gap: 5px; }
 .chart h2 span i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 .chart canvas { width: 100%; height: 190px; display: block; }
@@ -96,8 +104,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 <div class="wrap">
   <header class="bar">
     <div class="brand">
-      <h1>2D 直交切削シミュレーター</h1>
-      <p>工具と被削材の接触部で、切りくずの生成、温度、応力、ひずみ、切削抵抗を計算します（平面ひずみ、粒子法 SPH）</p>
+      <h1>2D 切削シミュレーター</h1>
+      <p>工具と被削材の接触部で、切りくずの生成、温度、応力、ひずみ、切削抵抗、工具の温度と摩耗を計算します（平面ひずみ、粒子法 SPH）</p>
     </div>
     <span class="pill" id="state" data-s="idle">待機</span>
     <button class="primary" id="run">切削開始</button>
@@ -123,12 +131,25 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
     </div>
 
     <aside class="panel">
+      <div class="seg" role="group" aria-label="加工方法">
+        <button data-mode="ortho" aria-pressed="true">直交切削</button>
+        <button data-mode="mill" aria-pressed="false">エンドミル</button>
+      </div>
       <fieldset>
         <legend>被削材</legend>
         <div class="row wide"><select id="mat" aria-label="被削材"></select></div>
         <div class="row"><label for="vc">切削速度<small>m/min</small></label><input id="vc" type="number" min="10" max="1500" step="10"></div>
-        <div class="row"><label for="h">切取り厚さ h<small>mm</small></label><input id="h" type="number" min="0.02" max="0.3" step="0.01" value="0.1"></div>
+        <div class="row" data-only="ortho"><label for="h">切取り厚さ h<small>mm</small></label><input id="h" type="number" min="0.02" max="0.3" step="0.01" value="0.1"></div>
         <div class="row"><label for="width">切削幅 b<small>mm</small></label><input id="width" type="number" min="0.1" max="20" step="0.1" value="1"></div>
+      </fieldset>
+      <fieldset data-only="mill" hidden>
+        <legend>エンドミル（側面加工、ねじれなし）</legend>
+        <div class="row"><label for="dia">工具径 D<small>mm</small></label><input id="dia" type="number" min="1" max="40" step="0.5" value="6"></div>
+        <div class="row"><label for="flutes">刃数</label><input id="flutes" type="number" min="1" max="8" step="1" value="3"></div>
+        <div class="row"><label for="fz">1刃送り fz<small>mm/t</small></label><input id="fz" type="number" min="0.01" max="0.3" step="0.01" value="0.1"></div>
+        <div class="row"><label for="ae">半径方向切込み ae<small>mm</small></label><input id="ae" type="number" min="0.05" max="3" step="0.05" value="0.3"></div>
+        <div class="row"><label for="dir">切削方向</label><select id="dir"><option value="up">アップカット</option><option value="down">ダウンカット</option></select></div>
+        <p class="hint">切削幅 b は軸方向切込み ap として扱います。1刃が被削材に入ってから抜けるまでを計算します。</p>
       </fieldset>
       <fieldset>
         <legend>工具</legend>
@@ -136,36 +157,36 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row"><label for="clear">逃げ角<small>°</small></label><input id="clear" type="number" min="2" max="20" step="1" value="7"></div>
         <div class="row"><label for="edge">刃先丸み r<small>µm</small></label><input id="edge" type="number" min="0" max="60" step="1" value="10"></div>
         <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" min="0" max="1.5" step="0.05"></div>
+        <div class="row"><label>工具材種</label><span class="static">超硬（WC-Co）</span></div>
       </fieldset>
       <fieldset>
         <legend>計算</legend>
-        <div class="row"><label for="len">切削長さ<small>mm</small></label><input id="len" type="number" min="0.2" max="2" step="0.1" value="0.6"></div>
+        <div class="row" data-only="ortho"><label for="len">切削長さ<small>mm</small></label><input id="len" type="number" min="0.2" max="2" step="0.1" value="0.6"></div>
         <div class="row"><label for="res">解像度</label>
-          <select id="res"><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option></select></div>
+          <select id="res"><option value="5">とても粗い（h/5）</option><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option><option value="16">とても細かい（h/16）</option></select></div>
         <div class="meta" id="meta">—</div>
       </fieldset>
     </aside>
   </div>
 
-  <section class="results" aria-label="計算結果">
-    <div class="cell"><span class="k">主分力 Fc</span><span class="v"><b id="r-fc">—</b><small>N</small></span><span class="sub">後半区間の平均</span></div>
-    <div class="cell"><span class="k">背分力 Ft</span><span class="v"><b id="r-ft">—</b><small>N</small></span><span class="sub">工具を押し上げる向き</span></div>
-    <div class="cell"><span class="k">比切削抵抗 kc</span><span class="v"><b id="r-kc">—</b><small>N/mm²</small></span><span class="sub" id="r-kcref">便覧値の目安 —</span></div>
-    <div class="cell"><span class="k">切りくず厚さ hc</span><span class="v"><b id="r-hc">—</b><small>mm</small></span><span class="sub" id="r-ratio">切りくず厚さ比 —</span></div>
-    <div class="cell"><span class="k">せん断角 φ</span><span class="v"><b id="r-phi">—</b><small>°</small></span><span class="sub" id="r-phim">Merchant の式 —</span></div>
-    <div class="cell"><span class="k">最高温度</span><span class="v"><b id="r-tmax">—</b><small>°C</small></span><span class="sub">被削材と切りくず全体</span></div>
-    <div class="cell"><span class="k">すくい面接触部の温度</span><span class="v"><b id="r-trake">—</b><small>°C</small></span><span class="sub">切りくず側、後半区間の平均</span></div>
-    <div class="cell"><span class="k">最大相当塑性ひずみ</span><span class="v"><b id="r-ep">—</b></span><span class="sub" id="r-ed">最大ひずみ速度 —</span></div>
-  </section>
+  <section class="results" id="results" aria-label="計算結果"></section>
 
   <section class="charts">
     <div class="chart">
-      <h2>切削抵抗<span><i style="background: var(--s1)"></i>主分力 Fc</span><span><i style="background: var(--s2)"></i>背分力 Ft</span></h2>
+      <h2>切削抵抗<span><i style="background: var(--s1)"></i><b id="cf-a">主分力 Fc</b></span><span><i style="background: var(--s2)"></i><b id="cf-b">背分力 Ft</b></span></h2>
       <canvas id="chart-f" aria-label="切削抵抗の推移"></canvas>
     </div>
     <div class="chart">
-      <h2>温度<span><i style="background: var(--s3)"></i>最高温度</span><span><i style="background: var(--s1)"></i>すくい面接触部</span></h2>
+      <h2>温度<span><i style="background: var(--s3)"></i>被削材の最高</span><span><i style="background: var(--s1)"></i>すくい面接触部</span><span><i style="background: var(--s2)"></i>工具の最高</span></h2>
       <canvas id="chart-t" aria-label="温度の推移"></canvas>
+    </div>
+    <div class="chart">
+      <h2>工具表面の温度<span><i style="background: var(--s2)"></i>切削終了時点</span><span><i style="background: var(--s1)"></i>定常推定</span></h2>
+      <canvas id="chart-ts" aria-label="工具表面の温度分布"></canvas>
+    </div>
+    <div class="chart">
+      <h2>工具表面の摩耗速度<span><i style="background: var(--s3)"></i>Usui 式</span></h2>
+      <canvas id="chart-w" aria-label="工具表面の摩耗速度分布"></canvas>
     </div>
   </section>
 
@@ -173,18 +194,23 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
     <div>
       <h2>計算モデル</h2>
       <ul>
-        <li>2次元平面ひずみの直交切削。被削材を粒子で表す SPH 法（更新ラグランジュ、陽解法）なので、要素のゆがみやリメッシュなしで切りくずが大変形します。</li>
-        <li>材料は Johnson-Cook 則（ひずみ硬化、ひずみ速度、温度軟化）の弾塑性体。塑性仕事の 90 % と摩擦熱の半分が熱になり、熱伝導と連成します。</li>
-        <li>工具は剛体で、すくい角、逃げ角、刃先丸みを持ちます。すくい面の摩擦はクーロン摩擦で、材料のせん断流れ応力を上限にしています。</li>
+        <li>2次元平面ひずみ。被削材を粒子で表す SPH 法（更新ラグランジュ、陽解法）なので、要素のゆがみやリメッシュなしで切りくずが大変形します。</li>
+        <li>材料は Johnson-Cook 則（ひずみ硬化、ひずみ速度、温度軟化）の弾塑性体。塑性仕事の 90 % が熱になり、熱伝導と連成します。</li>
+        <li>工具は剛体で、すくい角、逃げ角、刃先丸みを持ちます。摩擦はクーロン摩擦で、材料のせん断流れ応力が上限です。摩擦熱は半分ずつ切りくずと工具に入り、接触面では熱伝達（10⁸ W/m²K）で熱が行き来します。</li>
+        <li>工具内部の温度は工具に固定した格子で計算します。直交切削では、切削後半の平均的な接触状態が続いたときの定常温度も推定します。</li>
+        <li>工具摩耗は Usui 式（接触圧力 × すべり速度 × exp(−B/T)）で、工具表面の位置ごとの摩耗速度を出します。</li>
+        <li>エンドミルは工具軸に垂直な断面で、1刃が前の刃の削り跡を削る様子を計算します（ねじれ角なし）。切削力から切削係数 Ktc、Kte、Krc、Kre を求めます。</li>
+        <li>「Ti-6Al-4V（ひずみ軟化）」は Calamaz らの TANH 修正 Johnson-Cook 則で、断熱せん断帯ができて鋸歯状の切りくずになります。</li>
       </ul>
     </div>
     <div>
       <h2>読み方と限界</h2>
       <ul>
         <li>計算を速くするため、慣性だけ密度を数百倍にしています（質量スケーリング）。慣性による応力が降伏応力の 4 % 程度に収まるように自動で決めます。</li>
-        <li>工具は温度を持たないため、表示温度は切りくず側の値です。工具摩耗、切りくずの破断と鋸歯状化、構成成分の違いは扱いません。</li>
-        <li>標準解像度では切取り厚さを 8 粒子で表すため、温度のピークや刃先丸みの効果は粗く出ます。定量比較には「細かい」を使ってください。</li>
-        <li>Johnson-Cook 定数は文献値で、同じ材料でも文献によって 2 割以上違います。</li>
+        <li>計算する時間は数百 µs なので、工具はまだ温まり始めです。長時間切削した後の工具温度は「定常推定」の値を見てください。工具の外周 1 mm 程度の位置を室温に固定しているため、実際の工具より少し低めに出ます。</li>
+        <li>Usui 式の定数は、超硬で S45C を 200 m/min で削るとクレーター摩耗が数 µm/min になるように合わせた仮の値です。絶対値は摩耗試験で合わせてください。比較（条件の違いや位置の分布）には使えます。</li>
+        <li>鋸歯状の切りくずは、せん断帯を表せる細かさ（h/12 以上）が必要で、計算に数分かかります。標準の Johnson-Cook 則の材料では連続形の切りくずになります。</li>
+        <li>標準解像度では切取り厚さを 8 粒子で表すため、温度のピークや刃先丸みの効果は粗く出ます。定量比較には「細かい」を使ってください。Johnson-Cook 定数は文献値で、同じ材料でも文献によって 2 割以上違います。</li>
       </ul>
     </div>
   </section>

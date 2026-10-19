@@ -1,20 +1,29 @@
-// 2D plane-strain orthogonal cutting solver: updated-Lagrangian SPH, explicit time integration.
+// 2D plane-strain cutting solver (orthogonal cutting or one end-mill tooth): updated-Lagrangian SPH, explicit time integration.
 //  - Elasto-plastic solid: hypoelastic Jaumann-rate deviatoric stress + linear EOS pressure,
 //    radial return to the Johnson-Cook flow stress (strain hardening, rate, thermal softening).
 //  - Thermo-mechanical coupling: Taylor-Quinney plastic heating, frictional heating at the rake
 //    face, SPH heat conduction (Cleary-Monaghan Laplacian, sub-cycled to its own stability limit).
 //  - Corrected kernel gradient for the velocity gradient, Monaghan artificial viscosity and
 //    Gray-Monaghan artificial stress against tensile instability.
-//  - Rigid tool with rounded edge, Coulomb friction capped at the shear flow stress.
+//  - Rigid tool with rounded edge, Coulomb friction capped at the shear flow stress, and its own
+//    temperature field and Usui wear estimate (toolheat.js).
 //  - Mass scaling (density × ms for inertia only) keeps the explicit step affordable; the default
 //    keeps inertial stress ρ·ms·V² near 4 % of the yield stress so the cut stays quasi-static.
 // Units: SI internally (m, s, Pa, K-differences in °C). Forces are per metre of width.
-import { MATERIALS, flowStress } from './materials.js';
+import { MATERIALS, TOOLS, flowStress } from './materials.js';
 import { makeTool, toolSdf } from './tool.js';
+import { ToolHeat } from './toolheat.js';
+import { Ortho, Mill } from './process.js';
 
 export const DEFAULTS = {
-  mat: 'S45C', vc: 200, h: 0.1, rake: 5, clearance: 7, edgeRadius: 10, mu: null, mShear: 1.0,
+  mode: 'ortho', mat: 'S45C', vc: 200, h: 0.1, rake: 5, clearance: 7, edgeRadius: 10, mu: null, mShear: 1.0,
   nh: 8, massScale: 0, cutLen: 0.6, width: 1, T0: 20, beta: 0.9, heatToWork: 0.5,
+  // End mill (mode 'mill'): diameter D, flutes z, feed per tooth fz, radial depth ae [mm].
+  D: 6, z: 3, fz: 0.1, ae: 0.3, dir: 'up',
+  // Tool: material, interface heat-transfer coefficient [W/(m²·K)].
+  toolMat: 'WC', hc: 1e8,
+  // Artificial viscosity coefficients (Monaghan α, β); default 1, or the material's av.
+  avAlpha: null, avBeta: null,
 };
 
 const PI = Math.PI;
@@ -24,8 +33,11 @@ export class CuttingSim {
     const c = this.cfg = { ...DEFAULTS, ...cfg };
     const mat = this.mat = MATERIALS[c.mat];
     if (c.mu == null) c.mu = mat.mu;
+    if (c.avAlpha == null) c.avAlpha = mat.av ?? 1;
+    if (c.avBeta == null) c.avBeta = mat.av ?? 1;
     this.V = c.vc / 60;                       // tool speed [m/s]
-    const h = this.h = c.h * 1e-3;            // uncut chip thickness [m]
+    const proc = this.proc = c.mode === 'mill' ? new Mill(c) : new Ortho(c);
+    const h = this.h = proc.hRef;             // uncut chip thickness (maximum, for milling) [m]
     const dx = this.dx = h / c.nh;
     this.hk = 1.2 * dx;                       // smoothing length
     this.E = mat.E * 1e9; this.G = this.E / (2 * (1 + mat.nu)); this.K = this.E / (3 * (1 - 2 * mat.nu));
@@ -34,12 +46,9 @@ export class CuttingSim {
     this.rho0 = mat.rho * this.ms;            // scaled density (inertia only)
     this.cs = Math.sqrt((this.K + 4 * this.G / 3) / this.rho0);
 
-    // Workpiece block: surface at y = 0, cut layer y ∈ [−h, 0].
-    const L = c.cutLen * 1e-3 + Math.max(3 * h, 0.2e-3);
-    const H = Math.max(3.5 * h, h + 12 * dx);
-    const nx = Math.round(L / dx), ny = Math.round(H / dx);
-    this.L = nx * dx; this.H = ny * dx;
-    const N = this.N = nx * ny;
+    const pts = proc.build(dx);
+    this.L = proc.L; this.H = proc.H; this.view = proc.view;
+    const N = this.N = pts.length;
     const f = n => new Float64Array(n);
     this.x = f(N); this.y = f(N); this.vx = f(N); this.vy = f(N); this.ax = f(N); this.ay = f(N);
     this.rho = f(N); this.p = f(N); this.sxx = f(N); this.syy = f(N); this.szz = f(N); this.sxy = f(N);
@@ -50,18 +59,15 @@ export class CuttingSim {
     this.contact = new Uint8Array(N); this.fixed = new Uint8Array(N); this.dead = new Uint8Array(N); this.nDead = 0;
     this.m = this.rho0 * dx * dx;             // scaled mass per unit width
     this.mReal = mat.rho * dx * dx;
-    let k = 0;
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, k++) {
-      this.x[k] = (i + 0.5) * dx; this.y[k] = -(j + 0.5) * dx;
+    for (let k = 0; k < N; k++) {
+      this.x[k] = pts[k][0]; this.y[k] = pts[k][1]; this.fixed[k] = pts[k][2];
       this.rho[k] = this.rho0; this.T[k] = c.T0;
-      // Supports: bottom and far-end layers, plus the entry face below the cut (the tool never reaches it).
-      if (j >= ny - 3 || i >= nx - 3 || (i < 3 && this.y[k] < -h - 1.5 * dx)) this.fixed[k] = 1;
     }
 
     this.tool = makeTool({ rakeDeg: c.rake, clearanceDeg: c.clearance, edgeRadius: c.edgeRadius * 1e-6 });
-    this.tool.ex = -this.tool.r - 1.0 * dx;
-    this.tool.ey = -h + this.tool.r;
-    this.x0Tool = this.tool.ex;
+    proc.init(this);
+    const Lb = Math.max(10 * h, 0.8e-3);
+    this.heat = new ToolHeat(this.tool, TOOLS[c.toolMat], { cell: Math.max(dx, Lb / 90), Lb, T0: c.T0, hc: c.hc });
 
     // Kernel constants (cubic spline, 2D).
     this.ad = 10 / (7 * PI * this.hk * this.hk);
@@ -76,10 +82,11 @@ export class CuttingSim {
     this.allocPairs(this.cap);
     this.head = new Int32Array(1); this.next = new Int32Array(N);
 
-    this.t = 0; this.steps = 0; this.travel = 0; this.done = false;
+    this.t = 0; this.steps = 0; this.done = false; this.lastSample = 0;
     this.impX = 0; this.impY = 0; this.impT = 0; this.qTool = 0; this.qToolT = 0;
     this.workIn = 0; this.heatTool = 0;   // cumulative energy per unit width [J/m]
-    this.hist = { travel: [], fc: [], ft: [], tmax: [], trake: [] };
+    // fc/ft: cutting and thrust force (ortho) or tangential and radial force (mill).
+    this.hist = { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [], hnom: [] };
   }
 
   allocPairs(n) {
@@ -231,7 +238,7 @@ export class CuttingSim {
     // 3. Momentum and heat conduction.
     const ax = this.ax, ay = this.ay, cx = this.cx, cy = this.cy, xs = 0.5 * m;
     ax.fill(0); ay.fill(0); cx.fill(0); cy.fill(0);
-    const hk = this.hk, cs = this.cs, eta = 0.01 * hk * hk, alpha = 1.0, betaV = 1.0, iWdx = 1 / this.Wdx;
+    const hk = this.hk, cs = this.cs, eta = 0.01 * hk * hk, alpha = cfg.avAlpha, betaV = cfg.avBeta, iWdx = 1 / this.Wdx;
     for (let k = 0; k < np; k++) {
       const i = pi[k], j = pj[k];
       const ri2 = 1 / (rho[i] * rho[i]), rj2 = 1 / (rho[j] * rho[j]);
@@ -257,15 +264,14 @@ export class CuttingSim {
     this.conduct();
 
     // 4. Integrate, then enforce tool contact and supports.
-    const tool = this.tool, V = this.V, dx = this.dx, d0 = 0.5 * dx, out = tool.out;
-    tool.ex += V * dt;
-    const mu = cfg.mu, fw = cfg.heatToWork, cMat = mat.c, mReal = this.mReal;
-    let ix = 0, iy = 0, qt = 0, tRake = cfg.T0;
-    const dead = this.dead, vEsc2 = 100 * V * V;
-    // Machined surface well behind the tool has unloaded: freeze it (keeps its residual state).
-    const xFreeze = tool.ex - this.h - tool.r, yFreeze = -0.5 * this.h;
+    const tool = this.tool, proc = this.proc, heat = this.heat, dx = this.dx, d0 = 0.5 * dx, out = tool.out;
+    proc.pose(this, this.t + dt);
+    const mu = cfg.mu, fw = cfg.heatToWork, cMat = mat.c, mReal = this.mReal, acc = proc.accumulate(this);
+    const tvx0 = tool.vx, tvy0 = tool.vy, om = tool.om, ox = tool.ox, oy = tool.oy;
+    let ix = 0, iy = 0, qt = 0, work = 0, tRake = cfg.T0;
+    const dead = this.dead, vEsc2 = 100 * this.V * this.V;
     for (let i = 0; i < N; i++) {
-      if (!fixed[i] && x[i] < xFreeze && y[i] < yFreeze) fixed[i] = 2;
+      if (!fixed[i] && proc.freezes(this, x[i], y[i])) fixed[i] = 2;
       if (fixed[i] || dead[i]) { vx[i] = 0; vy[i] = 0; this.contact[i] = 0; continue; }
       vx[i] += ax[i] * dt; vy[i] += ay[i] * dt;
       // A particle ejected far faster than the tool has lost its neighbours: retire it.
@@ -274,34 +280,55 @@ export class CuttingSim {
       const dist = toolSdf(tool, x[i], y[i]);
       if (dist >= d0) { this.contact[i] = 0; continue; }
       this.contact[i] = 1;
-      const nx = out[1], ny = out[2];
+      const nx = out[1], ny = out[2], lu = out[3], lw = out[4];
       const pen = d0 - dist;
       x[i] += nx * pen; y[i] += ny * pen;               // project back onto the contact surface
-      const rvx = vx[i] - V, rvy = vy[i];
+      // Tool surface velocity at the particle (translation + rotation about the cutter centre).
+      const tvx = tvx0 - om * (y[i] - oy), tvy = tvy0 + om * (x[i] - ox);
+      const rvx = vx[i] - tvx, rvy = vy[i] - tvy;
       const vn = rvx * nx + rvy * ny;
       const jn = m * (vn < 0 ? -vn : 0);
       let tx = rvx - vn * nx, ty = rvy - vn * ny;
       const vt = Math.hypot(tx, ty);
-      let jt = 0;
+      let jt = 0, eTool = 0;
       if (vt > 1e-12) {
         tx /= vt; ty /= vt;
         const tauMax = cfg.mShear * flowStress(mat, ep[i], epd[i], T[i]) / Math.sqrt(3);
         jt = Math.min(m * vt, mu * jn, tauMax * dx * dt);
         const e = jt * (vt - 0.5 * jt / m);
         T[i] += fw * e / (mReal * cMat);
-        qt += (1 - fw) * e;
+        eTool = (1 - fw) * e;
       }
+      // Heat across the interface into the tool grid; pressure and slip for the wear estimate.
+      const qc = heat.contact(heat.cellOf(lu, lw), T[i], dx, eTool, jn / dt, vt, dt, acc);
+      T[i] -= qc / (mReal * cMat);
+      qt += qc + eTool;
       const dpx = jn * nx - jt * tx, dpy = jn * ny - jt * ty;
       if (vn < 0) { vx[i] += -vn * nx; vy[i] += -vn * ny; }
       vx[i] -= jt / m * tx; vy[i] -= jt / m * ty;
-      ix -= dpx; iy -= dpy;
+      ix -= dpx; iy -= dpy; work += dpx * tvx + dpy * tvy;
       if (T[i] > tRake) tRake = T[i];
     }
+    heat.step(dt);
+    if (acc) heat.aTime += dt;
     this.impX += ix; this.impY += iy; this.impT += dt; this.qTool += qt; this.tRake = tRake;
-    this.workIn -= ix * V; this.heatTool += qt;
+    this.workIn += work; this.heatTool += qt;
     this.t += dt; this.steps++;
-    this.travel = tool.ex - this.x0Tool;
-    if (this.travel >= cfg.cutLen * 1e-3) this.done = true;
+    if (proc.progress(this) >= 1) this.finish();
+  }
+
+  // Called once at the end: steady tool temperature and wear from the averaged contact.
+  finish() {
+    if (this.done) return;
+    this.done = true;
+    if (this.proc instanceof Ortho) this.heat.steady();
+  }
+
+  // Run until a new averaging window is due (about 160 per cut), then close it.
+  stepSample() {
+    this.step();
+    const p = this.proc.progress(this);
+    if (p - this.lastSample >= 1 / 160 || this.done) { this.sample(); this.lastSample = p; }
   }
 
   shepard() {
@@ -335,20 +362,21 @@ export class CuttingSim {
   sample() {
     if (this.impT <= 0) return null;
     const w = this.cfg.width * 1e-3;
-    const fc = -this.impX / this.impT * w, ft = this.impY / this.impT * w;
+    const f = this.proc.forces(this.impX / this.impT * w, this.impY / this.impT * w);
     this.qToolT = this.qTool / this.impT * w;
     this.impX = 0; this.impY = 0; this.impT = 0; this.qTool = 0;
     let tmax = -Infinity;
     for (let i = 0; i < this.N; i++) if (this.T[i] > tmax) tmax = this.T[i];
     const hst = this.hist;
-    hst.travel.push(this.travel * 1e3); hst.fc.push(fc); hst.ft.push(ft); hst.tmax.push(tmax); hst.trake.push(this.tRake);
-    return { fc, ft, tmax };
+    hst.axis.push(this.proc.axis(this)); hst.fc.push(f.a); hst.ft.push(f.b); hst.tmax.push(tmax);
+    hst.trake.push(this.tRake); hst.ttool.push(this.heat.maxT());
+    hst.hnom.push(this.proc instanceof Mill ? this.proc.hNom() * 1e3 : this.cfg.h);
+    return { fc: f.a, ft: f.b, tmax };
   }
 
   // Chip thickness: largest distance from the rake face among chip particles 1–2.2 h up the face.
   chipThickness() {
     const t = this.tool, h = this.h;
-    let best = 0;
     const ds = [];
     for (let i = 0; i < this.N; i++) {
       if (this.y[i] < 0.25 * h) continue;
@@ -360,42 +388,70 @@ export class CuttingSim {
     }
     if (ds.length < 3) return 0;
     ds.sort((a, b) => a - b);
-    best = ds[Math.floor(0.97 * (ds.length - 1))] + 0.5 * this.dx;
-    return best;
+    return ds[Math.floor(0.97 * (ds.length - 1))] + 0.5 * this.dx;
   }
 
-  // Steady-state summary from the second half of the cut.
+  // Summary. Orthogonal: steady-state averages over the second half of the cut.
+  // Milling: peaks over the tooth pass and cutting coefficients fitted to F = K·b·h + Ke·b.
   summary() {
-    const hs = this.hist, n = hs.fc.length;
+    const hs = this.hist, n = hs.fc.length, cfg = this.cfg, b = cfg.width;
     const avg = (arr, from) => { let s = 0, c = 0; for (let i = from; i < arr.length; i++) { s += arr[i]; c++; } return c ? s / c : 0; };
-    let from = 0;
-    const half = 0.5 * this.cfg.cutLen;
-    while (from < n - 1 && hs.travel[from] < Math.min(half, this.travel * 1e3 * 0.5)) from++;
-    const fc = avg(hs.fc, from), ft = avg(hs.ft, from);
-    const b = this.cfg.width, hmm = this.cfg.h;
-    const hc = this.chipThickness();
-    const a = this.tool.a;
-    let phi = 0;
-    if (hc > 0) { const rc = this.h / hc; phi = Math.atan(rc * Math.cos(a) / (1 - rc * Math.sin(a))); }
-    const beta = Math.atan(this.cfg.mu);
-    const phiM = PI / 4 - (beta - a) / 2;
-    let tmax = -Infinity, epMax = 0, edMax = 0;
+    let tmax = -Infinity, epMax = 0, edMax = 0, heat = 0;
     for (let i = 0; i < this.N; i++) {
       if (this.T[i] > tmax) tmax = this.T[i];
       if (this.ep[i] > epMax) epMax = this.ep[i];
       if (this.epd[i] > edMax) edMax = this.epd[i];
+      heat += this.T[i] - cfg.T0;
     }
-    const trake = avg(hs.trake, from);
     // Energy balance: heat now in the workpiece and chip plus heat sent to the tool, over tool work.
-    let heat = 0;
-    for (let i = 0; i < this.N; i++) heat += this.T[i] - this.cfg.T0;
     heat = heat * this.mReal * this.mat.c + this.heatTool;
+    const base = {
+      mode: cfg.mode, tmax, epMax, edMax, qTool: this.qToolT, progress: Math.min(1, this.proc.progress(this)),
+      t: this.t, steps: this.steps, N: this.N, dx: this.dx * 1e6, ms: this.ms, nSub: this.nSub,
+      kcRef: this.mat.kcRef, done: this.done, heatRatio: this.workIn > 0 ? heat / this.workIn : 0,
+      toolT: this.heat.maxT(), toolSteadyT: this.heat.steadyT ? this.heat.maxT(this.heat.steadyT) : null,
+      trakeMax: Math.max(cfg.T0, ...hs.trake),
+    };
+    let wearCrater = 0, wearFlank = 0;
+    if (this.done) for (const r of this.heat.profile()) {
+      if (r.s > 0 && r.wear > wearCrater) wearCrater = r.wear;
+      if (r.s <= 0 && r.wear > wearFlank) wearFlank = r.wear;
+    }
+    base.wearCrater = wearCrater; base.wearFlank = wearFlank;
+    if (this.proc instanceof Mill) {
+      const pr = this.proc;
+      // Least squares over samples with h > 15 % of hmax (entry/exit transients excluded).
+      const fit = (F) => {
+        let sh = 0, sf = 0, shh = 0, shf = 0, c = 0;
+        for (let i = 0; i < n; i++) {
+          const hh = hs.hnom[i];
+          if (hh < 0.15 * pr.hRef * 1e3) continue;
+          sh += hh; sf += F[i] / b; shh += hh * hh; shf += hh * F[i] / b; c++;
+        }
+        const det = c * shh - sh * sh;
+        if (c < 4 || Math.abs(det) < 1e-12) return [0, 0];
+        return [(c * shf - sh * sf) / det, (shh * sf - sh * shf) / det];   // [K N/mm², Ke N/mm]
+      };
+      const [Ktc, Kte] = fit(hs.fc), [Krc, Kre] = fit(hs.ft);
+      return { ...base, ftMax: Math.max(0, ...hs.fc), frMax: Math.max(0, ...hs.ft), hmax: pr.hRef * 1e3,
+        Ktc, Kte, Krc, Kre, angle: pr.axis(this), arc: pr.Delta * 180 / PI, trake: base.trakeMax };
+    }
+    let from = 0;
+    const prog = this.proc.progress(this);
+    while (from < n - 1 && hs.axis[from] < Math.min(0.5, 0.5 * prog) * cfg.cutLen) from++;
+    const fc = avg(hs.fc, from), ft = avg(hs.ft, from);
+    const hc = this.chipThickness();
+    const a = this.tool.a;
+    let phi = 0;
+    if (hc > 0) { const rc = this.h / hc; phi = Math.atan(rc * Math.cos(a) / (1 - rc * Math.sin(a))); }
+    const phiM = PI / 4 - (Math.atan(cfg.mu) - a) / 2;
+    // Saw-tooth measure: relative fluctuation of the cutting force in the second half.
+    let v = 0; for (let i = from; i < n; i++) v += (hs.fc[i] - fc) ** 2;
+    const fcStd = n - from > 1 ? Math.sqrt(v / (n - from - 1)) : 0;
     return {
-      fc, ft, kc: fc / (b * hmm), hc: hc * 1e3, ratio: hc > 0 ? hc / this.h : 0,
-      phi: phi * 180 / PI, phiMerchant: phiM * 180 / PI, tmax, trake, epMax, edMax,
-      qTool: this.qToolT, travel: this.travel * 1e3, t: this.t, steps: this.steps,
-      N: this.N, dx: this.dx * 1e6, ms: this.ms, nSub: this.nSub, kcRef: this.mat.kcRef, done: this.done,
-      heatRatio: this.workIn > 0 ? heat / this.workIn : 0,
+      ...base, fc, ft, kc: fc / (b * cfg.h), hc: hc * 1e3, ratio: hc > 0 ? hc / this.h : 0,
+      phi: phi * 180 / PI, phiMerchant: phiM * 180 / PI, trake: avg(hs.trake, from), fcVar: fc > 0 ? fcStd / fc : 0,
+      travel: prog * cfg.cutLen,
     };
   }
 }

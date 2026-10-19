@@ -1,4 +1,4 @@
-// UI: condition form, particle field view (Canvas 2D), force / temperature charts, readouts.
+// UI: condition form, particle field view (Canvas 2D), charts and readouts.
 import { MATERIALS } from './materials.js';
 import { DEFAULTS } from './sph.js';
 
@@ -30,33 +30,49 @@ const FIELDS = {
 };
 
 // ---- State ----
-let frame = null, field = 'T', zoom = 'tip', status = 'idle', cfg = null;
+let frame = null, field = 'T', zoom = 'tip', status = 'idle', cfg = null, mode = 'ortho';
 const view = $('view'), vctx = view.getContext('2d');
 
 // ---- Conditions form ----
 const matSel = $('mat');
-for (const [k, m] of Object.entries(MATERIALS)) matSel.add(new Option(m.name, k));
+const groups = {};
+for (const [k, m] of Object.entries(MATERIALS)) {
+  if (!groups[m.group]) { groups[m.group] = document.createElement('optgroup'); groups[m.group].label = m.group; matSel.appendChild(groups[m.group]); }
+  groups[m.group].appendChild(new Option(m.name, k));
+}
 matSel.value = DEFAULTS.mat;
 function applyMaterialDefaults() {
   const m = MATERIALS[matSel.value];
   $('vc').value = m.vc; $('mu').value = m.mu;
+  if (m.rake != null) $('rake').value = m.rake;
+  if (m.nh && mode === 'ortho') $('res').value = String(m.nh);
 }
 applyMaterialDefaults();
 matSel.addEventListener('change', () => { applyMaterialDefaults(); reset(); });
 
+for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => {
+  mode = b.dataset.mode;
+  for (const c of document.querySelectorAll('[data-mode]')) c.setAttribute('aria-pressed', c === b);
+  for (const el of document.querySelectorAll('[data-only]')) el.hidden = el.dataset.only !== mode;
+  $('res').value = mode === 'mill' ? '5' : '8';
+  reset();
+});
+
 function readCfg() {
   const num = (id) => parseFloat($(id).value);
   return {
-    mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
+    mode, mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
     edgeRadius: num('edge'), mu: num('mu'), width: num('width'), cutLen: num('len'), nh: num('res'),
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value,
   };
 }
-for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res']) $(id).addEventListener('change', reset);
+for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir']) $(id).addEventListener('change', reset);
 
 function reset() {
   cfg = readCfg();
   status = 'idle'; frame = null;
   worker.postMessage({ type: 'init', cfg });
+  buildCells();
   updateRunButton();
 }
 $('run').addEventListener('click', () => {
@@ -108,7 +124,7 @@ function fieldValues(f) {
 function range(f, vals) {
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < vals.length; i++) { if (frame.flag[i] === 1) continue; const v = vals[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
-  if (f === 'T') { lo = 20; hi = Math.max(hi, 100); }
+  if (f === 'T') { lo = 20; hi = Math.max(hi, 100); const tg = frame.toolGrid; for (let k = 0; k < tg.T.length; k++) if (tg.inside[k] && tg.T[k] > hi) hi = tg.T[k]; }
   if (f === 'seq' || f === 'ep') lo = 0;
   if (f === 'sr') { lo = Math.max(lo, 0); hi = Math.max(hi, lo + 1); }
   if (f === 'p') { const m = Math.max(Math.abs(lo), Math.abs(hi), 1); lo = -m; hi = m; }
@@ -116,17 +132,38 @@ function range(f, vals) {
   return [lo, hi];
 }
 
+// Tool temperature: the tool grid painted into a small bitmap, drawn in the tool's frame and
+// clipped to the tool outline.
+const toolCanvas = document.createElement('canvas');
+function toolBitmap(lo, hi) {
+  const g = frame.toolGrid, lut = LUT.turbo;
+  toolCanvas.width = g.nu; toolCanvas.height = g.nw;
+  const c = toolCanvas.getContext('2d'), img = c.createImageData(g.nu, g.nw), d = img.data;
+  for (let j = 0; j < g.nw; j++) for (let i = 0; i < g.nu; i++) {
+    const k = i + j * g.nu, o = k * 4;   // row j = w index; the draw transform flips w up
+    if (!g.inside[k]) continue;
+    let t = Math.round((g.T[k] - lo) / (hi - lo) * 255); t = t < 0 ? 0 : t > 255 ? 255 : t;
+    const col = lut[t]; d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; d[o + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+  return toolCanvas;
+}
+
 function draw() {
   const dpr = window.devicePixelRatio || 1, W = view.clientWidth, H = view.clientHeight;
   if (view.width !== Math.round(W * dpr) || view.height !== Math.round(H * dpr)) { view.width = Math.round(W * dpr); view.height = Math.round(H * dpr); }
   const cw = view.width, ch = view.height;
+  vctx.setTransform(1, 0, 0, 1, 0, 0);
   vctx.clearRect(0, 0, cw, ch);
   if (!frame) return;
-  const hmm = cfg.h, [tx, ty] = frame.tip;
+  const hmm = frame.h, [tx, ty, , th] = frame.tip;
   // Window in mm: whole block, or a box around the cutting edge.
   let wx0, wx1, wy0, wy1;
-  if (zoom === 'all') { wx0 = Math.min(-0.15, tx - 3 * hmm); wx1 = frame.L + 0.02; wy0 = -frame.H - 0.02; wy1 = Math.max(0.35, 4.5 * hmm); }
-  else { wx0 = tx - 4.5 * hmm; wx1 = tx + 4.5 * hmm; wy0 = ty - 2.2 * hmm; wy1 = ty + 4.8 * hmm; }
+  if (zoom === 'all') [wx0, wx1, wy0, wy1] = frame.view;
+  else {
+    const ux = Math.cos(th), uy = Math.sin(th), cx0 = tx - 0.5 * hmm * ux - 1.2 * hmm * uy, cy0 = ty - 0.5 * hmm * uy + 1.2 * hmm * ux;
+    wx0 = cx0 - 4.5 * hmm; wx1 = cx0 + 4.5 * hmm; wy0 = cy0 - 3.5 * hmm; wy1 = cy0 + 3.5 * hmm;
+  }
   const s = Math.min(cw / (wx1 - wx0), ch / (wy1 - wy0));
   const ox = (cw - s * (wx1 - wx0)) / 2 - wx0 * s, oy = (ch - s * (wy1 - wy0)) / 2 + wy1 * s;
   xf = { s, ox, oy, dpr };
@@ -146,28 +183,46 @@ function draw() {
     for (let yy = y0; yy < y1; yy++) buf.fill(col, yy * cw + x0, yy * cw + x1);
   }
   vctx.putImageData(img, 0, 0);
-  // Tool.
   const css = getComputedStyle(document.documentElement);
-  vctx.beginPath();
-  frame.outline.forEach(([a, b], i) => { const X = ox + a * s, Y = oy - b * s; if (i) vctx.lineTo(X, Y); else vctx.moveTo(X, Y); });
-  vctx.closePath();
+  // Cutter circle (end mill).
+  if (frame.mill) {
+    const m = frame.mill;
+    vctx.setLineDash([4 * dpr, 4 * dpr]); vctx.strokeStyle = css.getPropertyValue('--guide'); vctx.lineWidth = dpr;
+    vctx.beginPath(); vctx.arc(ox + m.cx * s, oy - m.cy * s, m.R * s, 0, 2 * Math.PI); vctx.stroke(); vctx.setLineDash([]);
+  }
+  // Tool body, then its temperature field when temperature is shown.
+  const path = new Path2D();
+  frame.outline.forEach(([a, b], i) => { const X = ox + a * s, Y = oy - b * s; if (i) path.lineTo(X, Y); else path.moveTo(X, Y); });
+  path.closePath();
   const g = vctx.createLinearGradient(ox + (tx - 3 * hmm) * s, 0, ox + tx * s, 0);
   g.addColorStop(0, css.getPropertyValue('--tool-a')); g.addColorStop(1, css.getPropertyValue('--tool-b'));
-  vctx.fillStyle = g; vctx.fill();
-  vctx.lineWidth = 1.5 * dpr; vctx.strokeStyle = css.getPropertyValue('--tool-edge'); vctx.stroke();
-  // Original surface and cut depth guide lines.
-  vctx.setLineDash([4 * dpr, 4 * dpr]); vctx.strokeStyle = css.getPropertyValue('--guide'); vctx.lineWidth = dpr;
-  vctx.beginPath(); vctx.moveTo(0, oy + hmm * s); vctx.lineTo(cw, oy + hmm * s); vctx.stroke(); vctx.setLineDash([]);
-  // Scale bar: 50 µm or 100 µm.
-  const bar = zoom === 'all' ? 0.1 : 0.05, bl = bar * s;
+  vctx.fillStyle = g; vctx.fill(path);
+  if (field === 'T') {
+    const tg = frame.toolGrid, bmp = toolBitmap(lo, hi);
+    vctx.save(); vctx.clip(path);
+    // Local (u, w) → screen: origin at the edge centre, u along th, w normal to it, y flipped.
+    const c = Math.cos(th), sn = Math.sin(th);
+    vctx.setTransform(c * s, -sn * s, -sn * s, -c * s, ox + tx * s, oy - ty * s);
+    vctx.imageSmoothingEnabled = true;
+    vctx.drawImage(bmp, tg.u0, tg.w0, tg.nu * tg.a, tg.nw * tg.a);
+    vctx.restore();
+  }
+  vctx.lineWidth = 1.5 * dpr; vctx.strokeStyle = css.getPropertyValue('--tool-edge'); vctx.stroke(path);
+  // Cut depth guide line (orthogonal cutting).
+  if (!frame.mill) {
+    vctx.setLineDash([4 * dpr, 4 * dpr]); vctx.strokeStyle = css.getPropertyValue('--guide'); vctx.lineWidth = dpr;
+    vctx.beginPath(); vctx.moveTo(0, oy + hmm * s); vctx.lineTo(cw, oy + hmm * s); vctx.stroke(); vctx.setLineDash([]);
+  }
+  // Scale bar.
+  const span = (wx1 - wx0), bar = span > 1.5 ? 0.2 : span > 0.6 ? 0.1 : span > 0.25 ? 0.05 : 0.02, bl = bar * s;
   vctx.fillStyle = css.getPropertyValue('--ink'); vctx.fillRect(cw - bl - 16 * dpr, ch - 22 * dpr, bl, 3 * dpr);
   vctx.font = `${11 * dpr}px ${css.getPropertyValue('--font-mono')}`; vctx.textAlign = 'right';
-  vctx.fillText(`${bar * 1000} µm`, cw - 16 * dpr, ch - 28 * dpr);
+  vctx.fillText(`${Math.round(bar * 1000)} µm`, cw - 16 * dpr, ch - 28 * dpr);
   // Legend.
   const f = FIELDS[field];
   $('lg-bar').style.background = cssGrad(f.map);
   $('lg-lo').textContent = f.fmt(lo); $('lg-hi').textContent = f.fmt(hi);
-  $('lg-name').textContent = f.unit ? `${f.label} [${f.unit}]` : f.label;
+  $('lg-name').textContent = (f.unit ? `${f.label} [${f.unit}]` : f.label) + (field === 'T' ? (frame.toolGrid.steady ? '・工具は定常推定' : '・工具を含む') : '');
 }
 new ResizeObserver(() => { draw(); drawCharts(); }).observe(view);
 
@@ -191,58 +246,110 @@ function niceStep(span, n) {
   const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
   return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
 }
-function lineChart(canvas, xs, series, xmax, unit) {
+function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty }) {
   const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   const c = canvas.getContext('2d'), css = getComputedStyle(document.documentElement);
   c.scale(dpr, dpr); c.clearRect(0, 0, W, H);
-  const L = 48, R = 12, T = 12, B = 28, pw = W - L - R, ph = H - T - B;
-  let ymax = 1;
+  const L = 48, R = 12, T = 18, B = 26, pw = W - L - R, ph = H - T - B;
+  let ymax = 0;
   for (const s of series) for (const v of s.data) if (v > ymax) ymax = v;
-  const ystep = niceStep(ymax, 4); ymax = Math.ceil(ymax / ystep) * ystep;
-  const xstep = niceStep(xmax, pw < 320 ? 3 : 5);
+  if (!(ymax > 0)) ymax = 1;
+  const ystep = niceStep(ymax, 4); ymax = Math.ceil(ymax / ystep - 1e-9) * ystep;
+  const span = xmax - xmin, xstep = niceStep(span, pw < 320 ? 3 : 5);
+  const X = (v) => L + (v - xmin) / span * pw, Y = (v) => T + ph - v / ymax * ph;
   c.font = `11px ${css.getPropertyValue('--font-mono')}`; c.fillStyle = css.getPropertyValue('--ink-mute');
   c.strokeStyle = css.getPropertyValue('--rule'); c.lineWidth = 1;
   c.textAlign = 'right'; c.textBaseline = 'middle';
   for (let v = 0; v <= ymax + 1e-9; v += ystep) {
-    const y = T + ph - v / ymax * ph;
-    c.beginPath(); c.moveTo(L, y); c.lineTo(L + pw, y); c.stroke();
-    c.fillText(v.toFixed(ystep < 1 ? 1 : 0), L - 6, y);
+    c.beginPath(); c.moveTo(L, Y(v)); c.lineTo(L + pw, Y(v)); c.stroke();
+    c.fillText(ystep < 0.01 ? v.toFixed(3) : ystep < 0.1 ? v.toFixed(2) : ystep < 1 ? v.toFixed(1) : v.toFixed(0), L - 6, Y(v));
   }
   c.textAlign = 'center'; c.textBaseline = 'top';
-  for (let v = 0; v <= xmax + 1e-9; v += xstep) c.fillText(v.toFixed(xstep < 0.1 ? 2 : 1), L + v / xmax * pw, T + ph + 6);
-  c.textAlign = 'left'; c.textBaseline = 'top'; c.fillText(unit, 4, 0);
-  c.textAlign = 'right'; c.fillText('横軸 切削長さ [mm]', L + pw, 0);
+  for (let v = Math.ceil(xmin / xstep) * xstep; v <= xmax + 1e-9; v += xstep) c.fillText(Math.abs(v) < 1e-9 ? '0' : xstep < 0.1 ? v.toFixed(2) : xstep < 1 ? v.toFixed(1) : v.toFixed(0), X(v), T + ph + 6);
+  c.textAlign = 'left'; c.fillText(unit, 4, 0);
+  c.textAlign = 'right'; c.fillText(xlabel, L + pw, 0);
+  if (empty && !series.some((s) => s.data.length)) { c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(empty, L + pw / 2, T + ph / 2); return; }
   for (const s of series) {
     if (!s.data.length) continue;
     c.strokeStyle = css.getPropertyValue(s.color); c.lineWidth = 2; c.beginPath();
-    s.data.forEach((v, i) => { const x = L + xs[i] / xmax * pw, y = T + ph - v / ymax * ph; if (i) c.lineTo(x, y); else c.moveTo(x, y); });
+    let started = false;
+    s.data.forEach((v, i) => { if (v == null) return; if (started) c.lineTo(X(xs[i]), Y(v)); else { c.moveTo(X(xs[i]), Y(v)); started = true; } });
     c.stroke();
-    const i = s.data.length - 1, x = L + xs[i] / xmax * pw, y = T + ph - s.data[i] / ymax * ph;
-    c.fillStyle = css.getPropertyValue(s.color); c.beginPath(); c.arc(x, y, 3, 0, 7); c.fill();
+    const i = s.data.length - 1;
+    if (s.data[i] != null && s.dot !== false) { c.fillStyle = css.getPropertyValue(s.color); c.beginPath(); c.arc(X(xs[i]), Y(s.data[i]), 3, 0, 7); c.fill(); }
   }
 }
 function drawCharts() {
-  const h = frame ? frame.hist : { travel: [], fc: [], ft: [], tmax: [], trake: [] };
-  const xmax = cfg ? cfg.cutLen : 1;
-  lineChart($('chart-f'), h.travel, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], xmax, 'N');
-  lineChart($('chart-t'), h.travel, [{ data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }], xmax, '°C');
+  const mill = cfg && cfg.mode === 'mill';
+  const h = frame ? frame.hist : { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [] };
+  const xmax = mill ? (frame ? Math.max(1, frame.summary.arc + 8) : 30) : cfg ? cfg.cutLen : 1;
+  const xl = mill ? '横軸 刃の回転角 [°]' : '横軸 切削長さ [mm]';
+  lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], { xmax, unit: 'N', xlabel: xl });
+  lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }, { data: h.ttool, color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+  const pr = frame && frame.profile ? frame.profile.filter((r) => r.s > -400 && r.s < 500) : [];
+  const ps = pr.map((r) => r.s), xr = pr.length ? [Math.min(...ps), Math.max(...ps)] : [-200, 300];
+  lineChart($('chart-ts'), ps, [{ data: pr.map((r) => r.T), color: '--s2', dot: false }, { data: pr.map((r) => r.Tst), color: '--s1', dot: false }],
+    { xmin: xr[0], xmax: xr[1], unit: '°C', xlabel: '逃げ面 ← 刃先からの距離 [µm] → すくい面', empty: '計算が終わると表示します' });
+  lineChart($('chart-w'), ps, [{ data: pr.map((r) => r.wear), color: '--s3', dot: false }],
+    { xmin: xr[0], xmax: xr[1], unit: 'µm/min', xlabel: '逃げ面 ← 刃先からの距離 [µm] → すくい面', empty: '計算が終わると表示します' });
+  $('cf-a').textContent = mill ? '接線分力 Ft' : '主分力 Fc';
+  $('cf-b').textContent = mill ? '半径分力 Fr' : '背分力 Ft';
 }
 
 // ---- Readouts ----
+const f0 = (v) => v.toFixed(0), f1 = (v) => v.toFixed(1), f3 = (v) => v.toFixed(3);
+const CELLS = {
+  ortho: [
+    ['主分力 Fc', (s) => f0(s.fc), 'N', () => '後半区間の平均'],
+    ['背分力 Ft', (s) => f0(s.ft), 'N', () => '工具を押し上げる向き'],
+    ['比切削抵抗 kc', (s) => f0(s.kc), 'N/mm²', (s) => `便覧値の目安 ${s.kcRef}`],
+    ['切りくず厚さ hc', (s) => (s.ratio > 0 ? f3(s.hc) : '—'), 'mm', (s) => `切りくず厚さ比 ${s.ratio > 0 ? s.ratio.toFixed(2) : '—'}`],
+    ['せん断角 φ', (s) => (s.phi > 0 ? f1(s.phi) : '—'), '°', (s) => `Merchant の式 ${f1(s.phiMerchant)}°`],
+    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', (s) => `すくい面接触部 ${f0(s.trake)} °C`],
+    ['工具の最高温度', (s) => f0(s.toolSteadyT ?? s.toolT), '°C', (s) => (s.toolSteadyT != null ? `定常推定。切削終了時点 ${f0(s.toolT)} °C` : '切削中の値（定常推定は終了後）')],
+    ['クレーター摩耗速度', (s) => (s.done ? f1(s.wearCrater) : '—'), 'µm/min', () => 'すくい面の最大、Usui 式'],
+    ['逃げ面摩耗速度', (s) => (s.done ? f1(s.wearFlank) : '—'), 'µm/min', () => '逃げ面の最大、Usui 式'],
+    ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', (s) => `最大ひずみ速度 ${s.edMax.toExponential(1)} /s`],
+    ['工具へ流れる熱', (s) => f1(s.qTool), 'W', () => '摩擦熱の分担と接触面の熱伝導'],
+    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+  ],
+  mill: [
+    ['接線分力 Ft の最大', (s) => f0(s.ftMax), 'N', () => '1刃の通過中'],
+    ['半径分力 Fr の最大', (s) => f0(s.frMax), 'N', () => '1刃の通過中'],
+    ['最大切取り厚さ', (s) => f3(s.hmax), 'mm', (s) => `接触角 ${f1(s.arc)}°`],
+    ['接線方向の切削係数', (s) => (s.done ? f0(s.Ktc) : '—'), 'N/mm²', (s) => `エッジ係数 Kte ${s.done ? f1(s.Kte) : '—'} N/mm`],
+    ['半径方向の切削係数', (s) => (s.done ? f0(s.Krc) : '—'), 'N/mm²', (s) => `エッジ係数 Kre ${s.done ? f1(s.Kre) : '—'} N/mm`],
+    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', (s) => `すくい面接触部の最大 ${f0(s.trake)} °C`],
+    ['工具の最高温度', (s) => f0(s.toolT), '°C', () => '1刃の通過中の値'],
+    ['クレーター摩耗速度', (s) => (s.done ? f1(s.wearCrater) : '—'), 'µm/min', () => '接触中の値、Usui 式'],
+    ['逃げ面摩耗速度', (s) => (s.done ? f1(s.wearFlank) : '—'), 'µm/min', () => '接触中の値、Usui 式'],
+    ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', (s) => `最大ひずみ速度 ${s.edMax.toExponential(1)} /s`],
+    ['刃の回転角', (s) => f1(s.angle), '°', () => '最下点から'],
+    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+  ],
+};
+function buildCells() {
+  const root = $('results');
+  root.replaceChildren();
+  CELLS[cfg.mode].forEach(([k, , unit], i) => {
+    const d = document.createElement('div');
+    d.className = 'cell';
+    d.innerHTML = `<span class="k"></span><span class="v"><b id="rv${i}">—</b>${unit ? `<small>${unit}</small>` : ''}</span><span class="sub" id="rs${i}">—</span>`;
+    d.querySelector('.k').textContent = k;
+    root.appendChild(d);
+  });
+}
 function readouts() {
   const s = frame.summary, has = s.steps > 0;
-  const set = (id, v) => { $(id).textContent = has ? v : '—'; };
-  set('r-fc', s.fc.toFixed(0)); set('r-ft', s.ft.toFixed(0));
-  set('r-kc', s.kc.toFixed(0)); $('r-kcref').textContent = `便覧値の目安 ${s.kcRef}`;
-  set('r-hc', s.ratio > 0 ? s.hc.toFixed(3) : '—'); $('r-ratio').textContent = has && s.ratio > 0 ? `切りくず厚さ比 ${s.ratio.toFixed(2)}` : '切りくず厚さ比 —';
-  set('r-phi', s.phi > 0 ? s.phi.toFixed(1) : '—'); $('r-phim').textContent = `Merchant の式 ${s.phiMerchant.toFixed(1)}°`;
-  set('r-tmax', s.tmax.toFixed(0)); set('r-trake', s.trake.toFixed(0));
-  set('r-ep', s.epMax.toFixed(1)); $('r-ed').textContent = has ? `最大ひずみ速度 ${s.edMax.toExponential(1)} /s` : '最大ひずみ速度 —';
-  const pct = Math.min(100, s.travel / cfg.cutLen * 100);
-  $('prog').style.width = pct + '%';
-  $('clock').textContent = `${s.travel.toFixed(3)} / ${cfg.cutLen.toFixed(2)} mm · ${(s.t * 1e6).toFixed(1)} µs · 計算 ${(frame.wall / 1000).toFixed(0)} s`;
-  $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ${s.heatRatio > 0 ? ` · 発熱 / 切削仕事 ${(s.heatRatio * 100).toFixed(0)} %` : ''}`;
+  CELLS[cfg.mode].forEach(([, v, , sub], i) => {
+    $(`rv${i}`).textContent = has ? v(s) : '—';
+    $(`rs${i}`).textContent = has ? sub(s) : '—';
+  });
+  $('prog').style.width = s.progress * 100 + '%';
+  $('clock').textContent = (cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `)
+    + `${(s.t * 1e6).toFixed(1)} µs · 計算 ${(frame.wall / 1000).toFixed(0)} s`;
+  $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ`;
 }
 
 reset();
