@@ -1,4 +1,4 @@
-<title>2D切削シミュレーター</title>
+<title>切削シミュレーター</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -52,6 +52,8 @@ select { font-family: var(--font-body); }
 @media (max-width: 960px) { .main { grid-template-columns: minmax(0, 1fr); } }
 .viewport { position: relative; height: clamp(320px, 62vh, 720px); border-radius: 8px; overflow: hidden; background: var(--view-bg); border: 1px solid var(--rule); }
 .viewport canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.view3d { position: absolute; inset: 0; }
+.view3d[hidden] { display: none !important; }
 .overlay { position: absolute; display: flex; gap: 6px; flex-wrap: wrap; }
 .overlay.tl { top: 10px; left: 10px; right: 120px; }
 .overlay.tr { top: 10px; right: 10px; }
@@ -72,7 +74,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .row.wide { grid-template-columns: 1fr; }
 .seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; padding: 7px 4px; background: transparent; }
-.seg button + button { border-left: 1px solid var(--rule); }
+.seg button:nth-child(even) { border-left: 1px solid var(--rule); }
+.seg button:nth-child(n+3) { border-top: 1px solid var(--rule); }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 .hint { margin: 0; font-size: 12px; color: var(--ink-mute); }
 .static { font-size: 13px; text-align: right; }
@@ -110,8 +113,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 <div class="wrap">
   <header class="bar">
     <div class="brand">
-      <h1>2D 切削シミュレーター</h1>
-      <p>工具と被削材の接触部で、切りくずの生成、温度、応力、ひずみ、切削抵抗、工具の温度と摩耗を計算します（平面ひずみ、粒子法 SPH）</p>
+      <h1>切削シミュレーター（2D・3D）</h1>
+      <p>工具と被削材の接触部で、切りくずの生成と排出、温度、応力、ひずみ、切削抵抗、工具の温度と摩耗を計算します（粒子法 SPH、2D 平面ひずみと 3D 傾斜切削）</p>
     </div>
     <span class="pill" id="state" data-s="idle">待機</span>
     <button class="primary" id="run">切削開始</button>
@@ -125,10 +128,12 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
   <div class="main">
     <div class="viewport">
       <canvas id="view" aria-label="切削部の粒子と工具"></canvas>
+      <div id="view3d" class="view3d" hidden aria-label="3D の粒子と工具（ドラッグで回転、ホイールで拡大）"></div>
       <div class="overlay tl" id="fields"></div>
       <div class="overlay tr">
         <button class="chipbtn" data-zoom="tip" aria-pressed="true">刃先</button>
         <button class="chipbtn" data-zoom="all" aria-pressed="false">全体</button>
+        <button class="chipbtn" id="section" data-only="3d helix" hidden aria-pressed="false">中央断面</button>
       </div>
       <div class="overlay bl">
         <div class="probe" id="probe" hidden></div>
@@ -140,26 +145,38 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
       <div class="seg" role="group" aria-label="加工方法">
         <button data-mode="ortho" aria-pressed="true">直交切削</button>
         <button data-mode="mill" aria-pressed="false">エンドミル</button>
+        <button data-mode="3d" aria-pressed="false">3D 傾斜切削</button>
+        <button data-mode="helix" aria-pressed="false">3D エンドミル</button>
       </div>
       <fieldset>
         <legend>被削材</legend>
         <div class="row wide"><select id="mat" aria-label="被削材"></select></div>
         <div class="row"><label for="vc">切削速度<small>m/min</small></label><input id="vc" type="number" min="10" max="1500" step="10"></div>
-        <div class="row" data-only="ortho"><label for="h">切取り厚さ h<small>mm</small></label><input id="h" type="number" min="0.02" max="0.3" step="0.01" value="0.1"></div>
-        <div class="row"><label for="width">切削幅 b<small>mm</small></label><input id="width" type="number" min="0.1" max="20" step="0.1" value="1"></div>
+        <div class="row" data-only="ortho 3d"><label for="h">切取り厚さ h<small>mm</small></label><input id="h" type="number" min="0.02" max="0.3" step="0.01" value="0.1"></div>
+        <div class="row" data-only="ortho mill"><label for="width">切削幅 b<small>mm</small></label><input id="width" type="number" min="0.1" max="20" step="0.1" value="1"></div>
+        <div class="row" data-only="3d" hidden><label for="b3">被削材の幅 b<small>mm</small></label><input id="b3" type="number" min="0.1" max="1" step="0.05" value="0.3"></div>
       </fieldset>
-      <fieldset data-only="mill" hidden>
-        <legend>エンドミル（側面加工、ねじれなし）</legend>
+      <fieldset data-only="3d" hidden>
+        <legend>傾斜切削（3D）</legend>
+        <div class="row"><label for="lambda">切れ刃傾き角 λ<small>°</small></label><input id="lambda" type="number" min="0" max="45" step="5" value="15"></div>
+        <div class="row"><label for="sides">被削材の幅方向</label><select id="sides"><option value="periodic">広い板（周期境界）</option><option value="free">幅 b の板（側面自由）</option></select></div>
+        <p class="hint">切れ刃を被削材の表面内で λ だけ傾けます。すくい角・逃げ角は切れ刃に垂直な断面での値です。「広い板」は切れ刃に沿って周期的につながった十分広い板で、側面の影響なしに切りくずの流出角を見られます。「幅 b の板」は側面が自由で、切りくずの横へのはみ出しも出ます。</p>
+      </fieldset>
+      <fieldset data-only="mill helix" hidden>
+        <legend>エンドミル（側面加工）</legend>
         <div class="row"><label for="dia">工具径 D<small>mm</small></label><input id="dia" type="number" min="1" max="40" step="0.5" value="6"></div>
         <div class="row"><label for="flutes">刃数</label><input id="flutes" type="number" min="1" max="8" step="1" value="3"></div>
         <div class="row"><label for="fz">1刃送り fz<small>mm/t</small></label><input id="fz" type="number" min="0.01" max="0.3" step="0.01" value="0.1"></div>
         <div class="row"><label for="ae">半径方向切込み ae<small>mm</small></label><input id="ae" type="number" min="0.05" max="3" step="0.05" value="0.3"></div>
         <div class="row"><label for="dir">切削方向</label><select id="dir"><option value="up">アップカット</option><option value="down">ダウンカット</option></select></div>
-        <p class="hint">切削幅 b は軸方向切込み ap として扱います。1刃が被削材に入ってから抜けるまでを計算します。</p>
+        <div class="row" data-only="helix" hidden><label for="ap">軸方向切込み ap<small>mm</small></label><input id="ap" type="number" min="0.05" max="1" step="0.05" value="0.3"></div>
+        <div class="row" data-only="helix" hidden><label for="helix">ねじれ角 β<small>°</small></label><input id="helix" type="number" min="0" max="60" step="5" value="30"></div>
+        <p class="hint" data-only="mill">工具軸に垂直な断面（ねじれなし）。切削幅 b は軸方向切込み ap として扱います。1刃が被削材に入ってから抜けるまでを計算します。</p>
+        <p class="hint" data-only="helix" hidden>厚さ ap の板の側面を、板を突き抜けたねじれ刃で削ります（右刃・右ねじれと同じ組み合わせ）。下の端が先に食い付き、刃は高さとともに z·tan β / R だけ遅れて入るので、切りくずはシャンク側へ流れます。1刃の通過を計算します。切りくずの厚さ方向に粒子が 4 個以上ないと切りくずが立ち上がらないので、解像度は h/4 以上にしてください。径が大きいほど粒子が増えて時間がかかります（φ2 で数分〜十分ほど）。</p>
       </fieldset>
       <fieldset>
         <legend>工具</legend>
-        <div class="row"><label for="shape">刃先形状</label>
+        <div class="row" data-only="ortho mill"><label for="shape">刃先形状</label>
           <select id="shape"><option value="wedge">標準（すくい角・丸み）</option><option value="chamfer">ネガランド</option><option value="breaker">チップブレーカ溝</option><option value="custom">ファイルから取り込み</option></select></div>
         <div class="row" data-shape="wedge chamfer breaker"><label for="rake">すくい角 α<small>°</small></label><input id="rake" type="number" min="-20" max="30" step="1" value="5"></div>
         <div class="row" data-shape="wedge chamfer breaker"><label for="clear">逃げ角<small>°</small></label><input id="clear" type="number" min="2" max="20" step="1" value="7"></div>
@@ -175,18 +192,18 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="btns" data-shape="custom"><button id="prot" type="button">90° 回転</button><button id="pflip" type="button">左右反転</button></div>
         <p class="hint" data-shape="custom">DXF（LINE、ARC、LWPOLYLINE、POLYLINE）、SVG、CSV（x, y の列）を読み込めます。刃先が一番下に来て、右（+x）へ切削する向きにしてください。開いた線（逃げ面 → 刃先 → すくい面）なら工具本体を自動で足します。</p>
         <p class="hint" id="pinfo" data-shape="custom">ファイルを選んでください。</p>
-        <canvas id="preview" class="preview" aria-label="刃先形状のプレビュー"></canvas>
+        <canvas id="preview" class="preview" data-only="ortho mill" aria-label="刃先形状のプレビュー"></canvas>
         <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" min="0" max="1.5" step="0.05"></div>
         <div class="row"><label>工具材種</label><span class="static">超硬（WC-Co）</span></div>
       </fieldset>
       <fieldset>
         <legend>計算</legend>
-        <div class="row" data-only="ortho"><label for="len">切削長さ<small>mm</small></label><input id="len" type="number" min="0.2" max="4" step="0.1" value="0.6"></div>
-        <div class="row" data-only="mill" hidden><label for="track">刃が抜けた後の追跡<small>°</small></label><input id="track" type="number" min="0" max="40" step="2" value="10"></div>
-        <label class="check"><input id="fracture" type="checkbox" checked>延性破壊（切りくずの分断）</label>
-        <div class="row"><label for="efs">破壊ひずみの倍率</label><input id="efs" type="number" min="0.2" max="5" step="0.1" value="1"></div>
+        <div class="row" data-only="ortho 3d"><label for="len">切削長さ<small>mm</small></label><input id="len" type="number" min="0.2" max="4" step="0.1" value="0.6"></div>
+        <div class="row" data-only="mill helix" hidden><label for="track">刃が抜けた後の追跡<small>°</small></label><input id="track" type="number" min="0" max="40" step="2" value="10"></div>
+        <label class="check" data-only="ortho mill"><input id="fracture" type="checkbox" checked>延性破壊（切りくずの分断）</label>
+        <div class="row" data-only="ortho mill"><label for="efs">破壊ひずみの倍率</label><input id="efs" type="number" min="0.2" max="5" step="0.1" value="1"></div>
         <div class="row"><label for="res">解像度</label>
-          <select id="res"><option value="5">とても粗い（h/5）</option><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option><option value="16">とても細かい（h/16）</option></select></div>
+          <select id="res"><option value="3">ごく粗い（h/3）</option><option value="4">かなり粗い（h/4）</option><option value="5">とても粗い（h/5）</option><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option><option value="16">とても細かい（h/16）</option></select></div>
         <div class="meta" id="meta">—</div>
       </fieldset>
     </aside>
@@ -196,18 +213,18 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 
   <section class="charts">
     <div class="chart">
-      <h2>切削抵抗<span><i style="background: var(--s1)"></i><b id="cf-a">主分力 Fc</b></span><span><i style="background: var(--s2)"></i><b id="cf-b">背分力 Ft</b></span></h2>
+      <h2>切削抵抗<span><i style="background: var(--s1)"></i><b id="cf-a">主分力 Fc</b></span><span><i style="background: var(--s2)"></i><b id="cf-b">背分力 Ft</b></span><span id="cf-c-wrap" hidden><i style="background: var(--s3)"></i><b id="cf-c">横分力 Fr</b></span></h2>
       <canvas id="chart-f" aria-label="切削抵抗の推移"></canvas>
     </div>
     <div class="chart">
-      <h2>温度<span><i style="background: var(--s3)"></i>被削材の最高</span><span><i style="background: var(--s1)"></i>すくい面接触部</span><span><i style="background: var(--s2)"></i>工具の最高</span></h2>
+      <h2 id="h-t">温度<span><i style="background: var(--s3)"></i>被削材の最高</span><span><i style="background: var(--s1)"></i>すくい面接触部</span><span><i style="background: var(--s2)"></i>工具の最高</span></h2>
       <canvas id="chart-t" aria-label="温度の推移"></canvas>
     </div>
     <div class="chart">
-      <h2>工具表面の温度<span><i style="background: var(--s2)"></i>切削終了時点</span><span><i style="background: var(--s1)"></i>定常推定</span></h2>
+      <h2 id="h-ts">工具表面の温度<span><i style="background: var(--s2)"></i>切削終了時点</span><span><i style="background: var(--s1)"></i>定常推定</span></h2>
       <canvas id="chart-ts" aria-label="工具表面の温度分布"></canvas>
     </div>
-    <div class="chart">
+    <div class="chart" data-only="ortho mill">
       <h2>工具表面の摩耗速度<span><i style="background: var(--s3)"></i>Usui 式</span></h2>
       <canvas id="chart-w" aria-label="工具表面の摩耗速度分布"></canvas>
     </div>
@@ -225,6 +242,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <li>エンドミルは工具軸に垂直な断面で、1刃が前の刃の削り跡を削る様子を計算します（ねじれ角なし）。切削力から切削係数 Ktc、Kte、Krc、Kre を求めます。</li>
         <li>刃先形状は、標準のくさび形のほか、ネガランド、チップブレーカ溝、DXF・SVG・CSV で取り込んだ断面形状を使えます。取り込んだ形状は多角形として接触を計算し、工具温度と摩耗もその表面に沿って出します。</li>
         <li>延性破壊は Johnson-Cook の損傷則です。塑性ひずみが応力三軸度・ひずみ速度・温度で決まる破壊ひずみに達すると強度を失い始め、割れた粒子は圧縮しか伝えません。これで切りくずが割れて分断し、ちぎれた片は刃先から離れると「排出」として数えます。</li>
+        <li>「3D 傾斜切削」は同じ材料・接触モデルを3次元にしたものです。切れ刃を傾き角 λ だけ傾けます。「広い板」は切れ刃方向を周期境界にした端のない板で、切りくずが横へ流れる角度（流出角 ηc、Stabler の法則 ηc ≈ λ）と横分力 Fr が出ます。「幅 b の板」は側面が自由で、横へのはみ出しも見られます。</li>
+        <li>「3D エンドミル」はねじれ刃の1刃を3次元で計算します。2D エンドミルの断面を軸方向に積み重ね、刃は高さごとに z·tan β / R だけ遅れて回ります。接線・半径・軸方向の分力から切削係数 Ktc、Krc、Kac（エッジ係数つき）を求め、切りくずが溝に沿って流れる角度も出します。3D では工具温度・摩耗・延性破壊はまだ計算しません。</li>
         <li>「Ti-6Al-4V（ひずみ軟化）」は Calamaz らの TANH 修正 Johnson-Cook 則で、断熱せん断帯ができて鋸歯状の切りくずになります。</li>
       </ul>
     </div>
@@ -237,6 +256,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <li>鋸歯状の切りくずは、せん断帯を表せる細かさ（h/12 以上）が必要で、計算に数分かかります。標準の Johnson-Cook 則の材料では連続形の切りくずになります。</li>
         <li>損傷則の定数は文献値で、SUS304 と A5083 は近い材料の値で代用しています。引張試験から求めた値なので、切削のような高圧の変形では割れが早めに出ることがあります。「破壊ひずみの倍率」で調整できます。応力三軸度が −1/3 より低い（強く圧縮された）部分では損傷は進めていません。</li>
         <li>チップブレーカで切りくずが折れるのは、カールした切りくずが被削材や工具に当たってからなので、切削長さを 1.5 mm 以上にして見てください。工具ホルダーや溝の中での切りくずの詰まりは 3D の現象なので、3軸加工シミュレーター側で扱います。</li>
+        <li>3D は粒子数が2Dの数倍〜10倍になるので、標準は h/5 と粗めで、計算に数分かかります。3D ではまだ工具の温度・摩耗と延性破壊を計算しておらず、工具は熱を受け取らない扱いです（被削材の温度は高めに出ます）。</li>
         <li>標準解像度では切取り厚さを 8 粒子で表すため、温度のピークや刃先丸みの効果は粗く出ます。定量比較には「細かい」を使ってください。Johnson-Cook 定数は文献値で、同じ材料でも文献によって 2 割以上違います。</li>
       </ul>
     </div>

@@ -119,3 +119,43 @@ test('chip breaker groove curls the chip; fracture leaves the S45C chip continuo
   assert.equal(r.pieces, 0, 'continuous chip');
   assert.ok(r.failed < 0.05 * s.N, `failed particles ${r.failed}`);
 });
+
+test('3D oblique cutting (wide plate): chip flow angle follows Stabler, ηc ≈ λ', async () => {
+  const { Cutting3D } = await import('../src/sph3d.js');
+  const run3 = (cfg) => { const s = new Cutting3D(cfg); while (!s.done) s.stepSample(); return s; };
+  const a = run3({ mat: 'S45C', lambda: 0, cutLen: 0.3 }), b = run3({ mat: 'S45C', lambda: 30, cutLen: 0.3 });
+  const ra = a.summary(), rb = b.summary();
+  for (const s of [a, b]) assert.equal(s.nDead, 0);
+  // Orthogonal limit: same specific force as the 2D solver's range, no side force or side flow.
+  assert.ok(ra.kc > 1500 && ra.kc < 2800, `kc ${ra.kc.toFixed(0)}`);
+  assert.ok(Math.abs(ra.fr) < 0.05 * ra.fc, `Fr ${ra.fr.toFixed(2)}`);
+  assert.ok(Math.abs(ra.flow) < 3, `ηc ${ra.flow.toFixed(1)}° at λ = 0`);
+  // Inclined edge: chip flow angle within ±25 % of λ, a side force appears.
+  assert.ok(rb.flow > 22.5 && rb.flow < 37.5, `ηc ${rb.flow.toFixed(1)}° at λ = 30°`);
+  assert.ok(rb.fr > 0.15 * rb.fc, `Fr ${rb.fr.toFixed(1)} vs Fc ${rb.fc.toFixed(1)}`);
+});
+
+test('3D helical end mill (A7075, φ2, down milling): the helix spreads the entry and sends the chip up the flute', async () => {
+  const { Cutting3D } = await import('../src/sph3d.js');
+  const run3 = (cfg) => { const s = new Cutting3D(cfg); while (!s.done) s.stepSample(); return s; };
+  const cfg = { mode: 'helix', mat: 'Al7075', vc: 300, D: 2, z: 3, fz: 0.1, ae: 0.2, ap: 0.3, dir: 'down', nh: 4, track: 5 };
+  const a = run3({ ...cfg, helix: 0 }), b = run3({ ...cfg, helix: 30 });
+  const ra = a.summary(), rb = b.summary();
+  for (const s of [a, b]) assert.equal(s.nDead, 0);
+  // Rotation angle over which the tangential force climbs from 10 % to 90 % of its peak.
+  const rise = (s) => {
+    const h = s.hist, pk = Math.max(...h.fc);
+    const at = (f) => h.axis[h.fc.findIndex((v) => v >= f * pk)];
+    return at(0.9) - at(0.1);
+  };
+  // Straight tooth: the force follows the chip thickness, no axial force, no axial chip flow.
+  assert.ok(ra.Ktc > 300 && ra.Ktc < 2000, `Ktc ${ra.Ktc.toFixed(0)}`);
+  assert.ok(Math.abs(ra.faMax) < 0.05 * ra.ftMax, `Fa ${ra.faMax.toFixed(2)}`);
+  assert.ok(Math.abs(ra.flow) < 5, `ηc ${ra.flow.toFixed(1)}° at β = 0`);
+  // Helix: the tooth enters progressively (the rise takes longer; helix lag ~10°),
+  // the peak drops, the chip pushes towards the shank and flows up the flute.
+  assert.ok(rise(b) > rise(a) + 0.2 * rb.lag, `rise ${rise(a).toFixed(1)}° → ${rise(b).toFixed(1)}° (lag ${rb.lag.toFixed(1)}°)`);
+  assert.ok(rb.ftMax < ra.ftMax, `peak Ft ${ra.ftMax.toFixed(1)} → ${rb.ftMax.toFixed(1)} N`);
+  assert.ok(rb.faMax > 0.15 * rb.ftMax, `Fa ${rb.faMax.toFixed(1)} vs Ft ${rb.ftMax.toFixed(1)}`);
+  assert.ok(rb.flow > 0.8 * 30 && rb.flow < 2 * 30, `ηc ${rb.flow.toFixed(1)}° at β = 30°`);
+});

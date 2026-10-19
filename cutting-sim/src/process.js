@@ -59,9 +59,9 @@ export class Mill {
     if (this.s > 0) { this.b0 = -90 * DEG; this.b1 = -90 * DEG + this.Delta; }
     else { this.b0 = -90 * DEG - this.Delta; this.b1 = -90 * DEG; }
   }
-  build(dx) {
+  // band: thickness of work kept beyond the cut surface (the 3D solver passes a thinner one).
+  build(dx, band = Math.max(3 * this.hRef, 10 * dx)) {
     const { R, fz, ae, s } = this;
-    const band = Math.max(3 * this.hRef, 10 * dx);
     this.band = band;
     const cy = R - ae, px = -s * fz;
     const mA = band / R, a0 = this.b0 - mA, a1 = this.b1 + mA, fixA = 3 * dx / R;

@@ -2,12 +2,13 @@
 import { CuttingSim } from './sph.js';
 import { Mill } from './process.js';
 import { toolOutline } from './tool.js';
+import { Cutting3D } from './sph3d.js';
 
 let sim = null, running = false, t0 = 0, wall = 0;
 
 onmessage = (e) => {
   const d = e.data;
-  if (d.type === 'init') { sim = new CuttingSim(d.cfg); running = false; wall = 0; send(); }
+  if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; send(); }
   else if (d.type === 'run') { if (sim && !sim.done && !running) { running = true; t0 = performance.now(); loop(); } }
   else if (d.type === 'pause') { if (running) wall += performance.now() - t0; running = false; send(); }
 };
@@ -22,6 +23,7 @@ function loop() {
 }
 
 function send() {
+  if (sim instanceof Cutting3D) { send3d(); return; }
   const s = sim, N = s.N;
   let n = 0;
   for (let i = 0; i < N; i++) if (!s.dead[i]) n++;
@@ -47,4 +49,36 @@ function send() {
     profile: s.done ? h.profile() : null,
     hist: s.hist, summary: s.summary(), running, wall: now, dt: s.dt,
   }, [x.buffer, y.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, D.buffer, flag.buffer, tg.buffer]);
+}
+
+// 3D frame: positions and fields of live particles, the tool pose and its normal-section outline.
+function send3d() {
+  const s = sim, N = s.N;
+  let n = 0;
+  for (let i = 0; i < N; i++) if (!s.dead[i]) n++;
+  const F = () => new Float32Array(n);
+  const x = F(), y = F(), z = F(), T = F(), seq = F(), ep = F(), sr = F(), p = F(), flag = new Uint8Array(n);
+  // Periodic box: the edge lies along z there; turn the scene so the cutting velocity points
+  // along +x and the edge shows its inclination λ, as on the machine.
+  const c = s.periodic ? Math.cos(s.lam) : 1, sn = s.periodic ? Math.sin(s.lam) : 0;
+  let k = 0;
+  for (let i = 0; i < N; i++) {
+    if (s.dead[i]) continue;
+    x[k] = (s.x[i] * c + s.z[i] * sn) * 1e3; y[k] = s.y[i] * 1e3; z[k] = (-s.x[i] * sn + s.z[i] * c) * 1e3; T[k] = s.T[i]; seq[k] = s.seq[i] * 1e-6; ep[k] = s.ep[i];
+    sr[k] = s.sr[i]; p[k] = s.p[i] * 1e-6; flag[k] = s.contact[i] ? 2 : s.fixed[i] === 1 ? 1 : 0; k++;
+  }
+  const now = running ? wall + performance.now() - t0 : wall;
+  const outline = s.outline(3 * s.h).map(([a, b]) => [a * 1e3, b * 1e3]);
+  // Helix: positions stay in the solver frame (z = cutter axis); the view turns the axis upright.
+  const m = s.mill;
+  const tool = s.helix
+    ? { helix: true, c: [m.cx * 1e3, m.cy * 1e3], R: m.R * 1e3, rr: s.rr * 1e3, theta: m.beta, kh: s.kh * 1e-3, ap: s.bz * 1e3, outline }
+    : { pos: [s.ox * c * 1e3, s.oy * 1e3, -s.ox * sn * 1e3], lam: s.lam, outline,
+      len: ((s.periodic ? s.bz : s.bz / Math.max(Math.cos(s.lam), 0.3)) + 4 * s.h) * 1e3 };
+  postMessage({
+    type: 'frame', dim: 3, x, y, z, T, seq, ep, sr, p, flag, dx: s.dx * 1e3, h: s.h * 1e3,
+    tool,
+    box: [s.L * 1e3, s.H * 1e3, s.bz * 1e3],
+    hist: s.hist, summary: s.summary(), running, wall: now, dt: s.dt,
+  }, [x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer]);
 }

@@ -3,6 +3,7 @@ import { MATERIALS } from './materials.js';
 import { DEFAULTS } from './sph.js';
 import { chamferProfile, breakerProfile, importProfile } from './profile.js';
 import { makeTool, toolOutline } from './tool.js';
+import { View3D } from './view3d.js';
 
 const $ = (id) => document.getElementById(id);
 const worker = new Worker(URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' })));
@@ -34,6 +35,7 @@ const FIELDS = {
 
 // ---- State ----
 let frame = null, field = 'T', zoom = 'tip', status = 'idle', cfg = null, mode = 'ortho';
+const is3 = (m = mode) => m === '3d' || m === 'helix';   // 3D solver modes
 const view = $('view'), vctx = view.getContext('2d');
 
 // ---- Conditions form ----
@@ -55,10 +57,14 @@ showShapeRows();
 matSel.addEventListener('change', () => { applyMaterialDefaults(); reset(); });
 
 for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => {
+  // The 3D end mill needs about four particles across the chip, so it starts on a small cutter.
+  // Down milling: on a small cutter, up milling loses the chip early near the exit.
+  if (b.dataset.mode === 'helix' && mode !== 'helix') { $('dia').value = '2'; $('ae').value = '0.2'; $('dir').value = 'down'; }
+  if (b.dataset.mode === 'mill' && mode === 'helix') { $('dia').value = '6'; $('ae').value = '0.3'; }
   mode = b.dataset.mode;
   for (const c of document.querySelectorAll('[data-mode]')) c.setAttribute('aria-pressed', c === b);
-  for (const el of document.querySelectorAll('[data-only]')) el.hidden = el.dataset.only !== mode;
-  $('res').value = mode === 'mill' ? '5' : '8';
+  $('res').value = mode === 'ortho' ? '8' : mode === 'helix' ? '4' : '5';
+  if (mode === '3d') $('len').value = '0.4';
   showShapeRows();
   reset();
 });
@@ -66,6 +72,14 @@ for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('cl
 function readCfg() {
   const num = (id) => parseFloat($(id).value);
   const shape = $('shape').value;
+  if (mode === 'helix') return {
+    mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'),
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), dir: $('dir').value, track: num('track'),
+  };
+  if (mode === '3d') return {
+    mode, mat: matSel.value, vc: num('vc'), h: num('h'), b: num('b3'), lambda: num('lambda'), rake: num('rake'),
+    clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'), cutLen: num('len'), sides: $('sides').value,
+  };
   return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
     edgeRadius: num('edge'), mu: num('mu'), width: num('width'), cutLen: num('len'), nh: num('res'),
@@ -76,14 +90,26 @@ function readCfg() {
   };
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track',
-  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs']) $(id).addEventListener('change', reset);
+  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
 const custom = { text: null, name: '', rot: 0, flip: false, profile: null };
+// Visibility: data-only lists the modes an element belongs to, data-shape the tool shapes
+// (3D supports only the standard wedge).
 function showShapeRows() {
-  const sh = $('shape').value;
-  for (const el of document.querySelectorAll('[data-shape]')) el.hidden = !el.dataset.shape.split(' ').includes(sh);
+  const sh = is3() ? 'wedge' : $('shape').value;
+  for (const el of document.querySelectorAll('[data-only], [data-shape]')) {
+    const okMode = !el.dataset.only || el.dataset.only.split(' ').includes(mode);
+    const okShape = !el.dataset.shape || el.dataset.shape.split(' ').includes(sh);
+    el.hidden = !(okMode && okShape);
+  }
+  for (const b of $('fields').children) b.hidden = is3() && b.dataset.f === 'D';
+  if (is3() && field === 'D') field = 'T';
+  view.hidden = is3(); $('view3d').hidden = !is3();
+  if (is3()) view3d();
 }
+let v3 = null;
+const view3d = () => v3 || (v3 = new View3D($('view3d')));
 $('shape').addEventListener('change', () => { showShapeRows(); reset(); });
 function loadCustom() {
   const info = $('pinfo');
@@ -173,8 +199,11 @@ for (const [k, f] of Object.entries(FIELDS)) {
 for (const b of document.querySelectorAll('[data-zoom]')) b.addEventListener('click', () => {
   zoom = b.dataset.zoom;
   for (const c of document.querySelectorAll('[data-zoom]')) c.setAttribute('aria-pressed', c === b);
+  if (is3() && frame && frame.dim === 3) view3d().frame(frame, zoom);
   draw();
 });
+let section = false;
+$('section').addEventListener('click', () => { section = !section; $('section').setAttribute('aria-pressed', section); draw(); });
 
 worker.onmessage = (e) => {
   if (e.data.type !== 'frame') return;
@@ -196,7 +225,7 @@ function fieldValues(f) {
 function range(f, vals) {
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < vals.length; i++) { if (frame.flag[i] === 1) continue; const v = vals[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
-  if (f === 'T') { lo = 20; hi = Math.max(hi, 100); const tg = frame.toolGrid; for (let k = 0; k < tg.T.length; k++) if (tg.inside[k] && tg.T[k] > hi) hi = tg.T[k]; }
+  if (f === 'T') { lo = 20; hi = Math.max(hi, 100); const tg = frame.toolGrid; if (tg) for (let k = 0; k < tg.T.length; k++) if (tg.inside[k] && tg.T[k] > hi) hi = tg.T[k]; }
   if (f === 'seq' || f === 'ep') lo = 0;
   if (f === 'sr') { lo = Math.max(lo, 0); hi = Math.max(hi, lo + 1); }
   if (f === 'D') { lo = 0; hi = 1.5; }
@@ -223,6 +252,7 @@ function toolBitmap(lo, hi) {
 }
 
 function draw() {
+  if (frame && frame.dim === 3) { draw3d(); return; }
   const dpr = window.devicePixelRatio || 1, W = view.clientWidth, H = view.clientHeight;
   if (view.width !== Math.round(W * dpr) || view.height !== Math.round(H * dpr)) { view.width = Math.round(W * dpr); view.height = Math.round(H * dpr); }
   const cw = view.width, ch = view.height;
@@ -298,6 +328,14 @@ function draw() {
   $('lg-name').textContent = (f.unit ? `${f.label} [${f.unit}]` : f.label) + (field === 'T' ? (frame.toolGrid.steady ? '・工具は定常推定' : '・工具を含む') : '');
 }
 new ResizeObserver(() => { draw(); drawCharts(); }).observe(view);
+
+function draw3d() {
+  const vals = fieldValues(field), [lo, hi] = range(field, vals), f = FIELDS[field];
+  view3d().update(frame, vals, lo, hi, LUT[f.map], section);
+  $('lg-bar').style.background = cssGrad(f.map);
+  $('lg-lo').textContent = f.fmt(lo); $('lg-hi').textContent = f.fmt(hi);
+  $('lg-name').textContent = (f.unit ? `${f.label} [${f.unit}]` : f.label) + (section ? '・中央断面' : '') + '・ドラッグで回転';
+}
 new ResizeObserver(() => { if (cfg) drawPreview(); }).observe($('preview'));
 
 // Probe: nearest particle under the pointer.
@@ -355,6 +393,36 @@ function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty }) 
   }
 }
 function drawCharts() {
+  const d3 = cfg && cfg.mode === '3d', hx = cfg && cfg.mode === 'helix';
+  $('cf-c-wrap').hidden = !(d3 || hx);
+  if (hx) {
+    const h = frame && frame.dim === 3 ? frame.hist : { axis: [], fc: [], ft: [], fr: [], tmax: [], flow: [] };
+    const xmax = frame && frame.dim === 3 ? Math.max(1, frame.summary.arc + frame.summary.lag + frame.summary.track + 6) : 40;
+    const xl = '横軸 刃の回転角 [°]（下端の刃、最下点から）';
+    lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
+    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }], { xmax, unit: '°C', xlabel: xl });
+    lineChart($('chart-ts'), h.axis, [{ data: h.flow.map((v) => (v == null ? null : Math.max(0, v))), color: '--s1' }, { data: h.axis.map(() => cfg.helix), color: '--s2', dot: false }],
+      { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します' });
+    $('cf-a').textContent = '接線分力 Ft'; $('cf-b').textContent = '半径分力 Fr'; $('cf-c').textContent = '軸方向分力 Fa';
+    $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span>';
+    $('h-ts').innerHTML = '切りくず流出角 ηc<span><i style="background: var(--s1)"></i>計算値</span><span><i style="background: var(--s2)"></i>ねじれ角 β</span>';
+    return;
+  }
+  if (d3) {
+    const h = frame && frame.dim === 3 ? frame.hist : { axis: [], fc: [], ft: [], fr: [], tmax: [], flow: [] };
+    const xmax = frame && frame.dim === 3 ? Math.max(cfg.cutLen, frame.summary.travel, ...h.axis) : cfg.cutLen;
+    const xl = '横軸 工具の移動量 [mm]';
+    lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
+    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }], { xmax, unit: '°C', xlabel: xl });
+    lineChart($('chart-ts'), h.axis, [{ data: h.flow.map((v) => (v == null ? null : Math.max(0, v))), color: '--s1' }, { data: h.axis.map(() => cfg.lambda), color: '--s2', dot: false }],
+      { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します' });
+    $('cf-a').textContent = '主分力 Fc'; $('cf-b').textContent = '背分力 Ft'; $('cf-c').textContent = '横分力 Fr';
+    $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span>';
+    $('h-ts').innerHTML = '切りくず流出角 ηc<span><i style="background: var(--s1)"></i>計算値</span><span><i style="background: var(--s2)"></i>傾き角 λ（Stabler の法則）</span>';
+    return;
+  }
+  $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span><span><i style="background: var(--s1)"></i>すくい面接触部</span><span><i style="background: var(--s2)"></i>工具の最高</span>';
+  $('h-ts').innerHTML = '工具表面の温度<span><i style="background: var(--s2)"></i>切削終了時点</span><span><i style="background: var(--s1)"></i>定常推定</span>';
   const mill = cfg && cfg.mode === 'mill';
   const h = frame ? frame.hist : { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [] };
   const xmax = mill ? (frame ? Math.max(1, frame.summary.arc + frame.summary.track + 6) : 40) : cfg ? cfg.cutLen : 1;
@@ -374,6 +442,34 @@ function drawCharts() {
 // ---- Readouts ----
 const f0 = (v) => v.toFixed(0), f1 = (v) => v.toFixed(1), f3 = (v) => v.toFixed(3);
 const CELLS = {
+  '3d': [
+    ['主分力 Fc', (s) => f1(s.fc), 'N', () => '後半区間の平均'],
+    ['背分力 Ft', (s) => f1(s.ft), 'N', () => '工具を押し上げる向き'],
+    ['横分力 Fr', (s) => f1(s.fr), 'N', () => '切削方向に直角、表面内の向き'],
+    ['比切削抵抗 kc', (s) => f0(s.kc), 'N/mm²', (s) => `便覧値の目安 ${s.kcRef}`],
+    ['切りくず流出角 ηc', (s) => (s.flow == null ? '—' : f1(s.flow)), '°', (s) => `傾き角 λ = ${s.lambda}°（Stabler：ηc ≈ λ）`],
+    ['切りくず厚さ hc', (s) => (s.ratio > 0 ? f3(s.hc) : '—'), 'mm', (s) => `切りくず厚さ比 ${s.ratio > 0 ? s.ratio.toFixed(2) : '—'}（中央部）`],
+    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '工具への熱の逃げは含まない'],
+    ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', () => '切りくずの裏面付近'],
+    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['工具の移動量', (s) => f3(s.travel), 'mm', () => '傾けた刃が全幅にかかるまでを含む'],
+    ['粒子数', (s) => s.N.toLocaleString(), '個', (s) => `間隔 ${s.dx.toFixed(0)} µm`],
+    ['質量スケーリング', (s) => `×${f0(s.ms)}`, '', () => '慣性だけ密度を上げて高速化'],
+  ],
+  helix: [
+    ['接線分力 Ft の最大', (s) => f1(s.ftMax), 'N', () => '1刃の通過中、刃の各点の接線方向の和'],
+    ['半径分力 Fr の最大', (s) => f1(s.frMax), 'N', () => '工具の中心へ向かう向きが正'],
+    ['軸方向分力 Fa', (s) => f1(s.faMax), 'N', () => '絶対値の最大。被削材をシャンク側へ引く向きが正'],
+    ['接線方向の切削係数', (s) => (s.done ? f0(s.Ktc) : '—'), 'N/mm²', (s) => `エッジ係数 Kte ${s.done ? f1(s.Kte) : '—'} N/mm`],
+    ['半径方向の切削係数', (s) => (s.done ? f0(s.Krc) : '—'), 'N/mm²', (s) => `エッジ係数 Kre ${s.done ? f1(s.Kre) : '—'} N/mm`],
+    ['軸方向の切削係数', (s) => (s.done ? f0(s.Kac) : '—'), 'N/mm²', (s) => `エッジ係数 Kae ${s.done ? f1(s.Kae) : '—'} N/mm`],
+    ['切りくず流出角 ηc', (s) => (s.flow == null ? '—' : f1(s.flow)), '°', (s) => `ねじれ角 β = ${s.helix}°（Stabler：ηc ≈ β）`],
+    ['最大切取り厚さ', (s) => f3(s.hmax), 'mm', (s) => `接触角 ${f1(s.arc)}°、刃の遅れ ${f1(s.lag)}°`],
+    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '工具への熱の逃げは含まない'],
+    ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', () => '切りくずの裏面付近'],
+    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['粒子数', (s) => s.N.toLocaleString(), '個', (s) => `間隔 ${s.dx.toFixed(0)} µm · 質量スケーリング ×${f0(s.ms)}`],
+  ],
   ortho: [
     ['主分力 Fc', (s) => f0(s.fc), 'N', () => '後半区間の平均'],
     ['背分力 Ft', (s) => f0(s.ft), 'N', () => '工具を押し上げる向き'],
@@ -429,9 +525,10 @@ function readouts() {
     $(`rs${i}`).textContent = has ? sub(s) : '—';
   });
   $('prog').style.width = s.progress * 100 + '%';
-  $('clock').textContent = (cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `)
+  $('clock').textContent = (cfg.mode === 'helix' ? `回転角 ${f1(s.angle)}° · ${f0(s.progress * 100)} % · ` : cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : cfg.mode === '3d' ? `移動 ${f3(s.travel)} mm · ${f0(s.progress * 100)} % · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `)
     + `${(s.t * 1e6).toFixed(1)} µs · 計算 ${(frame.wall / 1000).toFixed(0)} s`;
-  $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ`;
+  $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ`
+    + (is3(cfg.mode) ? ' · 3D は計算に数分〜十数分かかります' : '');
 }
 
 reset();
