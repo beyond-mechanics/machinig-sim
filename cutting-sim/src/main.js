@@ -1,6 +1,8 @@
 // UI: condition form, particle field view (Canvas 2D), charts and readouts.
 import { MATERIALS } from './materials.js';
 import { DEFAULTS } from './sph.js';
+import { chamferProfile, breakerProfile, importProfile } from './profile.js';
+import { makeTool, toolOutline } from './tool.js';
 
 const $ = (id) => document.getElementById(id);
 const worker = new Worker(URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' })));
@@ -27,6 +29,7 @@ const FIELDS = {
   ep: { label: '相当塑性ひずみ', unit: '', map: 'turbo', fmt: (v) => v.toFixed(2) },
   sr: { label: 'ひずみ速度', unit: 'log₁₀ 1/s', map: 'turbo', fmt: (v) => v.toFixed(1), log: true },
   p: { label: '静水圧', unit: 'MPa', map: 'div', fmt: (v) => v.toFixed(0) },
+  D: { label: '損傷度', unit: '1 で割れ始め', map: 'turbo', fmt: (v) => v.toFixed(1) },
 };
 
 // ---- State ----
@@ -48,6 +51,7 @@ function applyMaterialDefaults() {
   if (m.nh && mode === 'ortho') $('res').value = String(m.nh);
 }
 applyMaterialDefaults();
+showShapeRows();
 matSel.addEventListener('change', () => { applyMaterialDefaults(); reset(); });
 
 for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', () => {
@@ -55,21 +59,89 @@ for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('cl
   for (const c of document.querySelectorAll('[data-mode]')) c.setAttribute('aria-pressed', c === b);
   for (const el of document.querySelectorAll('[data-only]')) el.hidden = el.dataset.only !== mode;
   $('res').value = mode === 'mill' ? '5' : '8';
+  showShapeRows();
   reset();
 });
 
 function readCfg() {
   const num = (id) => parseFloat($(id).value);
+  const shape = $('shape').value;
   return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
     edgeRadius: num('edge'), mu: num('mu'), width: num('width'), cutLen: num('len'), nh: num('res'),
-    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value,
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'),
+    tool: shape === 'custom' && !custom.profile ? 'wedge' : shape, land: num('land'), landDeg: num('landDeg'),
+    gw: num('gw'), gd: num('gd'), wallDeg: num('wallDeg'), wh: num('wh'), profile: shape === 'custom' ? custom.profile : null,
+    fracture: $('fracture').checked, efScale: num('efs'),
   };
 }
-for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir']) $(id).addEventListener('change', reset);
+for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track',
+  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs']) $(id).addEventListener('change', reset);
+
+// ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
+const custom = { text: null, name: '', rot: 0, flip: false, profile: null };
+function showShapeRows() {
+  const sh = $('shape').value;
+  for (const el of document.querySelectorAll('[data-shape]')) el.hidden = !el.dataset.shape.split(' ').includes(sh);
+}
+$('shape').addEventListener('change', () => { showShapeRows(); reset(); });
+function loadCustom() {
+  const info = $('pinfo');
+  if (custom.text == null) { custom.profile = null; info.textContent = 'ファイルを選んでください。'; info.classList.remove('err'); return; }
+  try {
+    const r = importProfile(custom.text, { name: custom.name, unit: $('punit').value, rot: custom.rot, flip: custom.flip });
+    custom.profile = r.profile;
+    const i = r.info;
+    info.textContent = `${custom.name}：${i.points.toLocaleString()} 点、大きさ ${(i.size * 1e3).toFixed(2)} mm（単位 ${{ mm: 'mm', um: 'µm', in: 'inch' }[i.unit]}）、${i.closed ? '閉じた輪郭' : '開いた線に工具本体を補完'}`;
+    info.classList.remove('err');
+  } catch (err) {
+    custom.profile = null; info.textContent = err.message; info.classList.add('err');
+  }
+}
+$('pfile').addEventListener('change', async () => {
+  const f = $('pfile').files[0];
+  if (!f) return;
+  custom.text = await f.text(); custom.name = f.name; custom.rot = 0; custom.flip = false;
+  loadCustom(); reset();
+});
+$('punit').addEventListener('change', () => { loadCustom(); reset(); });
+$('prot').addEventListener('click', () => { custom.rot = (custom.rot + 1) % 4; loadCustom(); reset(); });
+$('pflip').addEventListener('click', () => { custom.flip = !custom.flip; loadCustom(); reset(); });
+
+// Outline of the chosen shape in the tool frame [m], cutting edge (lowest point) at the origin.
+function shapeOutline(c) {
+  const sp = { rake: c.rake, clearance: c.clearance, r: c.edgeRadius, land: c.land, landDeg: c.landDeg, gw: c.gw, gd: c.gd, wallDeg: c.wallDeg, wh: c.wh };
+  if (c.tool === 'chamfer') return chamferProfile(sp);
+  if (c.tool === 'breaker') return breakerProfile(sp);
+  if (c.tool === 'custom' && c.profile) return c.profile;
+  const t = makeTool({ rakeDeg: c.rake, clearanceDeg: c.clearance, edgeRadius: c.edgeRadius * 1e-6 });
+  return toolOutline(t, 3e-3).map(([u, w]) => [u, w + t.r]);
+}
+function drawPreview() {
+  const cv = $('preview'), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const c = cv.getContext('2d'), css = getComputedStyle(document.documentElement);
+  c.scale(dpr, dpr); c.clearRect(0, 0, W, H);
+  const h = (mode === 'mill' ? cfg.fz : cfg.h) * 1e-3, span = Math.max(7 * h, 0.5e-3);
+  const s = Math.min(W / span, H / (span * H / W)), u0 = -0.62 * span, w0 = -0.18 * span * H / W;
+  const X = (u) => (u - u0) * s, Y = (w) => H - (w - w0) * s;
+  // Work below the machined surface and the layer still to be cut (thickness h) ahead of the edge.
+  c.fillStyle = css.getPropertyValue('--rule'); c.fillRect(0, Y(0), W, H - Y(0));
+  c.globalAlpha = 0.5; c.fillRect(X(0), Y(h), W - X(0), Y(0) - Y(h)); c.globalAlpha = 1;
+  const pts = shapeOutline(cfg);
+  c.beginPath(); pts.forEach(([u, w], i) => (i ? c.lineTo(X(u), Y(w)) : c.moveTo(X(u), Y(w)))); c.closePath();
+  c.fillStyle = css.getPropertyValue('--tool-b'); c.fill();
+  c.strokeStyle = css.getPropertyValue('--tool-edge'); c.lineWidth = 1.5; c.stroke();
+  c.fillStyle = css.getPropertyValue('--ink-mute'); c.font = `11px ${css.getPropertyValue('--font-mono')}`;
+  c.textAlign = 'left'; c.fillText(`切削方向 →    h = ${(h * 1e3).toFixed(2)} mm`, 6, 14);
+  const bar = span > 1e-3 ? 0.2e-3 : 0.1e-3;
+  c.fillRect(W - 8 - bar * s, H - 10, bar * s, 2); c.textAlign = 'right'; c.fillText(`${bar * 1e3} mm`, W - 8, H - 14);
+}
 
 function reset() {
   cfg = readCfg();
+  drawPreview();
   status = 'idle'; frame = null;
   worker.postMessage({ type: 'init', cfg });
   buildCells();
@@ -127,6 +199,7 @@ function range(f, vals) {
   if (f === 'T') { lo = 20; hi = Math.max(hi, 100); const tg = frame.toolGrid; for (let k = 0; k < tg.T.length; k++) if (tg.inside[k] && tg.T[k] > hi) hi = tg.T[k]; }
   if (f === 'seq' || f === 'ep') lo = 0;
   if (f === 'sr') { lo = Math.max(lo, 0); hi = Math.max(hi, lo + 1); }
+  if (f === 'D') { lo = 0; hi = 1.5; }
   if (f === 'p') { const m = Math.max(Math.abs(lo), Math.abs(hi), 1); lo = -m; hi = m; }
   if (!(hi > lo)) hi = lo + 1;
   return [lo, hi];
@@ -225,6 +298,7 @@ function draw() {
   $('lg-name').textContent = (f.unit ? `${f.label} [${f.unit}]` : f.label) + (field === 'T' ? (frame.toolGrid.steady ? '・工具は定常推定' : '・工具を含む') : '');
 }
 new ResizeObserver(() => { draw(); drawCharts(); }).observe(view);
+new ResizeObserver(() => { if (cfg) drawPreview(); }).observe($('preview'));
 
 // Probe: nearest particle under the pointer.
 view.addEventListener('pointermove', (e) => {
@@ -237,7 +311,7 @@ view.addEventListener('pointermove', (e) => {
   const pr = $('probe');
   if (best < 0) { pr.hidden = true; return; }
   pr.hidden = false;
-  pr.textContent = `${frame.T[best].toFixed(0)} °C · σ ${frame.seq[best].toFixed(0)} MPa · ε ${frame.ep[best].toFixed(2)} · ε̇ ${frame.sr[best].toExponential(1)} /s · p ${frame.p[best].toFixed(0)} MPa`;
+  pr.textContent = `${frame.T[best].toFixed(0)} °C · σ ${frame.seq[best].toFixed(0)} MPa · ε ${frame.ep[best].toFixed(2)} · ε̇ ${frame.sr[best].toExponential(1)} /s · p ${frame.p[best].toFixed(0)} MPa · 損傷 ${frame.D[best].toFixed(2)}`;
 });
 view.addEventListener('pointerleave', () => { $('probe').hidden = true; });
 
@@ -283,7 +357,7 @@ function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty }) 
 function drawCharts() {
   const mill = cfg && cfg.mode === 'mill';
   const h = frame ? frame.hist : { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [] };
-  const xmax = mill ? (frame ? Math.max(1, frame.summary.arc + 8) : 30) : cfg ? cfg.cutLen : 1;
+  const xmax = mill ? (frame ? Math.max(1, frame.summary.arc + frame.summary.track + 6) : 40) : cfg ? cfg.cutLen : 1;
   const xl = mill ? '横軸 刃の回転角 [°]' : '横軸 切削長さ [mm]';
   lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], { xmax, unit: 'N', xlabel: xl });
   lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }, { data: h.ttool, color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
@@ -313,6 +387,10 @@ const CELLS = {
     ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', (s) => `最大ひずみ速度 ${s.edMax.toExponential(1)} /s`],
     ['工具へ流れる熱', (s) => f1(s.qTool), 'W', () => '摩擦熱の分担と接触面の熱伝導'],
     ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['切りくずのカール半径', (s) => (s.curl == null ? '—' : isFinite(s.curl) ? f3(s.curl) : '∞'), 'mm', (s) => (s.curl == null ? '切りくずが伸びると表示' : isFinite(s.curl) ? '円で近似した上向きカール' : 'ほぼまっすぐ')],
+    ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `刃先から離れて排出 ${s.evacuated} 粒子`],
+    ['割れた粒子', (s) => f0(s.failed), '個', () => '損傷度 1 以上（延性破壊）'],
+    ['実効すくい角', (s) => f1(s.toolRake), '°', () => '刃先から 0.3〜1.0 h の工具表面'],
   ],
   mill: [
     ['接線分力 Ft の最大', (s) => f0(s.ftMax), 'N', () => '1刃の通過中'],
@@ -327,6 +405,10 @@ const CELLS = {
     ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', (s) => `最大ひずみ速度 ${s.edMax.toExponential(1)} /s`],
     ['刃の回転角', (s) => f1(s.angle), '°', () => '最下点から'],
     ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['切りくずの排出速度', (s) => (s.ejectV == null ? '—' : f0(s.ejectV)), 'm/min', (s) => (s.ejectAng == null ? '刃が抜けて切りくずが離れると表示' : `出口の接線から ${f0(s.ejectAng)}°（外向きが正）`)],
+    ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `刃先から離れて排出 ${s.evacuated} 粒子`],
+    ['割れた粒子', (s) => f0(s.failed), '個', () => '損傷度 1 以上（延性破壊）'],
+    ['実効すくい角', (s) => f1(s.toolRake), '°', () => '刃先から 0.3〜1.0 h の工具表面'],
   ],
 };
 function buildCells() {

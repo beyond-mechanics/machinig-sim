@@ -9,14 +9,13 @@
 //  - steady: the tool field the time-averaged contact (pressure, slip, chip-side temperature,
 //    friction heat) would reach after long cutting, solved with a Robin interface condition.
 // Wear: Usui rate dW/dt = Aw·σn·Vs·exp(−Bw/T) per surface cell from the time-averaged contact.
-import { localSdf } from './tool.js';
+import { localSdf, arcPos } from './tool.js';
 
 export class ToolHeat {
   constructor(tool, tmat, { cell, Lb, T0, hc }) {
     this.tool = tool; this.tmat = tmat; this.T0 = T0; this.hc = hc; this.a = cell;
-    const r = tool.r;
-    this.u0 = -Lb; this.w0 = -r - 2 * cell;
-    const nu = this.nu = Math.ceil((r + 2 * cell - this.u0) / cell);
+    this.u0 = -Lb; this.w0 = tool.wmin - 2 * cell;
+    const nu = this.nu = Math.ceil((tool.umax + 2 * cell - this.u0) / cell);
     const nw = this.nw = Math.ceil((Lb - this.w0) / cell);
     const n = nu * nw, o = new Float64Array(5);
     this.inside = new Uint8Array(n); this.dir = new Uint8Array(n);
@@ -27,6 +26,12 @@ export class ToolHeat {
         this.inside[k] = 1;
         if (i === 0 || j === nw - 1) this.dir[k] = 1;      // heat-sink boundary of the tool body
       }
+    }
+    // A profile smaller than the box (a whole insert outline) has no cells on the box edges:
+    // hold its far part at T0 instead (the seat and clamp take the heat away).
+    if (!this.dir.some((v) => v)) for (let j = 0; j < nw; j++) for (let i = 0; i < nu; i++) {
+      const k = i + j * nu, u = this.u0 + (i + 0.5) * cell, w = this.w0 + (j + 0.5) * cell;
+      if (this.inside[k] && Math.hypot(u, w - tool.wmin) > 0.75 * Lb) this.dir[k] = 1;
     }
     // Surface cells: inside, free (not sink) and next to the outside.
     const surf = [];
@@ -42,8 +47,7 @@ export class ToolHeat {
     this.s = new Float64Array(ns);
     for (let q = 0; q < ns; q++) {
       const k = surf[q], u = this.u0 + (k % nu + 0.5) * cell, w = this.w0 + (Math.floor(k / nu) + 0.5) * cell;
-      const s1 = u * tool.u1x + w * tool.u1y, s2 = u * tool.u2x + w * tool.u2y;
-      this.s[q] = s1 >= s2 ? Math.max(s1, 0) : -Math.max(s2, 0);
+      this.s[q] = arcPos(tool, u, w, o);
     }
     // Nearest surface cell for every grid cell (contact points land outside the tool).
     this.near = new Int32Array(n);

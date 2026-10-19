@@ -28,17 +28,17 @@ export class Ortho {
       const fixed = j >= ny - 3 || i >= nx - 3 || (i < 3 && y < -h - 1.5 * dx);
       pts.push([x, y, fixed ? 1 : 0]);
     }
-    this.view = { x0: -0.15e-3, x1: this.L + 0.02e-3, y0: -this.H - 0.02e-3, y1: Math.max(0.35e-3, 4.5 * h) };
+    this.view = { x0: -0.15e-3, x1: this.L + 0.02e-3, y0: -this.H - 0.02e-3, y1: Math.max(0.5e-3, 6 * h) };
     return pts;
   }
   init(sim) {
     const t = sim.tool;
-    this.x0 = -t.r - sim.dx;
+    this.x0 = -t.umax - sim.dx;
     this.V = sim.V;
     t.vx = this.V; t.vy = 0; t.om = 0;
     this.pose(sim, 0);
   }
-  pose(sim, time) { setPose(sim.tool, this.x0 + this.V * time, -this.h + sim.tool.r, 0); }
+  pose(sim, time) { setPose(sim.tool, this.x0 + this.V * time, -this.h - sim.tool.wmin, 0); }
   progress(sim) { return (sim.tool.ex - this.x0) / (this.c.cutLen * 1e-3); }
   accumulate(sim) { return this.progress(sim) > 0.5; }
   // Machined surface well behind the tool has unloaded: freeze it (keeps its residual state).
@@ -88,15 +88,15 @@ export class Mill {
     const t = sim.tool, c = this.c;
     this.V = sim.V; this.om = this.V / this.R;
     this.vf = this.s * this.fz * c.z * this.om / (2 * Math.PI);
-    const m = (t.r + 2 * sim.dx + (this.s < 0 ? this.hRef : 0)) / this.R;
+    const m = (Math.max(t.r, t.umax) + 2 * sim.dx + (this.s < 0 ? this.hRef : 0)) / this.R;
     this.bStart = this.b0 - m;
-    this.bEnd = this.s > 0 ? this.b1 + (3 * this.hRef + t.r) / this.R : this.b1 + (t.r + 3 * sim.dx) / this.R;
+    this.bEnd = (this.s > 0 ? this.b1 + (3 * this.hRef + t.r) / this.R : this.b1 + (t.r + 3 * sim.dx) / this.R) + (c.track || 0) * DEG;
     t.om = this.om;
     this.pose(sim, 0);
   }
   angle(time) { return this.bStart + this.om * time; }
   pose(sim, time) {
-    const t = sim.tool, b = this.angle(time), cx = this.vf * time, cy = this.R - this.ae, rr = this.R - t.r;
+    const t = sim.tool, b = this.angle(time), cx = this.vf * time, cy = this.R - this.ae, rr = this.R + t.wmin;
     this.cx = cx; this.cy = cy; this.beta = b;
     t.ox = cx; t.oy = cy; t.vx = this.vf; t.vy = 0;
     setPose(t, cx + rr * Math.cos(b), cy + rr * Math.sin(b), b + Math.PI / 2);

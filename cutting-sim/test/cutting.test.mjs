@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CuttingSim } from '../src/sph.js';
 import { MATERIALS, flowStress } from '../src/materials.js';
-import { makeTool, toolSdf, setPose } from '../src/tool.js';
+import { makeTool, toolSdf, setPose, localSdf, arcPos } from '../src/tool.js';
+import { importProfile, breakerProfile, rakeOf } from '../src/profile.js';
 
 const run = (cfg) => { const s = new CuttingSim(cfg); while (!s.done) s.stepSample(); return s; };
 
@@ -18,6 +19,29 @@ test('tool signed distance: rounded edge, rake face and interior', () => {
   setPose(t, 0, 0, Math.PI / 2);
   assert.ok(Math.abs(toolSdf(t, 0, 30e-6) - 20e-6) < 1e-12);
   assert.ok(Math.abs(t.out[2] - 1) < 1e-9);
+});
+
+test('tool outline import: DXF lines are chained, closed with a body and give a polygon tool', () => {
+  // Open outline in mm drawn as three loose LINEs: flank (6°), a 0.05 mm land at −15°, rake face at 10°.
+  const d = (a) => a * Math.PI / 180, F = [-1.5 * Math.cos(d(6)), 1.5 * Math.sin(d(6))];
+  const L = [0.05 * Math.sin(d(15)), 0.05 * Math.cos(d(15))], T = [L[0] - 1.2 * Math.sin(d(10)), L[1] + 1.2 * Math.cos(d(10))];
+  const line = (p, q) => `0\nLINE\n8\n0\n10\n${p[0]}\n20\n${p[1]}\n11\n${q[0]}\n21\n${q[1]}\n`;
+  const dxf = `0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n${line(L, T)}${line([0, 0], F)}${line([0, 0], L)}0\nENDSEC\n0\nEOF\n`;
+  const { profile, info } = importProfile(dxf, { name: 'tool.dxf' });
+  assert.equal(info.unit, 'mm'); assert.equal(info.closed, false);
+  const t = makeTool({ rakeDeg: 0, clearanceDeg: 7, edgeRadius: 0, profile, cell: 20e-6 }), o = t.out;
+  assert.ok(Math.abs(localSdf(t, 0, -30e-6, o) - 30e-6) < 1e-9, 'below the edge');
+  assert.ok(localSdf(t, -100e-6, 100e-6, o) < 0, 'inside the body');
+  assert.ok(Math.abs(arcPos(t, 20e-6, 300e-6) - 300e-6) < 15e-6, 'arc position up the rake face');
+  assert.ok(arcPos(t, -400e-6, 0) < -350e-6, 'arc position along the flank');
+  const rake = rakeOf(t, 0.1e-3) * 180 / Math.PI;
+  assert.ok(rake > -15 && rake < 10, `effective rake ${rake.toFixed(1)}°`);
+  // A mirrored drawing (cutting toward −x) is refused with a hint.
+  assert.throws(() => importProfile(dxf, { name: 'tool.dxf', flip: true }), /反転/);
+  // The breaker outline is a counter-clockwise loop with the edge at the origin.
+  const b = breakerProfile({ rake: 5, clearance: 7, r: 10, land: 0.1, gw: 0.35, gd: 0.05, wallDeg: 35, wh: 0.06 });
+  let a = 0; for (let i = 0; i < b.length; i++) { const q = b[(i + 1) % b.length]; a += b[i][0] * q[1] - q[0] * b[i][1]; }
+  assert.ok(a > 0); assert.ok(Math.min(...b.map((p) => p[1])) === 0);
 });
 
 test('flow stress: Johnson-Cook trends and strain softening of the tanh model', () => {
@@ -70,7 +94,7 @@ test('higher cutting speed raises the cutting temperature', () => {
 
 test('end mill, A7075: force follows the chip thickness; up and down milling mirror each other', () => {
   const base = { mode: 'mill', mat: 'Al7075', vc: 400, D: 6, z: 3, fz: 0.1, ae: 0.3, nh: 5 };
-  const up = run({ ...base, dir: 'up' }), dn = run({ ...base, dir: 'down' });
+  const up = run({ ...base, dir: 'up' }), dn = run({ ...base, dir: 'down', track: 0 });
   for (const s of [up, dn]) assert.equal(s.nDead, 0);
   const peakAt = (s) => { const h = s.hist; let k = 0; h.fc.forEach((v, i) => { if (v > h.fc[k]) k = i; }); return h.axis[k]; };
   const ru = up.summary(), arc = ru.arc;
@@ -81,4 +105,17 @@ test('end mill, A7075: force follows the chip thickness; up and down milling mir
   assert.ok(ru.Ktc > 400 && ru.Ktc < 2000, `Ktc ${ru.Ktc.toFixed(0)}`);
   assert.ok(ru.Kte > 0 && ru.Kte < 80, `Kte ${ru.Kte.toFixed(1)}`);
   assert.ok(ru.heatRatio > 0.7 && ru.heatRatio < 1.1, `heat / work ${ru.heatRatio.toFixed(2)}`);
+  // After the tooth leaves the work the chip breaks free and is thrown off at about the cutting speed.
+  assert.ok(ru.pieces >= 1, `chip pieces ${ru.pieces}`);
+  assert.ok(ru.ejectV > 0.5 * 400 && ru.ejectV < 2 * 400, `ejection ${ru.ejectV && ru.ejectV.toFixed(0)} m/min`);
+});
+
+test('chip breaker groove curls the chip; fracture leaves the S45C chip continuous', () => {
+  const s = run({ mat: 'S45C', tool: 'breaker', nh: 5, cutLen: 1.2 });
+  const r = s.summary();
+  assert.equal(s.nDead, 0);
+  assert.ok(Number.isFinite(r.curl) && r.curl > 0.05 && r.curl < 1, `curl radius ${r.curl} mm`);
+  assert.ok(r.kc > 1300 && r.kc < 2800, `kc ${r.kc.toFixed(0)}`);
+  assert.equal(r.pieces, 0, 'continuous chip');
+  assert.ok(r.failed < 0.05 * s.N, `failed particles ${r.failed}`);
 });

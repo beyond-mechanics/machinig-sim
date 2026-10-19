@@ -7,11 +7,15 @@
 //    Gray-Monaghan artificial stress against tensile instability.
 //  - Rigid tool with rounded edge, Coulomb friction capped at the shear flow stress, and its own
 //    temperature field and Usui wear estimate (toolheat.js).
+//  - Ductile fracture: Johnson-Cook damage D = Σ Δεp/εf(η, ε̇, T) with linear softening after
+//    initiation; a failed particle keeps only compressive pressure, so cracks open and chips break.
+//  - Tool shape: the analytic wedge, a built-in edge preparation or an imported outline (profile.js).
 //  - Mass scaling (density × ms for inertia only) keeps the explicit step affordable; the default
 //    keeps inertial stress ρ·ms·V² near 4 % of the yield stress so the cut stays quasi-static.
 // Units: SI internally (m, s, Pa, K-differences in °C). Forces are per metre of width.
 import { MATERIALS, TOOLS, flowStress } from './materials.js';
 import { makeTool, toolSdf } from './tool.js';
+import { chamferProfile, breakerProfile, rakeOf } from './profile.js';
 import { ToolHeat } from './toolheat.js';
 import { Ortho, Mill } from './process.js';
 
@@ -24,6 +28,14 @@ export const DEFAULTS = {
   toolMat: 'WC', hc: 1e8,
   // Artificial viscosity coefficients (Monaghan α, β); default 1, or the material's av.
   avAlpha: null, avBeta: null,
+  // Tool shape: 'wedge' (rake, clearance, edge radius), 'chamfer' (negative land of width land [mm]
+  // at landDeg), 'breaker' (land, groove width gw / depth gd [mm], wall angle wallDeg and height
+  // wh [mm]) or 'custom' (profile: closed polygon [[u, w] m], from profile.js importProfile).
+  tool: 'wedge', land: 0.1, landDeg: -20, gw: 0.35, gd: 0.05, wallDeg: 35, wh: 0.06, profile: null,
+  // Ductile fracture (Johnson-Cook damage) and a multiplier on the fracture strain.
+  fracture: true, efScale: 1,
+  // End mill: keep following the chip for this many degrees after the tooth leaves the work.
+  track: 10,
 };
 
 const PI = Math.PI;
@@ -64,7 +76,19 @@ export class CuttingSim {
       this.rho[k] = this.rho0; this.T[k] = c.T0;
     }
 
-    this.tool = makeTool({ rakeDeg: c.rake, clearanceDeg: c.clearance, edgeRadius: c.edgeRadius * 1e-6 });
+    const shape = { rake: c.rake, clearance: c.clearance, r: c.edgeRadius, land: c.land, landDeg: c.landDeg,
+      gw: c.gw, gd: c.gd, wallDeg: c.wallDeg, wh: c.wh };
+    const profile = c.tool === 'chamfer' ? chamferProfile(shape) : c.tool === 'breaker' ? breakerProfile(shape)
+      : c.tool === 'custom' && c.profile ? c.profile : null;
+    const tool = this.tool = makeTool({ rakeDeg: c.rake, clearanceDeg: c.clearance, edgeRadius: c.edgeRadius * 1e-6, profile, cell: 2 * dx });
+    tool.rFace = tool.r;
+    if (tool.poly) {
+      // Effective rake of the outline where the chip leaves the edge; the rake face line then runs
+      // through the edge point (local origin) for the chip-thickness measure.
+      tool.a = rakeOf(tool, h); tool.rFace = 0;
+      tool.u1x = -Math.sin(tool.a); tool.u1y = Math.cos(tool.a); tool.n1x = Math.cos(tool.a); tool.n1y = Math.sin(tool.a);
+    }
+    this.dmg = f(N); this.frag = new Int32Array(N); this.nEvac = 0; this.chipInfo = null;
     proc.init(this);
     const Lb = Math.max(10 * h, 0.8e-3);
     this.heat = new ToolHeat(this.tool, TOOLS[c.toolMat], { cell: Math.max(dx, Lb / 90), Lb, T0: c.T0, hc: c.hc });
@@ -184,6 +208,7 @@ export class CuttingSim {
 
     // 2. Constitutive update per particle.
     const eps = 0.3, sq23 = Math.sqrt(2 / 3), pCut = -2 * mat.A * 1e6;
+    const dmg = this.dmg, frac = cfg.fracture && mat.D1 != null, dd = mat, efs = cfg.efScale, Tr = mat.Tr, Tm = mat.Tm;
     let seqMax = 0;
     for (let i = 0; i < N; i++) {
       if (fixed[i] === 2) continue;
@@ -200,7 +225,10 @@ export class CuttingSim {
       const tr = dxx + dyy;
       rho[i] += drho[i] * dt;
       p[i] = K * (rho[i] / rho0 - 1);
-      if (p[i] < pCut) { p[i] = pCut; rho[i] = rho0 * (1 + pCut / K); }  // tensile cut-off
+      // Damage softening: full strength up to D = 1, then linear loss of strength until D = 1.5.
+      const fs = dmg[i] <= 1 ? 1 : dmg[i] >= 1.5 ? 0 : 3 - 2 * dmg[i];
+      const pc = pCut * fs;
+      if (p[i] < pc) { p[i] = pc; rho[i] = rho0 * (1 + pc / K); }  // tensile cut-off (none once failed)
       const ddx = dxx - tr / 3, ddy = dyy - tr / 3, ddz = -tr / 3;
       let a = sxx[i], b = syy[i], cz = szz[i], s = sxy[i];
       const na = a + dt * (2 * G * ddx + 2 * s * w);
@@ -209,15 +237,29 @@ export class CuttingSim {
       const ns = s + dt * (2 * G * dxy + w * (b - a));
       a = na; b = nb; cz = nz; s = ns;
       const seq = Math.sqrt(1.5 * (a * a + b * b + cz * cz + 2 * s * s));
-      const sy = flowStress(mat, ep[i], epd[i], T[i]);
+      const sy = flowStress(mat, ep[i], epd[i], T[i]) * fs;
       let dep = 0;
       if (seq > sy) {
-        const sc = sy / seq;
+        const sc = seq > 0 ? sy / seq : 0;
         a *= sc; b *= sc; cz *= sc; s *= sc;
-        dep = (seq - sy) / (3 * G);
+        dep = sy > 0 ? (seq - sy) / (3 * G) : 0;
         ep[i] += dep;
         T[i] += cfg.beta * sy * dep / (mat.rho * mat.c);
-      }
+        // Johnson-Cook fracture strain, accumulated only under a tensile mean stress (η > 0):
+        // the constants come from tensile tests, and applied to the compressed primary and
+        // secondary shear zones they would turn the whole chip to powder. Particles at a free or
+        // contact surface (incomplete kernel support, det M < 0.6) are skipped: their SPH density,
+        // hence pressure, reads falsely tensile; cracks start one layer inside instead.
+        if (frac && fs > 0 && det > 0.6 && !this.contact[i]) {
+          const eta = -p[i] / Math.max(sy, 1e6);
+          if (eta > 0) {
+            let ts = (T[i] - Tr) / (Tm - Tr); ts = ts < 0 ? 0 : ts > 1 ? 1 : ts;
+            const r = epd[i] > 1 ? Math.log(epd[i]) : 0;
+            const ef = Math.max(0.02, (dd.D1 + dd.D2 * Math.exp(dd.D3 * eta)) * (1 + dd.D4 * r) * (1 + dd.D5 * ts) * efs);
+            dmg[i] += (seq - sy) / (3 * G) / ef;
+          }
+        }
+      } else if (sy === 0) { a = 0; b = 0; cz = 0; s = 0; }
       epd[i] = 0.7 * epd[i] + 0.3 * dep / dt;
       // Total strain rate for display.
       this.sr[i] = sq23 * Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz + 2 * dxy * dxy);
@@ -256,7 +298,9 @@ export class CuttingSim {
       txx += fq * (Rxx[i] + Rxx[j]); tyy += fq * (Ryy[i] + Ryy[j]); txy += fq * (Rxy[i] + Rxy[j]);
       const fx = m * (txx * gx[k] + txy * gy[k]), fy = m * (txy * gx[k] + tyy * gy[k]);
       ax[i] += fx; ay[i] += fy; ax[j] -= fx; ay[j] -= fy;
-      // XSPH: move particles with a locally averaged velocity to keep the lattice orderly.
+      // XSPH: move particles with a locally averaged velocity to keep the lattice orderly
+      // (not across a crack: failed particles do not drag their neighbours along).
+      if (dmg[i] >= 1.5 || dmg[j] >= 1.5) continue;
       const wx = xs * pw[k] * 2 / (rho[i] + rho[j]);
       const ux = (vx[j] - vx[i]) * wx, uy = (vy[j] - vy[i]) * wx;
       cx[i] += ux; cy[i] += uy; cx[j] -= ux; cy[j] -= uy;
@@ -293,7 +337,8 @@ export class CuttingSim {
       let jt = 0, eTool = 0;
       if (vt > 1e-12) {
         tx /= vt; ty /= vt;
-        const tauMax = cfg.mShear * flowStress(mat, ep[i], epd[i], T[i]) / Math.sqrt(3);
+        const fsd = this.dmg[i] <= 1 ? 1 : Math.max(0, 3 - 2 * this.dmg[i]);
+        const tauMax = cfg.mShear * flowStress(mat, ep[i], epd[i], T[i]) * fsd / Math.sqrt(3);
         jt = Math.min(m * vt, mu * jn, tauMax * dx * dt);
         const e = jt * (vt - 0.5 * jt / m);
         T[i] += fw * e / (mReal * cMat);
@@ -367,11 +412,73 @@ export class CuttingSim {
     this.impX = 0; this.impY = 0; this.impT = 0; this.qTool = 0;
     let tmax = -Infinity;
     for (let i = 0; i < this.N; i++) if (this.T[i] > tmax) tmax = this.T[i];
+    this.analyzeChips();
     const hst = this.hist;
     hst.axis.push(this.proc.axis(this)); hst.fc.push(f.a); hst.ft.push(f.b); hst.tmax.push(tmax);
     hst.trake.push(this.tRake); hst.ttool.push(this.heat.maxT());
     hst.hnom.push(this.proc instanceof Mill ? this.proc.hNom() * 1e3 : this.cfg.h);
     return { fc: f.a, ft: f.b, tmax };
+  }
+
+  // Chip pieces: connected groups of intact particles (pairs closer than 1.6 Δx, neither failed).
+  // A group holding no supported particle has broken off. Pieces farther than rEvac from the
+  // cutting edge have left the cutting zone: they are counted as evacuated and removed.
+  analyzeChips() {
+    const { N, x, y, vx, vy, dmg, fixed, dead, pi, pj, np, dx } = this, par = this.frag;
+    for (let i = 0; i < N; i++) par[i] = i;
+    const find = (i) => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+    const r2 = (1.6 * dx) ** 2;
+    for (let k = 0; k < np; k++) {
+      const i = pi[k], j = pj[k];
+      if (dmg[i] >= 1.5 || dmg[j] >= 1.5 || dead[i] || dead[j]) continue;
+      if ((x[i] - x[j]) ** 2 + (y[i] - y[j]) ** 2 > r2) continue;
+      const a = find(i), b = find(j); if (a !== b) par[a] = b;
+    }
+    const g = new Map();
+    for (let i = 0; i < N; i++) {
+      if (dead[i]) continue;
+      const r = find(i);
+      let e = g.get(r);
+      if (!e) { e = { n: 0, sx: 0, sy: 0, vx: 0, vy: 0, base: false, ids: [] }; g.set(r, e); }
+      e.n++; e.sx += x[i]; e.sy += y[i]; e.vx += vx[i]; e.vy += vy[i]; e.ids.push(i);
+      if (fixed[i]) e.base = true;
+    }
+    const t = this.tool, rEvac = Math.max(1.2e-3, 12 * this.h);
+    let pieces = 0, big = null;
+    for (const e of g.values()) {
+      if (e.base) continue;
+      const cx = e.sx / e.n, cy = e.sy / e.n;
+      if (e.n >= 6) {
+        pieces++;
+        if (!big || e.n > big.n) big = { n: e.n, vx: e.vx / e.n, vy: e.vy / e.n, x: cx, y: cy };
+      }
+      if (Math.hypot(cx - t.ex, cy - t.ey) > rEvac) { for (const i of e.ids) dead[i] = 2; this.nEvac += e.n; }
+    }
+    this.chipInfo = { pieces, big, failed: this.countFailed() };
+  }
+
+  countFailed() { let c = 0; for (let i = 0; i < this.N; i++) if (!this.dead[i] && this.dmg[i] >= 1) c++; return c; }
+
+  // Chip up-curl radius (orthogonal cutting): circle fitted to the chip above the work surface.
+  curlRadius() {
+    const h = this.h, xs = [], ys = [];
+    for (let i = 0; i < this.N; i++) if (!this.dead[i] && this.y[i] > h) { xs.push(this.x[i]); ys.push(this.y[i]); }
+    const n = xs.length;
+    if (n < 20) return null;
+    const mx = xs.reduce((a, b) => a + b) / n, my = ys.reduce((a, b) => a + b) / n;
+    let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0, ext = 0;
+    for (let k = 0; k < n; k++) {
+      const u = xs[k] - mx, v = ys[k] - my;
+      suu += u * u; svv += v * v; suv += u * v; suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
+      ext = Math.max(ext, Math.hypot(u, v));
+    }
+    if (ext < 1.5 * h) return null;
+    const det = suu * svv - suv * suv;
+    if (Math.abs(det) < 1e-30) return Infinity;
+    const b1 = 0.5 * (suuu + suvv), b2 = 0.5 * (svvv + svuu);
+    const uc = (b1 * svv - b2 * suv) / det, vc = (b2 * suu - b1 * suv) / det;
+    const R = Math.sqrt(uc * uc + vc * vc + (suu + svv) / n);
+    return R > 30 * h ? Infinity : R;
   }
 
   // Chip thickness: largest distance from the rake face among chip particles 1–2.2 h up the face.
@@ -383,7 +490,7 @@ export class CuttingSim {
       const rx = this.x[i] - t.ex, ry = this.y[i] - t.ey;
       const s = rx * t.u1x + ry * t.u1y;
       if (s < h || s > 2.2 * h) continue;
-      const d = rx * t.n1x + ry * t.n1y - t.r;
+      const d = rx * t.n1x + ry * t.n1y - t.rFace;
       if (d > 0 && d < 8 * h) ds.push(d);
     }
     if (ds.length < 3) return 0;
@@ -411,6 +518,8 @@ export class CuttingSim {
       kcRef: this.mat.kcRef, done: this.done, heatRatio: this.workIn > 0 ? heat / this.workIn : 0,
       toolT: this.heat.maxT(), toolSteadyT: this.heat.steadyT ? this.heat.maxT(this.heat.steadyT) : null,
       trakeMax: Math.max(cfg.T0, ...hs.trake),
+      pieces: this.chipInfo ? this.chipInfo.pieces : 0, failed: this.chipInfo ? this.chipInfo.failed : 0,
+      evacuated: this.nEvac, toolRake: this.tool.a * 180 / PI,
     };
     let wearCrater = 0, wearFlank = 0;
     if (this.done) for (const r of this.heat.profile()) {
@@ -433,8 +542,18 @@ export class CuttingSim {
         return [(c * shf - sh * sf) / det, (shh * sf - sh * shf) / det];   // [K N/mm², Ke N/mm]
       };
       const [Ktc, Kte] = fit(hs.fc), [Krc, Kre] = fit(hs.ft);
+      // Ejection of the largest free chip piece: speed and angle from the cutter tangent at the
+      // exit point (positive = outward, away from the cutter).
+      let ejectV = null, ejectAng = null;
+      const big = this.chipInfo && this.chipInfo.big;
+      if (big && pr.beta > pr.b1) {
+        const tx = -Math.sin(pr.b1), ty = Math.cos(pr.b1), rx = Math.cos(pr.b1), ry = Math.sin(pr.b1);
+        ejectV = Math.hypot(big.vx, big.vy) * 60;
+        ejectAng = Math.atan2(big.vx * rx + big.vy * ry, big.vx * tx + big.vy * ty) * 180 / PI;
+      }
       return { ...base, ftMax: Math.max(0, ...hs.fc), frMax: Math.max(0, ...hs.ft), hmax: pr.hRef * 1e3,
-        Ktc, Kte, Krc, Kre, angle: pr.axis(this), arc: pr.Delta * 180 / PI, trake: base.trakeMax };
+        Ktc, Kte, Krc, Kre, angle: pr.axis(this), arc: pr.Delta * 180 / PI, trake: base.trakeMax, ejectV, ejectAng,
+        track: cfg.track };
     }
     let from = 0;
     const prog = this.proc.progress(this);
@@ -451,7 +570,7 @@ export class CuttingSim {
     return {
       ...base, fc, ft, kc: fc / (b * cfg.h), hc: hc * 1e3, ratio: hc > 0 ? hc / this.h : 0,
       phi: phi * 180 / PI, phiMerchant: phiM * 180 / PI, trake: avg(hs.trake, from), fcVar: fc > 0 ? fcStd / fc : 0,
-      travel: prog * cfg.cutLen,
+      travel: prog * cfg.cutLen, curl: ((r) => (r == null || !isFinite(r) ? r : r * 1e3))(this.curlRadius()),
     };
   }
 }
