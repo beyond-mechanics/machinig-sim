@@ -164,12 +164,21 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         </fieldset>
         <fieldset>
           <legend>工具</legend>
-          <div class="seg" style="grid-template-columns:repeat(2,1fr)"><button data-ttype="flat" aria-pressed="true">フラット</button><button data-ttype="ball" aria-pressed="false">ボール</button></div>
+          <div class="seg"><button data-ttype="flat" aria-pressed="true">フラット</button><button data-ttype="ball" aria-pressed="false">ボール</button><button data-ttype="bull" aria-pressed="false">ラジアス</button></div>
+          <div class="row" id="rowCR" hidden><label for="tCR">コーナー R <span class="unit">mm</span></label><input type="number" id="tCR" min="0.1" max="10" step="0.1" value="1"></div>
           <div class="row"><label for="tD">直径 D <span class="unit">mm</span></label><input type="number" id="tD" min="1" max="32" step="0.5" value="10"></div>
           <div class="row"><label for="tN">刃数</label><input type="number" id="tN" min="1" max="8" step="1" value="3"></div>
           <div class="row"><label for="tHelix">ねじれ角 <span class="unit">°</span></label><input type="number" id="tHelix" min="0" max="60" step="1" value="30"></div>
           <div class="row"><label for="tFlute">刃長 <span class="unit">mm</span></label><input type="number" id="tFlute" min="2" max="80" step="1" value="25"></div>
           <div class="row"><label for="tStick">突出し長 <span class="unit">mm</span></label><input type="number" id="tStick" min="5" max="150" step="1" value="30"></div>
+          <div class="row"><label for="tShank">シャンク径 <span class="unit">mm</span></label><input type="number" id="tShank" min="0" max="50" step="0.5" placeholder="= 直径"></div>
+          <div class="row"><label for="tNeckD">首の径 <span class="unit">mm</span></label><input type="number" id="tNeckD" min="0" max="50" step="0.1" placeholder="なし"></div>
+          <div class="row"><label for="tNeckL">首下長さ <span class="unit">mm</span></label><input type="number" id="tNeckL" min="0" max="300" step="1" placeholder="なし"></div>
+          <div class="row"><label for="tHolder">ホルダー</label><select id="tHolder"></select></div>
+          <div class="seg"><button id="stlToolBtn" aria-pressed="false">工具 STL</button><button id="stlHolderBtn" aria-pressed="false">ホルダー STL</button><button id="libBtn" aria-pressed="false">工具ライブラリ</button></div>
+          <input type="file" id="stlToolFile" accept=".stl" hidden><input type="file" id="stlHolderFile" accept=".stl" hidden><input type="file" id="libFile" accept=".json,application/json" hidden>
+          <button id="assetClear" hidden>読み込んだ工具・ホルダーを外す</button>
+          <p class="hint" id="toolInfo" style="white-space:pre-line">ホルダーを選ぶと、シャンク・ホルダー・主軸端が素材に当たらないかを調べ、工具とホルダーを段付きのはりとして剛性を計算します。STL は工具の軸を Z、刃先を下にして書き出してください (寸法は mm)。工具ライブラリは Autodesk Fusion の JSON を読み、T 番号ごとの工具とホルダーを使います。</p>
           <p class="hint">プログラムのコメントに工具寸法があれば、その工具番号ではそちらを使います (直径・形状・刃数など、書かれている項目だけ)。</p>
         </fieldset>
         <fieldset>
@@ -258,6 +267,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li><b>たわみと応力</b>: 工具を片持ちはり(刃部の等価直径 0.8D、超硬 E=600 GPa)と主軸側ばねの直列で扱い、根元の曲げとねじりから相当応力を出します。</li>
           <li><b>ワーク(薄肉壁)の変形</b>: 工具が押している壁の厚さ・自由高さ・長さを高さマップから読み取り、根元固定の片持ち板(有効幅は荷重高さの約2倍)として剛性と質量を出します。壁は壁の法線方向の1自由度振動系として工具と連成し、切りくず厚さは工具と壁の相対変位で決まります。壁が逃げた分だけ削り残しが生じます。</li>
           <li><b>素材とプログラムの取り込み</b>: 素材は直方体・丸棒・STL から選べます。STL は真上から見た一番上の面を高さマップにします (上から見える穴やポケットは残り、オーバーハングの下は埋まります)。プログラム原点は、切削送りが素材に一番よく収まる位置を自動で選ぶか、素材上面の角から測った位置で指定します。T□ M6 で工具が替わり、寸法はプログラムのコメントから読みます。</li>
+          <li><b>工具とホルダー</b>: シャンク径・首・ホルダー(焼きばめ・コレット・ミーリングチャック・サイドロック)を指定するか、工具 STL・ホルダー STL・Fusion 360 の工具ライブラリ(JSON)を読み込めます。剛性は段付きの片持ちはりとして積分し、工具 STL の先端形状(ドリルの円すい・ボールなど)はそのまま削った形に出ます。シャンクやホルダーが素材に食い込むと、部位と食い込み量を警告し、場所を赤い点で示します。</li>
           <li><b>切粉</b>: 刃が切れ刃から抜けるたびに体積を持った粒子を放出し、重力・空気やクーラントの流れ・工具の回転・素材形状との衝突で動かします。ポケット内に残った量と再切削の回数を数えます。</li>
         </ul>
         <h3>精度とリアルタイム性のトレードオフ</h3>
@@ -265,7 +275,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li>振動の積分には 1 刃あたり数十〜数百ステップが要ります。等倍以下なら加工時間をすべて積分しますが、早送り再生では1フレームあたりの計算量に上限を設け、区間の一部だけを積分して全体を代表させています。びびりの成長速度は実時間より遅く見えることがあります。</li>
           <li>切削係数と動特性は代表値です。実機の値はハンマリング試験(FRF)と切削力測定で同定して入力してください。</li>
           <li>薄肉壁は荷重高さの壁厚だけで剛性を見積もる簡易モデルで、テーパ状の壁や床(薄い底面)のたわみは扱いません。壁の固有振動数は時間刻みの都合で 5 kHz を上限にしています。</li>
-          <li>底刃の切削力(プランジ・ドリル)、工具摩耗、熱は未対応です。固定サイクルの穴あけは材料除去だけを計算します。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
+          <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。底刃の切削力(プランジ・ドリル)、工具摩耗、熱は未対応です。固定サイクルの穴あけは材料除去だけを計算します。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
         <h3>見どころ</h3>
@@ -281,7 +291,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="tile"><span class="k">工具たわみ</span><span class="v" id="vD">0.0<small>µm</small></span><span class="s" id="sD">k = 0 N/µm</span></div>
     <div class="tile" id="tileVib"><span class="k">振動振幅</span><span class="v" id="vV">0.0<small>µm</small></span><span class="s" id="sV">同期外成分 0.0 µm</span></div>
     <div class="tile"><span class="k">ワークたわみ</span><span class="v" id="vW">0.0<small>µm</small></span><span class="s" id="sW">剛体として扱い中</span></div>
-    <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s">許容目安 1500 MPa</span></div>
+    <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s" id="stS">許容目安 1500 MPa</span></div>
     <div class="tile"><span class="k">除去率</span><span class="v" id="vM">0.0<small>cm³/min</small></span><span class="s" id="sM">ap 0.00 mm · fz 0.000 mm</span></div>
     <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">素材上に残留 0 · 再切削 0 回</span></div>
   </section>

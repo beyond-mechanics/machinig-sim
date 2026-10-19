@@ -95,7 +95,12 @@ export class CuttingEngine {
       const zr = (k + 0.5) * this.dz;
       this.sliceZ[k] = tipZ + zr;
       let r = R, kap = 1;
-      if (this.tool.type === 'ball' && zr < R) { r = Math.sqrt(Math.max(1e-6, R * R - (R - zr) ** 2)); kap = r / R; }
+      if (this.tool.rAt) {
+        // general edge shape: radius from the profile, κ from its slope (90° on a straight side)
+        r = Math.max(1e-3, this.tool.rAt(zr));
+        const dr = (this.tool.rAt(zr + 0.05) - this.tool.rAt(Math.max(0, zr - 0.05))) / (zr < 0.05 ? 0.05 + zr : 0.1);
+        kap = 1 / Math.sqrt(1 + dr * dr);
+      } else if (this.tool.type === 'ball' && zr < R) { r = Math.sqrt(Math.max(1e-6, R * R - (R - zr) ** 2)); kap = r / R; }
       this.sliceR[k] = r; this.sliceKap[k] = kap;
       this.sliceLag[k] = zr * this.tanB / R;
     }

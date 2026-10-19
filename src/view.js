@@ -218,6 +218,7 @@ export class View {
         const f = fluteProfile(u);
         let rr = R * f.r;
         if (t.type === 'ball' && z < R) rr *= Math.sqrt(Math.max(0, 1 - ((R - z) / R) ** 2));
+        else if (t.rAt) rr *= Math.max(0.02, t.rAt(z)) / R;
         p.setXY(i, x * rr / r, y * rr / r);
         shade = f.shade;
       }
@@ -226,14 +227,37 @@ export class View {
     g.setAttribute('color', new T.BufferAttribute(col, 3));
     g.computeVertexNormals();
     const flute = new T.Mesh(g, this.fluteMat);
-    const shankLen = Math.max(1, t.stickout - fl);
-    const sg = new T.CylinderGeometry(R, R, shankLen, 48); sg.rotateX(Math.PI / 2); sg.translate(0, 0, fl + shankLen / 2);
-    const shank = new T.Mesh(sg, this.shankMat);
-    // collet nut + holder body above the stickout
-    const hg1 = new T.CylinderGeometry(R * 1.9, R * 2.3, 14, 40); hg1.rotateX(Math.PI / 2); hg1.translate(0, 0, t.stickout + 7);
-    const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
-    const hg3 = new T.CylinderGeometry(R * 4.4, R * 4.4, 30, 40); hg3.rotateX(Math.PI / 2); hg3.translate(0, 0, t.stickout + 51);
-    this.spin.add(flute, shank, new T.Mesh(hg1, this.holderMat), new T.Mesh(hg2, this.holderMat), new T.Mesh(hg3, this.holderMat));
+    this.holderMat.color.set(0x2f3338); this.holderMat.emissive.set(0x000000);
+    const bands = t.outline || [];
+    if (t.stlMesh) {
+      // imported cutter: the mesh itself (it spins, so its flutes show)
+      this.spin.add(new T.Mesh(meshGeometry(t.stlMesh, 0), this.fluteMat));
+    } else {
+      this.spin.add(flute);
+      // neck and shank from the outline (or a plain shank up to the stickout)
+      const body = bands.filter(b => b.part === 'shank');
+      if (!body.length) body.push({ z0: fl, z1: Math.max(fl + 1, t.stickout), r: R });
+      for (const b of body) {
+        const sg = new T.CylinderGeometry(b.r, b.r, b.z1 - b.z0, 48); sg.rotateX(Math.PI / 2); sg.translate(0, 0, (b.z0 + b.z1) / 2);
+        this.spin.add(new T.Mesh(sg, this.shankMat));
+      }
+    }
+    if (t.stlHolderMesh) this.spin.add(new T.Mesh(meshGeometry(t.stlHolderMesh, t.stickout), this.holderMat));
+    else if (bands.some(b => b.part === 'holder')) {
+      // holder as a lathe profile through its segments (tapers included)
+      const pts = [];
+      for (const b of bands) if (b.part === 'holder') { pts.push(new T.Vector2(b.r0 ?? b.r, b.z0), new T.Vector2(b.r1 ?? b.r, b.z1)); }
+      pts.unshift(new T.Vector2(Math.max(0.1, (t.shankD || t.D) / 2), pts[0].y));
+      pts.push(new T.Vector2(0.1, pts[pts.length - 1].y));
+      const lg = new T.LatheGeometry(pts, 64); lg.rotateX(Math.PI / 2);
+      this.spin.add(new T.Mesh(lg, this.holderMat));
+    } else {
+      // no holder chosen: the original stylised collet nut + holder body above the stickout
+      const hg1 = new T.CylinderGeometry(R * 1.9, R * 2.3, 14, 40); hg1.rotateX(Math.PI / 2); hg1.translate(0, 0, t.stickout + 7);
+      const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
+      const hg3 = new T.CylinderGeometry(R * 4.4, R * 4.4, 30, 40); hg3.rotateX(Math.PI / 2); hg3.translate(0, 0, t.stickout + 51);
+      this.spin.add(new T.Mesh(hg1, this.holderMat), new T.Mesh(hg2, this.holderMat), new T.Mesh(hg3, this.holderMat));
+    }
     this.spin.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // tool hangs from the pivot: children are offset by -stickout
     this.spin.position.set(0, 0, -t.stickout);
@@ -253,10 +277,31 @@ export class View {
     this.flute = flute;
   }
 
+  // red markers where the shank, holder or spindle touched the stock
+  setHits(hits) {
+    const T = THREE;
+    if (!this.hitPts) {
+      const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.BufferAttribute(new Float32Array(200 * 3), 3).setUsage(T.DynamicDrawUsage));
+      this.hitPts = new T.Points(g, new T.PointsMaterial({ color: 0xff3b30, size: 2.2, sizeAttenuation: true, depthTest: false, transparent: true, opacity: 0.9 }));
+      this.hitPts.renderOrder = 5; this.hitPts.frustumCulled = false;
+      this.scene.add(this.hitPts);
+    }
+    const n = Math.min(200, hits?.length || 0), P = this.hitPts.geometry.attributes.position;
+    for (let i = 0; i < n; i++) P.setXYZ(i, hits[i].x, hits[i].y, hits[i].z + 0.3);
+    this.hitPts.geometry.setDrawRange(0, n);
+    P.needsUpdate = true;
+  }
+
   // tool tip nominal position, deflection [mm] (already exaggerated), spin angle
   // blur: 0 (flutes visible) … 1 (spinning too fast for the eye: a translucent cylinder)
-  updateTool(pos, dx, dy, angle, blur = 0) {
+  updateTool(pos, dx, dy, angle, blur = 0, collide = null) {
     const L = this.toolCfg.stickout;
+    // interference: the colliding part glows red for a moment
+    if (collide) this.hitGlow = 1;
+    this.hitGlow = Math.max(0, (this.hitGlow || 0) - 0.04);
+    this.holderMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0);
+    this.shankMat.emissive.setRGB(0.5 * this.hitGlow, 0, 0);
     this.pivot.position.set(pos.x, pos.y, pos.z + L);
     const sx = Math.max(-0.9, Math.min(0.9, dy / L)), sy = Math.max(-0.9, Math.min(0.9, dx / L));
     this.pivot.rotation.set(Math.asin(sx), -Math.asin(sy), 0);
@@ -564,6 +609,19 @@ function ribbonHelix(turns, pitch, rad) {
 // against the rotation: cylindrical land (margin), primary and secondary clearance down to
 // the heel, the flute gullet around the core, and the rake face rising back to the edge.
 // Returns radius as a fraction of R and a shade (polished land/rake, duller gullet).
+// BufferGeometry from an STL triangle soup, centred on its vertical axis with its lowest point at z0
+function meshGeometry(mesh, z0) {
+  const T = THREE, { tris, min, max } = mesh;
+  const cx = (min[0] + max[0]) / 2, cy = (min[1] + max[1]) / 2;
+  const pos = new Float32Array(tris.length);
+  for (let i = 0; i < tris.length; i += 3) { pos[i] = tris[i] - cx; pos[i + 1] = tris[i + 1] - cy; pos[i + 2] = tris[i + 2] - min[2] + z0; }
+  const g = new T.BufferGeometry();
+  g.setAttribute('position', new T.BufferAttribute(pos, 3));
+  g.setAttribute('color', new T.BufferAttribute(new Float32Array(pos.length).fill(0.82), 3));
+  g.computeVertexNormals();
+  return g;
+}
+
 function fluteProfile(u) {
   const core = 0.62;
   if (u < 0.035) return { r: 1, shade: 1.05 };                                     // land

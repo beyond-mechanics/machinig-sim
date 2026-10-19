@@ -7,6 +7,7 @@ import { MATERIALS } from './materials.js';
 import { SAMPLES } from './samples.js';
 import { decodeText } from './gcode.js';
 import { parseStl } from './workpiece.js';
+import { HOLDERS, parseToolLibrary } from './assembly.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness } from './charts.js';
@@ -65,7 +66,9 @@ function showTools() {
   for (const T of used) {
     const t = sim.toolFor(T), def = sim.tools?.[T];
     const li = document.createElement('li');
-    li.textContent = def ? `T${T}: φ${t.D} ${t.type === 'ball' ? 'ボール' : 'フラット'} ${t.N}枚刃 · 刃長 ${t.fluteLen} · 突出し ${t.stickout} mm${def.drill ? ' (ドリルはフラットとして計算)' : ''}${def.cornerR ? ` (コーナーR${def.cornerR} はフラットとして計算)` : ''}`
+    const lib = sim.assets?.library?.[T];
+    li.textContent = lib ? `T${T}: φ${+t.D.toFixed(3)} ${t.type === 'ball' ? 'ボール' : t.type === 'bull' ? `ラジアス R${+(t.cornerR || 0).toFixed(2)}` : 'フラット'} ${t.N}枚刃 · 突出し ${+t.stickout.toFixed(1)} mm · ${t.holderName || 'ホルダーなし'} (ライブラリ)`
+      : def ? `T${T}: φ${t.D} ${t.type === 'ball' ? 'ボール' : 'フラット'} ${t.N}枚刃 · 刃長 ${t.fluteLen} · 突出し ${t.stickout} mm${def.drill ? ' (ドリルはフラットとして計算)' : ''}${def.cornerR ? ` (コーナーR${def.cornerR} はフラットとして計算)` : ''}`
       : `T${T}: 寸法の記載なし → 加工条件の工具 φ${t.D}`;
     ul.appendChild(li);
   }
@@ -183,8 +186,67 @@ function updateMatHint() {
 }
 document.querySelectorAll('[data-ttype]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-ttype]').forEach(x => x.setAttribute('aria-pressed', x === b));
-  sim.cfg.tool.type = b.dataset.ttype; toolChanged();
+  sim.cfg.tool.type = b.dataset.ttype;
+  $('rowCR').hidden = b.dataset.ttype !== 'bull';
+  if (b.dataset.ttype === 'bull') sim.cfg.tool.cornerR = +$('tCR').value;
+  toolChanged();
 });
+$('tCR').onchange = e => { const v = +e.target.value; if (v > 0) { sim.cfg.tool.cornerR = Math.min(v, sim.cfg.tool.D / 2); toolChanged(); } };
+// shank, neck and holder of the panel tool (blank = none)
+for (const [id, key] of [['tShank', 'shankD'], ['tNeckD', 'neckD'], ['tNeckL', 'neckLen']]) $(id).onchange = e => {
+  const v = +e.target.value;
+  if (v > 0) sim.cfg.tool[key] = v; else delete sim.cfg.tool[key];
+  toolChanged();
+};
+for (const [k, h] of Object.entries(HOLDERS)) $('tHolder').add(new Option(h.name, k));
+$('tHolder').onchange = e => { sim.cfg.tool.holder = e.target.value; toolChanged(); };
+// imported meshes and libraries live outside cfg (typed arrays do not survive its JSON copy)
+const assets = {};
+const toolInfoHint = $('toolInfo').textContent;
+function applyAssets(msg) {
+  host.setAssets({ ...assets });
+  $('assetClear').hidden = !(assets.stlTool || assets.stlHolder || assets.library);
+  $('stlToolBtn').setAttribute('aria-pressed', !!assets.stlTool);
+  $('stlHolderBtn').setAttribute('aria-pressed', !!assets.stlHolder);
+  $('libBtn').setAttribute('aria-pressed', !!assets.library);
+  $('toolInfo').textContent = msg || toolInfoHint;
+  // an imported cutter fixes the diameter and the tip shape
+  $('tD').disabled = !!assets.stlTool;
+  document.querySelectorAll('[data-ttype]').forEach(b => { b.disabled = !!assets.stlTool; });
+  if (assets.stlTool) $('tD').value = +sim.activeTool.D.toFixed(3); else $('tD').value = sim.cfg.tool.D;
+  showTools(); syncModalInputs(); updateMatHint();
+}
+async function readStl(file) { const m = parseStl(await file.arrayBuffer()); return { ...m, name: file.name }; }
+$('stlToolBtn').onclick = () => $('stlToolFile').click();
+$('stlHolderBtn').onclick = () => $('stlHolderFile').click();
+$('libBtn').onclick = () => $('libFile').click();
+$('stlToolFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const m = await readStl(f); assets.stlTool = m;
+    const size = m.max.map((v, k) => v - m.min[k]);
+    const tall = size[2] >= Math.max(size[0], size[1]);
+    applyAssets(`工具 ${f.name}: 長さ ${size[2].toFixed(1)} mm、最大径 φ${sim.activeTool.D.toFixed(2)}${tall ? '' : '\n⚠ Z 方向が一番長くありません。工具の軸を Z にして書き出してください。'}\n刃長は「刃長」の値 (${sim.cfg.tool.fluteLen} mm) を使います。`);
+  } catch (err) { $('toolInfo').textContent = `${f.name} を読み込めませんでした: ${err.message}`; }
+};
+$('stlHolderFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    assets.stlHolder = await readStl(f); assets.stlHolderName = f.name;
+    const sz = assets.stlHolder.max[2] - assets.stlHolder.min[2];
+    applyAssets(`ホルダー ${f.name}: 高さ ${sz.toFixed(1)} mm。一番下の面を工具の突出し長の位置 (ゲージ面) に置きます。`);
+  } catch (err) { $('toolInfo').textContent = `${f.name} を読み込めませんでした: ${err.message}`; }
+};
+$('libFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const { tools, skipped } = parseToolLibrary(await f.text());
+    if (!tools.length) throw new Error('エンドミル・ドリルが見つかりません');
+    assets.library = Object.fromEntries(tools.map(t => [t.T, t]));
+    applyAssets(`工具ライブラリ ${f.name}: ${tools.map(t => `T${t.T} φ${+t.D.toFixed(3)}`).join('、')}${skipped.length ? `\n読み飛ばし: ${skipped.slice(0, 5).join('、')}` : ''}\nプログラムの T 番号に合う工具をライブラリから使います。`);
+  } catch (err) { $('toolInfo').textContent = `${f.name} を読み込めませんでした: ${err.message}`; }
+};
+$('assetClear').onclick = () => { for (const k of Object.keys(assets)) delete assets[k]; applyAssets(); };
 const toolInputs = { tD: 'D', tN: 'N', tHelix: 'helixDeg', tFlute: 'fluteLen', tStick: 'stickout' };
 for (const [id, key] of Object.entries(toolInputs)) $(id).onchange = e => {
   const v = +e.target.value; if (!(v > 0) && key !== 'helixDeg') return;
@@ -266,6 +328,7 @@ new MutationObserver(refreshTheme).observe(document.documentElement, { attribute
 
 // ---------- loop ----------
 const STATE_LABEL = { idle: '待機中', stable: '安定切削', marginal: '振動 注意', chatter: 'びびり発生' };
+let lastHits = null;
 let last = performance.now(), uiTick = 0, chartTick = 0, spinAngle = 0;
 function frameLoop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -282,7 +345,8 @@ function frameLoop(now) {
   const wall = sim.display.cutting ? sim.wall : null;
   view.updateWallDeform(wall && e.wk ? wall : null, (e.runMeanW || 0) * 1e3 * view.exag);
   view.updateStock();
-  view.updateTool(sim.pos, e.x * 1e3 * view.exag, e.y * 1e3 * view.exag, spinAngle, blur);
+  view.updateTool(sim.pos, (e.x || 0) * 1e3 * view.exag, (e.y || 0) * 1e3 * view.exag, spinAngle, blur, sim.display.collide);
+  if (sim.hits !== lastHits) { lastHits = sim.hits; view.setHits(sim.hits); }
   view.updateNozzle(sim.cfg.coolant, sim.pos);
   view.updateSpray(sim.cfg.coolant, sim.pos, running && sim.S > 0);
   view.updateChips(sim.chips, sim.mat);
@@ -307,6 +371,7 @@ function updateTiles() {
   $('sW').textContent = !sim.cfg.workpieceFlex ? '計算オフ' : d.wall ? `壁厚 ${d.wall.t.toFixed(1)} · 高さ ${d.wall.hWall.toFixed(0)} mm · k ${(d.wall.k / 1000).toFixed(1)} N/µm` : '剛体として扱い中';
   setV('vV', d.vib.toFixed(1), 'µm'); $('sV').textContent = `同期外成分 ${d.once.toFixed(1)} µm`;
   setV('vS', d.stress.toFixed(0), 'MPa');
+  $('stS').textContent = `許容目安 1500 MPa${d.clearance != null ? ` · ${d.clearance < 0 ? `干渉 ${(-d.clearance).toFixed(1)} mm` : `すきま ${d.clearance.toFixed(1)} mm`}` : ''}`;
   const sr = d.stress / ALLOWABLE_STRESS;
   $('mS').style.width = `${Math.min(100, sr * 100)}%`;
   $('mS').style.background = sr > 1 ? 'var(--bad)' : sr > 0.6 ? 'var(--warn)' : 'var(--ok)';

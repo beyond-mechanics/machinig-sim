@@ -12,6 +12,7 @@ self.onmessage = ({ data: m }) => {
   if (m.gen !== undefined) gen = m.gen;
   if (m.type === 'load') { Object.assign(sim.cfg, m.cfg); sim.load(m.code, m.setup); }
   else if (m.type === 'reset') sim.reset();
+  else if (m.type === 'assets') sim.setAssets(m.assets);
   else if (m.type === 'cfg') { Object.assign(sim.cfg, m.cfg, { dynBudget: sim.cfg.dynBudget }); if (m.reconfigure) sim.reconfigure(); }
   else if (m.type === 'speed') sim.speed = m.speed;
   else if (m.type === 'run') { running = m.running; last = performance.now(); }
@@ -44,7 +45,7 @@ function post() {
   self.postMessage({
     type: 'snap', gen,
     mtime: sim.mtime, line: sim.line, activeT: sim.activeT, done: sim.done, pos: sim.pos, ap: sim.ap, wall: sim.wall, S: sim.S,
-    display: sim.display, alerts: [...sim.alerts], removed: s.removed, dynBudget: sim.cfg.dynBudget,
+    display: sim.display, hits: sim.hits, alerts: [...sim.alerts], removed: s.removed, dynBudget: sim.cfg.dynBudget,
     engine: e.stepsPerTooth ? {
       x: e.x, y: e.y, w: e.w, wk: e.wk, wnx: e.wnx, wny: e.wny, runMeanW: e.runMeanW, omega: e.omega, S: e.S, N: e.N,
       stepsPerTooth: e.stepsPerTooth, decim: e.decim, dt: e.dt,

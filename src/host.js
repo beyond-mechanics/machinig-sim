@@ -22,6 +22,8 @@ export class SimHost {
   cfgSnapshot() { return JSON.parse(JSON.stringify(this.sim.cfg)); }
 
   load(code, setup = {}) { this.sim.load(code, setup); this.send({ type: 'load', code, setup, cfg: this.cfgSnapshot(), gen: ++this.gen }); }
+  // imported tool/holder meshes and tool libraries: structured-cloned, not JSON
+  setAssets(a) { this.sim.setAssets(a); this.send({ type: 'assets', assets: a }); }
   reset() { this.sim.reset(); this.send({ type: 'reset', gen: ++this.gen }); }
   config(reconfigure = false) { if (reconfigure) this.sim.reconfigure(); this.send({ type: 'cfg', cfg: this.cfgSnapshot(), reconfigure }); }
   setSpeed(v) { this.sim.speed = v; this.send({ type: 'speed', speed: v }); }
@@ -41,6 +43,7 @@ export class SimHost {
     if (m.activeT !== sim.activeT) sim.setActiveTool(m.activeT);
     Object.assign(sim, { mtime: m.mtime, line: m.line, done: m.done, pos: m.pos, ap: m.ap, wall: m.wall, S: m.S });
     sim.display = m.display;
+    sim.hits = m.hits;
     sim.alerts = new Map(m.alerts);
     sim.cfg.dynBudget = m.dynBudget;
     if (m.engine) Object.assign(sim.engine, m.engine);

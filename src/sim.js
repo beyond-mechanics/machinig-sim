@@ -8,6 +8,7 @@ import { buildStock, stockExtents, cellFor, stockFromPath, originPreset, bestOri
 import { CuttingEngine, BINS } from './cutting.js';
 import { ChipSystem } from './chips.js';
 import { toolModel, toolStress } from './tool.js';
+import { outline, clearanceBands, tipLut, cutterRadiusAt, holderSegs, toolFromStl, holderFromStl, HOLDERS } from './assembly.js';
 import { stabilityLobes, alimAt } from './sld.js';
 import { MATERIALS } from './materials.js';
 import { wallAt, FN_CAP } from './wall.js';
@@ -80,18 +81,38 @@ export class Simulator {
     this.ema = null;
     this.lastS = -1;
     this.activeT = this.path.find(p => p.tool != null)?.tool ?? null;
+    this.hits = []; this.hitDepth = {}; this.frameClear = Infinity; this.collide = null;
     this.reconfigure();
   }
 
-  // the tool a T number stands for: its definition from the program comments on top of the
-  // tool set up in the panel (which also serves every undefined T number)
+  // the tool a T number stands for: a tool-library entry or a definition in the program
+  // comments on top of the tool set up in the panel (which also serves every undefined T).
+  // The holder is the library entry's own, else the panel's preset or imported mesh.
   toolFor(T) {
-    const base = this.cfg.tool, d = T != null ? this.tools?.[T] : null;
-    if (!d) return { ...base, T };
-    const t = { ...base, T, D: d.D, type: d.type, N: d.N ?? base.N, fluteLen: d.fluteLen ?? base.fluteLen, stickout: d.stickout ?? base.stickout, label: d.label };
+    const base = this.cfg.tool, a = this.assets || {};
+    const d = T != null ? (a.library?.[T] || this.tools?.[T]) : null;
+    let t;
+    if (!d) {
+      t = { ...base, T };
+      if (a.stlTool) Object.assign(t, toolFromStl(a.stlTool, base.fluteLen), { type: 'profile', stlTool: true, stlMesh: a.stlTool });
+    } else {
+      t = { ...base, T, D: d.D, type: d.type, N: d.N ?? base.N, fluteLen: d.fluteLen ?? base.fluteLen, stickout: d.stickout ?? base.stickout, label: d.label,
+        cornerR: d.cornerR, shankD: d.shankD, neckD: d.neckD, neckLen: d.neckLen, drill: d.drill };
+      if (d.helixDeg != null) t.helixDeg = d.helixDeg;
+    }
     if (t.stickout < t.fluteLen + 2) t.stickout = t.fluteLen + 2;
+    if (d?.holderSegs) { t.holderSegs = d.holderSegs; t.holderName = d.holderName; }
+    else if (a.stlHolder) { t.stlHolder = holderFromStl(a.stlHolder); t.stlHolderMesh = a.stlHolder; t.holderName = a.stlHolderName || 'STL'; }
+    else if (base.holder && base.holder !== 'none') { t.holderSegs = holderSegs(base.holder, t.shankD || t.D); t.holderName = HOLDERS[base.holder].name; }
+    if (t.stlTool === true) t.stlTool = { bands: t.bands };
+    t.outline = outline(t);
+    t.bands = clearanceBands(t);
+    // the engine and the stamp need the edge shape only when it is not flat or a full ball
+    if (t.type === 'bull' || t.edge) { t.lut = tipLut(t); t.rAt = z => cutterRadiusAt(t, z); }
     return t;
   }
+  // imported meshes and tool libraries (kept out of cfg, which travels as JSON)
+  setAssets(a) { this.assets = a; this.reconfigure(); }
   setActiveTool(T) {
     if (T === this.activeT) return;
     this.activeT = T;
@@ -125,7 +146,7 @@ export class Simulator {
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
     const t = this.activeTool;
-    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear }, this.modalNow(), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
+    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, rAt: t.rAt, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear }, this.modalNow(), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
     this.lastS = S;
   }
 
@@ -243,7 +264,6 @@ export class Simulator {
         const imm = this.immersion(p.z);
         if (imm) { this.display.phiSt = imm.st; this.display.phiEx = imm.ex; }
         // shank / holder collision: material above the flutes inside the tool radius
-        if (hmax > p.z + tool.fluteLen + 0.05) this.alert('shank', '切れ刃長を超える切込み: シャンク干渉');
       } else {
         // free decay of the tool vibration when out of cut
         e.x *= 0.5; e.y *= 0.5; e.vx *= 0.5; e.vy *= 0.5;
@@ -254,13 +274,43 @@ export class Simulator {
       // relative to the workpiece: a wall pushed away by w is cut less (it springs back thicker)
       const dx = (e.x - e.w * e.wnx) * 1e3, dy = (e.y - e.w * e.wny) * 1e3;
       const errVal = Math.hypot(e.x, e.y) * 1e6;
-      frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z, R, tool.type, errVal, { ux: this.u[0], uy: this.u[1], f: (this.fz || 0) * tool.N });
+      frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z, R, tool.type === 'profile' ? 'flat' : tool.type, errVal, { ux: this.u[0], uy: this.u[1], f: (this.fz || 0) * tool.N }, tool.lut || null);
+      // the shank and holder move with the deflected tool
+      this.checkClearance({ x: p.x + dx, y: p.y + dy, z: p.z }, b.rapid);
       if (this.wall && e.wk) this.stock.markWall(p.x + dx, p.y + dy, R, e.wnx, e.wny, Math.max(0, e.runMeanW * 1e6));
       this.pos = p;
       if (this.segS >= segLen - 1e-9) this.nextSeg();
     }
     this.collect(frameStats, dtReal);
     this.updateChips(dtReal);
+  }
+
+  // Everything above the flutes (neck, shank, holder, spindle nose) must clear the stock.
+  // Checked at every substep while any of it is below the stock top; the minimum clearance
+  // over the frame goes to the display.
+  checkClearance(p, rapid) {
+    const bands = this.activeTool.bands, s = this.stock;
+    if (!bands.length || p.z + bands[0].z0 > s.zTop + 0.01) return;
+    for (const b of bands) {
+      const bottom = p.z + b.z0;
+      if (bottom > s.zTop) break;
+      // half a cell inside: the grid leaves the cells just outside a finished wall standing,
+      // so a shank as wide as the cutter would otherwise always "touch" the wall it cut
+      const m = s.maxInDisk(p.x, p.y, b.r - 0.5 * Math.max(s.hx, s.hy));
+      if (m.h === -Infinity) continue;
+      const gap = bottom - m.h;
+      if (gap < this.frameClear) this.frameClear = gap;
+      if (gap < -0.02) {
+        const what = b.part === 'holder' ? 'ホルダー' : b.part === 'spindle' ? '主軸' : (this.activeTool.neckD && b.r < (this.activeTool.shankD || this.activeTool.D) / 2 ? '首' : 'シャンク');
+        // report the deepest interference of this part so far, not the latest graze
+        const prev = this.hitDepth[b.part] || 0;
+        if (-gap >= prev) { this.hitDepth[b.part] = -gap; this.alert('hit-' + b.part, `${what}が素材に干渉 (最大 ${(-gap).toFixed(1)} mm 食い込み・${this.line}行${rapid ? '・早送り' : ''})`); }
+        else this.alerts.get('hit-' + b.part).t = this.mtime;
+        this.hits.push({ x: m.x, y: m.y, z: m.h, part: b.part, line: this.line });
+        if (this.hits.length > 200) this.hits.shift();
+        this.collide = b.part;
+      }
+    }
   }
 
   nextSeg() {
@@ -318,7 +368,10 @@ export class Simulator {
     const ci = cutting ? e.chatterIndex() : { index: 0, amp: 0 };
     d.chatterIdx += ((cutting ? ci.index : 0) - d.chatterIdx) * 0.2;
     d.once += ((cutting ? ci.once || 0 : 0) - d.once) * 0.2;
-    const stress = toolStress(this.activeTool, this.tm.I, this.tm.De, m.Fmax, m.zc, m.Tmax);
+    const stress = this.tm.assembly ? this.sectionStress(m.Fmax, m.zc, m.Tmax) : toolStress(this.activeTool, this.tm.I, this.tm.De, m.Fmax, m.zc, m.Tmax);
+    const clear = this.frameClear; this.frameClear = Infinity;
+    d.clearance = clear === Infinity ? (d.clearance ?? null) : clear;
+    d.collide = this.collide; this.collide = null;
     Object.assign(d, {
       cutting, F: m.F, Fmax: m.Fmax, Fz: m.Fz, torque: m.T / 1000, // N·m
       power: m.T * (e.omega || 0) / 1e6, // kW
@@ -329,6 +382,19 @@ export class Simulator {
       state: !cutting ? 'idle' : (d.chatterIdx > 0.55 && d.once > 3) ? 'chatter' : (d.chatterIdx > 0.35 && d.once > 1.5) ? 'marginal' : 'stable',
     });
     if (stress.vm > 1500) this.alert('stress', '工具応力が許容値(目安1500 MPa)を超過: 折損リスク');
+  }
+
+  // stepped tool: the worst section is the top of the flutes, of a neck, or the holder face
+  sectionStress(F, zc, T) {
+    const t = this.activeTool;
+    let worst = { vm: 0 };
+    for (const b of t.outline) {
+      if (b.part !== 'flute' && b.part !== 'shank') continue;
+      const De = 2 * b.r * (b.part === 'flute' ? 0.8 : 1), I = Math.PI * De ** 4 / 64;
+      const r = toolStress({ stickout: Math.min(b.z1, t.stickout) }, I, De, F, zc, T);
+      if (r.vm > worst.vm) worst = { ...r, z: b.z1 };
+    }
+    return worst;
   }
 
   alert(key, msg) { this.alerts.set(key, { msg, t: this.mtime }); }
