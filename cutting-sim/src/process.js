@@ -91,10 +91,12 @@ export class Mill {
   // that trochoid too; a fixed circle would leave the first tooth a chip thicker by the drift
   // (up to 20 % at the exit of a φ10 two-flute cut).
   drift(beta) { return this.s * this.fz * this.c.z * (beta - this.b0) / (2 * Math.PI); }
-  removed(x, y, px, cy) {
-    let ox = px + this.drift(Math.atan2(y - cy, x - px));
-    ox = px + this.drift(Math.atan2(y - cy, x - ox));
-    return Math.hypot(x - ox, y - cy) < this.R;
+  // Inside the path of a tooth whose centre is at px when at angle b0 (lag: the angle by which
+  // this layer of a helical tooth trails the bottom one).
+  removed(x, y, px, cy, lag = 0, margin = 0) {
+    let ox = px + this.drift(Math.atan2(y - cy, x - px) + lag);
+    ox = px + this.drift(Math.atan2(y - cy, x - ox) + lag);
+    return Math.hypot(x - ox, y - cy) < this.R - margin;
   }
   init(sim) {
     const t = sim.tool, c = this.c;
@@ -120,14 +122,16 @@ export class Mill {
   // round the rest of the turn in the air, which is skipped.
   nextPass(sim) {
     if (this.k + 1 >= this.passes || this.passProgress() < 1) return false;
-    const { N, x, y, fixed, dead } = sim, R2 = this.R * this.R;
+    // What lies inside this tooth's path (its trochoid, not the circle where it ended: that one
+    // reaches up to the drift further on, into the next tooth's chip) is chip, except the surface
+    // layer that sprang back up to a spacing into the path after the flank passed (it is work).
+    const { N, x, y, fixed, dead } = sim, px = this.k * this.s * this.fz;
     for (let i = 0; i < N; i++) {
       if (dead[i]) continue;
-      const dx = x[i] - this.cx, dy = y[i] - this.cy;
-      if (dx * dx + dy * dy < R2 || y[i] > sim.dx) { dead[i] = 2; sim.nEvac++; }
+      if (this.removed(x[i], y[i], px, this.cy, 0, sim.dx) || y[i] > sim.dx) { dead[i] = 2; sim.nEvac++; }
       else if (fixed[i] === 2) fixed[i] = 0;
     }
-    this.k++; this.tk = sim.t;
+    this.k++; this.tk = sim.t; sim.xr = null;   // rebuild the neighbour list: held pairs changed
     this.pose(sim, sim.t);
     return true;
   }

@@ -93,7 +93,7 @@ export class Cutting3D {
     this.next = new Int32Array(N); this.head = new Int32Array(1);
     this.t = 0; this.steps = 0; this.done = false; this.lastSample = 0;
     this.imp = [0, 0, 0, 0, 0, 0]; this.impT = 0; this.workIn = 0;
-    this.hist = { axis: [], fc: [], ft: [], fr: [], tmax: [], ttool: [], flow: [], area: [], len: [] };
+    this.hist = { axis: [], fc: [], ft: [], fr: [], tmax: [], ttool: [], flow: [], area: [], len: [], pass: [] };
     this.pose(0);
   }
 
@@ -130,7 +130,7 @@ export class Cutting3D {
     const nz = Math.max(3, Math.round(c.ap * 1e-3 / dx));
     this.bz = nz * dx;
     this.kh = Math.tan(this.lam) / m.R;                         // tooth lag per unit height [rad/m]
-    const band = m.build(dx, c.band ? c.band * 1e-3 : Math.max(1.5 * m.hRef, 6 * dx)), pts = [];
+    const band = m.build(dx, (c.band ? c.band * 1e-3 : Math.max(1.5 * m.hRef, 6 * dx)) + (m.passes - 1) * m.fz), pts = [];
     // The tooth reaches a layer z·kh later, the feed having moved the cutter on by drift(b0 + z·kh)
     // meanwhile: each layer's comma shifts by that much (Mill.drift).
     const lay = (z) => m.drift(m.b0 + z * this.kh);
@@ -170,10 +170,10 @@ export class Cutting3D {
   pose(time) {
     if (!this.helix) { this.ox = this.x0 + this.tvx * time; return; }
     const m = this.mill;
-    m.beta = m.bStart + m.om * time; m.cx = m.drift(m.beta); m.cy = m.R - m.ae;
+    m.beta = m.bStart + m.om * (time - m.tk); m.cx = m.k * m.s * m.fz + m.drift(m.beta); m.cy = m.R - m.ae;
   }
   progress() {
-    if (this.helix) { const m = this.mill; return (m.beta - m.bStart) / (m.bEnd - m.bStart); }
+    if (this.helix) { const m = this.mill; return (m.k + (m.beta - m.bStart) / (m.bEnd - m.bStart)) / m.passes; }
     return (this.ox - this.x0) / (this.cfg.cutLen * 1e-3 + 2 * this.lead);
   }
   // Nominal chip section of the helical tooth: area [mm²] and engaged edge length [mm] (projected
@@ -568,13 +568,31 @@ export class Cutting3D {
     if (acc) heat.aTime += dt;
     this.heatTool += qt;
     this.t += dt; this.steps++;
+    if (helix && this.nextTooth()) return;
     if (this.progress() >= 1) { this.done = true; if (!helix) heat.steady(); }
+  }
+
+  // Helix, several teeth in a row (as process.js Mill.nextPass): the chip of this tooth is dropped,
+  // the frozen surface released, and the next tooth starts its arc about a centre fz further on.
+  nextTooth() {
+    const m = this.mill;
+    if (m.k + 1 >= m.passes || (m.beta - m.bStart) / (m.bEnd - m.bStart) < 1) return false;
+    // Chip: inside this tooth's path (trochoid, each layer z·kh behind), as Mill.nextPass.
+    const { N, x, y, z, fixed, dead, vx, vy, vz } = this, px = m.k * m.s * m.fz;
+    for (let i = 0; i < N; i++) {
+      if (dead[i]) continue;
+      if (m.removed(x[i], y[i], px, m.cy, z[i] * this.kh, this.dx) || y[i] > this.dx) { dead[i] = 2; this.nEvac++; }
+      else if (fixed[i] === 2) { fixed[i] = 0; vx[i] = vy[i] = vz[i] = 0; }
+    }
+    m.k++; m.tk = this.t; this.xr = null;
+    this.pose(this.t);
+    return true;
   }
 
   stepSample() {
     this.step();
     const p = this.progress();
-    if (p - this.lastSample >= 1 / 100 || this.done) { this.sample(); this.lastSample = p; if (this.cfg.fracture) this.analyzeChips(); }
+    if (p - this.lastSample >= 1 / (100 * (this.helix ? this.mill.passes : 1)) || this.done) { this.sample(); this.lastSample = p; if (this.cfg.fracture) this.analyzeChips(); }
   }
 
   // Chip pieces as in sph.js: groups of intact particles closer than 1.6 Δx; a group with no
@@ -713,7 +731,7 @@ export class Cutting3D {
     let tmax = -Infinity;
     for (let i = 0; i < this.N; i++) if (!this.dead[i] && this.T[i] > tmax) tmax = this.T[i];
     const [A, Lc] = this.helixSection();
-    hs.axis.push(m.beta / DEG + 90); hs.fc.push(ft); hs.ft.push(fr); hs.fr.push(fa); hs.tmax.push(tmax); hs.ttool.push(this.heat.maxT());
+    hs.pass.push(m.k); hs.axis.push(m.beta / DEG + 90 + m.k * m.span()); hs.fc.push(ft); hs.ft.push(fr); hs.fr.push(fa); hs.tmax.push(tmax); hs.ttool.push(this.heat.maxT());
     hs.flow.push(A > 0 ? this.chipFlow().eta : null); hs.area.push(A); hs.len.push(Lc);
   }
 
@@ -725,7 +743,7 @@ export class Cutting3D {
       let saa = 0, sal = 0, sll = 0, saf = 0, slf = 0, c = 0;
       for (let i = 0; i < n; i++) {
         const A = hs.area[i], L = hs.len[i];
-        if (A < aMin) continue;
+        if (A < aMin || hs.pass[i] !== m.k) continue;   // the last tooth only
         saa += A * A; sal += A * L; sll += L * L; saf += A * F[i]; slf += L * F[i]; c++;
       }
       const det = saa * sll - sal * sal;
@@ -736,10 +754,11 @@ export class Cutting3D {
     // Chip flow angle while the chip section is at least half its peak (thin chips flow off sideways).
     const aPk = Math.max(0, ...hs.area);
     let sf = 0, cf = 0;
-    for (let i = 0; i < n; i++) if (hs.flow[i] != null && hs.area[i] >= 0.5 * aPk) { sf += hs.flow[i]; cf++; }
+    for (let i = 0; i < n; i++) if (hs.flow[i] != null && hs.area[i] >= 0.5 * aPk && hs.pass[i] === m.k) { sf += hs.flow[i]; cf++; }
     const amax = (a) => a.reduce((v, x) => (Math.abs(x) > Math.abs(v) ? x : v), 0);
     return {
       ...base, mode: 'helix', ftMax: Math.max(0, ...hs.fc), frMax: Math.max(0, ...hs.ft), faMax: amax(hs.fr),
+      passes: m.passes, span: m.span(), passMax: hs.pass.reduce((a, k, i) => { a[k] = Math.max(a[k] || 0, hs.fc[i]); return a; }, []),
       Ktc, Kte, Krc, Kre, Kac, Kae, flow: cf ? sf / cf : null, helix: this.cfg.helix, hmax: m.hRef * 1e3,
       angle: m.beta / DEG + 90, arc: m.Delta / DEG, lag: this.bz * this.kh / DEG, ap: this.bz * 1e3, track: this.cfg.track,
     };

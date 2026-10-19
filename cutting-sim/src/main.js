@@ -75,7 +75,7 @@ function readCfg() {
   const shape = $('shape').value;
   if (mode === 'helix') return {
     mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'),
-    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), floor: $('floor').checked, dir: $('dir').value, track: num('track'), fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), floor: $('floor').checked, dir: $('dir').value, track: num('track'), passes: num('passes'), fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
   };
   if (mode === '3d') return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), b: num('b3'), lambda: num('lambda'), rake: num('rake'),
@@ -422,13 +422,16 @@ function drawCharts() {
   $('cf-c-wrap').hidden = !(d3 || hx);
   if (hx) {
     const h = frame && frame.dim === 3 ? frame.hist : { axis: [], fc: [], ft: [], fr: [], tmax: [], flow: [] };
-    const xmax = frame && frame.dim === 3 ? Math.max(1, frame.summary.arc + frame.summary.lag + frame.summary.track + 6) : 40;
-    const xl = '横軸 刃の回転角 [°]（下端の刃、最下点から）';
-    lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), ...pv('fr', '--s3'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
-    lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+    const sm = frame && frame.dim === 3 ? frame.summary : null, np = sm && sm.passes > 1 ? sm.passes : 1;
+    const xmax = sm ? Math.max(1, (np - 1) * sm.span + sm.arc + sm.lag + sm.track + 6) : 40;
+    const xl = np > 1 ? '横軸 刃の回転角 [°]（下端の刃、刃ごとに続けて表示）' : '横軸 刃の回転角 [°]（下端の刃、最下点から）';
+    const marks = [];
+    if (np > 1 && h.pass) for (let i = 1; i < h.pass.length; i++) if (h.pass[i] !== h.pass[i - 1]) marks.push({ x: h.axis[i], label: `${h.pass[i] + 1}刃目` });
+    lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), ...pv('fr', '--s3'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl, marks });
+    lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl, marks });
     wearChart();
     lineChart($('chart-ts'), h.axis, [{ data: h.flow.map((v) => (v == null ? null : Math.max(0, v))), color: '--s1' }, { data: h.axis.map(() => cfg.helix), color: '--s2', dot: false }],
-      { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します' });
+      { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します', marks });
     $('cf-a').textContent = '接線分力 Ft'; $('cf-b').textContent = '半径分力 Fr'; $('cf-c').textContent = '軸方向分力 Fa';
     $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span><span><i style="background: var(--s2)"></i>工具の最高</span>';
     $('h-ts').innerHTML = '切りくず流出角 ηc<span><i style="background: var(--s1)"></i>計算値</span><span><i style="background: var(--s2)"></i>ねじれ角 β</span>';
@@ -493,7 +496,7 @@ const CELLS = {
     ['質量スケーリング', (s) => `×${f0(s.ms)}`, '', () => '慣性だけ密度を上げて高速化'],
   ],
   helix: [
-    ['接線分力 Ft の最大', (s) => f1(s.ftMax), 'N', () => '1刃の通過中、刃の各点の接線方向の和'],
+    ['接線分力 Ft の最大', (s) => f1(s.ftMax), 'N', (s) => (s.passes > 1 ? `刃ごと ${s.passMax.map(f1).join(' → ')} N。係数は最後の刃から` : '1刃の通過中、刃の各点の接線方向の和')],
     ['半径分力 Fr の最大', (s) => f1(s.frMax), 'N', () => '工具の中心へ向かう向きが正'],
     ['軸方向分力 Fa', (s) => f1(s.faMax), 'N', () => '絶対値の最大。被削材をシャンク側へ引く向きが正'],
     ['接線方向の切削係数', (s) => (s.done ? f0(s.Ktc) : '—'), 'N/mm²', (s) => `エッジ係数 Kte ${s.done ? f1(s.Kte) : '—'} N/mm`],
