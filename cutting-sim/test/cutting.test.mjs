@@ -120,6 +120,17 @@ test('chip breaker groove curls the chip; fracture leaves the S45C chip continuo
   assert.ok(r.failed < 0.05 * s.N, `failed particles ${r.failed}`);
 });
 
+test('residual stress, S45C: the hot machined layer is left in tension after unloading and cooling', () => {
+  const s = new CuttingSim({ mat: 'S45C', residual: true });
+  while (!s.done) s.stepSample();
+  const r = s.summary();
+  assert.ok(r.residual.length > 10 && r.residual[r.residual.length - 1].d > 500, 'profile reaches 0.5 mm');
+  assert.ok(r.rsSurf > 100 && r.rsSurf < 700, `surface σxx ${r.rsSurf.toFixed(0)} MPa`);
+  assert.ok(r.rsMin < r.rsSurf - 100, `below the surface ${r.rsMin.toFixed(0)} MPa at ${r.rsMinDepth.toFixed(0)} µm`);
+  assert.ok(r.kc > 1600 && r.kc < 2600, `kc ${r.kc.toFixed(0)} with thermal expansion`);
+  assert.ok(Math.abs(r.residual.at(-1).sxx) < 100, `deep σxx ${r.residual.at(-1).sxx.toFixed(0)} MPa`);
+});
+
 test('3D oblique cutting (wide plate): chip flow angle follows Stabler, ηc ≈ λ', async () => {
   const { Cutting3D } = await import('../src/sph3d.js');
   const run3 = (cfg) => { const s = new Cutting3D(cfg); while (!s.done) s.stepSample(); return s; };
