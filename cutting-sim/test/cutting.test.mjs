@@ -124,6 +124,8 @@ test('end mill, A7075: force follows the chip thickness; up and down milling mir
   assert.ok(ru.Ktc > 400 && ru.Ktc < 2000, `Ktc ${ru.Ktc.toFixed(0)}`);
   assert.ok(ru.Kte > 0 && ru.Kte < 80, `Kte ${ru.Kte.toFixed(1)}`);
   assert.ok(ru.heatRatio > 0.7 && ru.heatRatio < 1.1, `heat / work ${ru.heatRatio.toFixed(2)}`);
+  // Periodic steady tool temperature: warmer than room, well below the chip contact (short duty).
+  assert.ok(ru.toolMeanT > 40 && ru.toolMeanT < 0.6 * ru.trakeMax, `tool mean ${ru.toolMeanT.toFixed(0)} °C, contact ${ru.trakeMax.toFixed(0)} °C`);
   // After the tooth leaves the work the chip breaks free and is thrown off at about the cutting speed.
   assert.ok(ru.pieces >= 1, `chip pieces ${ru.pieces}`);
   assert.ok(ru.ejectV > 0.5 * 400 && ru.ejectV < 2 * 400, `ejection ${ru.ejectV && ru.ejectV.toFixed(0)} m/min`);

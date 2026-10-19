@@ -418,6 +418,8 @@ export class CuttingSim {
   finish() {
     if (this.done || this.relax) return;
     if (this.proc instanceof Ortho) this.heat.steady();
+    // End mill: mean tool temperature of the periodic steady state, each tooth heated once a turn.
+    else this.periodicT = this.heat.steady(this.proc.passes * 2 * PI / this.proc.om);
     if (this.cfg.residual && this.proc instanceof Ortho) { this.startRelax(); return; }
     this.done = true;
   }
@@ -656,6 +658,10 @@ export class CuttingSim {
       const passMax = [];
       for (let i = 0; i < n; i++) passMax[hs.pass[i]] = Math.max(passMax[hs.pass[i]] || 0, hs.fc[i]);
       return { ...base, ftMax: Math.max(0, ...hs.fc), frMax: Math.max(0, ...hs.ft), hmax: pr.hRef * 1e3, passMax, passes: pr.passes, span: pr.span(),
+        // Periodic steady state: the mean field, plus the rise one contact gives a cold tool (superposed).
+        toolMeanT: this.periodicT ? this.heat.maxT(this.periodicT) : null,
+        // (capped at the hottest chip contact: the surface cannot get hotter than what heats it).
+        toolPeakT: this.periodicT ? Math.min(base.trakeMax, this.heat.maxT(this.periodicT) + Math.max(cfg.T0, ...hs.ttool) - cfg.T0) : null,
         Ktc, Kte, Krc, Kre, angle: pr.axis(this), arc: pr.Delta * 180 / PI, trake: base.trakeMax, ejectV, ejectAng,
         track: cfg.track };
     }

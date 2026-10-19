@@ -61,7 +61,7 @@ export class ToolHeat {
     }
     // Per-surface-cell accumulators (time integrals over the averaging window).
     const z = () => new Float64Array(ns);
-    this.aQ = z(); this.aH = z(); this.aHT = z(); this.aFn = z(); this.aFV = z(); this.aTime = 0;
+    this.aQ = z(); this.aQin = z(); this.aH = z(); this.aHT = z(); this.aFn = z(); this.aFV = z(); this.aTime = 0;
     this.cap = tmat.rho * tmat.c * cell * cell;              // heat capacity per cell per unit width
     this.steadyT = null;
   }
@@ -80,7 +80,7 @@ export class ToolHeat {
     const qc = H * (Tp - this.T[k]) * dt;
     this.T[k] += (qc + qFric) / this.cap;
     if (acc) {
-      this.aQ[q] += qFric; this.aH[q] += H * dt; this.aHT[q] += H * Tp * dt;
+      this.aQ[q] += qFric; this.aQin[q] += qc + qFric; this.aH[q] += H * dt; this.aHT[q] += H * Tp * dt;
       this.aFn[q] += Fn * dt; this.aFV[q] += Fn * vs * dt;
     }
     return qc;
@@ -109,14 +109,20 @@ export class ToolHeat {
     return m;
   }
 
-  // Steady tool temperature for the time-averaged interface (Gauss-Seidel with SOR).
-  steady() {
+  // Steady tool temperature for the time-averaged interface (Gauss-Seidel with SOR), kept for the
+  // wear estimate. With period (a milling tooth heated once a turn): the mean field of the
+  // periodic steady state, from the heat that actually entered each cell spread over the period.
+  // (Averaging the interface conductance instead would be wrong there: with hc this large the
+  // tool would creep up to the chip temperature at any duty, while really the surface touches
+  // the chip only briefly and the heat it takes in is what the contact gave.)
+  steady(period) {
     const { nu, nw, inside, dir, surf, aTime } = this, kt = this.tmat.k;
     if (!(aTime > 0)) return null;
     const n = nu * nw, T = Float64Array.from(this.T), F = new Float64Array(n), H = new Float64Array(n), HT = new Float64Array(n);
     for (let q = 0; q < surf.length; q++) {
       const k = surf[q];
-      F[k] += this.aQ[q] / aTime; H[k] += this.aH[q] / aTime; HT[k] += this.aHT[q] / aTime;
+      if (period) F[k] += this.aQin[q] / period;
+      else { F[k] += this.aQ[q] / aTime; H[k] += this.aH[q] / aTime; HT[k] += this.aHT[q] / aTime; }
     }
     for (let k = 0; k < n; k++) if (dir[k]) T[k] = this.T0;
     for (let it = 0; it < 4000; it++) {
@@ -135,7 +141,7 @@ export class ToolHeat {
       }
       if (change < 1e-3) break;
     }
-    this.steadyT = T;
+    if (!period) this.steadyT = T;
     return T;
   }
 

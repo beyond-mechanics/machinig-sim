@@ -522,7 +522,7 @@ const CELLS = {
     ['接線方向の切削係数', (s) => (s.done ? f0(s.Ktc) : '—'), 'N/mm²', (s) => `エッジ係数 Kte ${s.done ? f1(s.Kte) : '—'} N/mm`],
     ['半径方向の切削係数', (s) => (s.done ? f0(s.Krc) : '—'), 'N/mm²', (s) => `エッジ係数 Kre ${s.done ? f1(s.Kre) : '—'} N/mm`],
     ['最高温度（被削材）', (s) => f0(s.tmax), '°C', (s) => `すくい面接触部の最大 ${f0(s.trake)} °C`],
-    ['工具の最高温度', (s) => f0(s.toolT), '°C', () => '1刃の通過中の値'],
+    ['工具の最高温度', (s) => f0(s.toolT), '°C', (s) => (s.toolMeanT != null ? `1刃の通過中（冷えた工具から）。回し続けると工具の平均温度は ${f0(s.toolMeanT)} °C まで上がり、接触のたびに表面は約 ${f0(s.toolPeakT)} °C` : '1刃の通過中の値')],
     ['クレーター摩耗速度', (s) => (s.done ? f1(s.wearCrater) : '—'), 'µm/min', () => '接触中の値、Usui 式'],
     ['逃げ面摩耗速度', (s) => (s.done ? f1(s.wearFlank) : '—'), 'µm/min', () => '接触中の値、Usui 式'],
     ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', (s) => `最大ひずみ速度 ${s.edMax.toExponential(1)} /s`],
