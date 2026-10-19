@@ -4,6 +4,7 @@ import { wallProfile, wallSides } from './roughness.js';
 import { parseFrfCsv, fitModes, exampleCsv, staticK, dominant } from './frf.js';
 import { View } from './view.js';
 import { MATERIALS } from './materials.js';
+import { COOLANTS } from './chips.js';
 import { SAMPLES } from './samples.js';
 import { decodeText } from './gcode.js';
 import { parseStl } from './workpiece.js';
@@ -232,8 +233,16 @@ $('frfClear').onclick = () => { clearFrf(); sim.cfg.modal.auto = true; $('mAuto'
 document.querySelectorAll('[data-cool]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-cool]').forEach(x => x.setAttribute('aria-pressed', x === b));
   sim.cfg.coolant = b.dataset.cool;
+  $('nozzleBox').hidden = COOLANTS[sim.cfg.coolant]?.jet !== 'nozzle';
   host.config();
 });
+function nozzleChanged() {
+  sim.cfg.nozzle = { ...sim.cfg.nozzle, az: +$('nzAz').value, h: +$('nzH').value };
+  const n = sim.cfg.nozzle, elev = Math.atan2(n.h, n.dist) * 180 / Math.PI;
+  $('nzAzOut').textContent = `${n.az}°`; $('nzHOut').textContent = `${n.h} mm (仰角 ${elev.toFixed(0)}°)`;
+  host.config();
+}
+$('nzAz').oninput = nozzleChanged; $('nzH').oninput = nozzleChanged;
 $('exag').oninput = e => { view.exag = +e.target.value; $('exagOut').textContent = `×${e.target.value}`; };
 $('showChips').onchange = e => { view.showChips = e.target.checked; };
 $('showPath').onchange = e => { view.showPath = e.target.checked; };
@@ -283,9 +292,10 @@ function frameLoop(now) {
   view.updateWallDeform(wall && e.wk ? wall : null, (e.runMeanW || 0) * 1e3 * view.exag);
   view.updateStock();
   view.updateTool(sim.pos, e.x * 1e3 * view.exag, e.y * 1e3 * view.exag, spinAngle, blur);
-  view.updateNozzle(sim.cfg.coolant, sim.pos);
-  view.updateSpray(sim.cfg.coolant, sim.pos, running && sim.S > 0);
+  view.updateNozzle(sim.cfg.coolant, sim.pos, sim.cfg.nozzle);
+  view.updateSpray(sim.cfg.coolant, sim.pos, running && sim.S > 0, sim.activeTool.R);
   view.updateChips(sim.chips, sim.mat);
+  view.updatePool(sim.chips.pool);
   view.render();
   if (now - uiTick > 120) { uiTick = now; updateTiles(); }
   if (now - chartTick > 90) { chartTick = now; updateCharts(); }
@@ -312,8 +322,17 @@ function updateTiles() {
   $('mS').style.background = sr > 1 ? 'var(--bad)' : sr > 0.6 ? 'var(--warn)' : 'var(--ok)';
   setV('vM', d.mrr.toFixed(1), 'cm³/min'); $('sM').textContent = `ap ${d.ap.toFixed(2)} mm · fz ${d.fz.toFixed(3)} mm`;
   const cs = sim.chips.stats;
-  const evacPct = cs.producedVol > 0 ? Math.min(100, (cs.producedVol - cs.restVol) / cs.producedVol * 100) : 0;
-  setV('vC', evacPct.toFixed(0), '% 排出'); $('sC').textContent = `素材上に残留 ${cs.restVol.toFixed(0)} mm³ · 再切削 ${cs.recut} 回`;
+  // share of the chip volume that has left the workpiece (chips still in flight over it are not yet out)
+  const evacPct = cs.producedVol > 0 ? Math.min(100, cs.evacVol / cs.producedVol * 100) : 0;
+  const recutPct = cs.producedVol > 0 ? cs.recutVol / cs.producedVol * 100 : 0;
+  setV('vC', evacPct.toFixed(0), '% 排出');
+  $('sC').textContent = `残留 ${cs.restVol.toFixed(0)} mm³ · 再切削 ${cs.recut} 回`;
+  $('sC').title = `素材上に止まっている切粉 ${cs.restVol.toFixed(0)} mm³ (うち溝・ポケット内 ${(cs.pocketVol ?? 0).toFixed(0)} mm³)\n再切削 ${cs.recut} 回 (切粉体積の ${recutPct.toFixed(1)}%)\n刃溝の充填率 ${Math.round(d.pack * 100)}% (1刃の切粉のかさ / 刃溝容積)`;
+  const j = cs.jet;
+  $('coolHint').textContent = !COOLANTS[sim.cfg.coolant] ? 'ノズルなし: 切粉は刃から飛び出す勢いと工具の旋回流だけで動きます。'
+    : !j ? '' : j.miss ? '噴流が素材に当たっていません。'
+    : j.shadow ? `噴流がポケットの縁 (Z ${j.z.toFixed(1)}) に当たり、底まで届いていません。ノズルを高くしてください。`
+    : `${COOLANTS[sim.cfg.coolant].jet === 'tool' ? '工具先端から' : '工具付近で'} ${j.U.toFixed(j.U < 10 ? 1 : 0)} m/s で衝突し、床に沿って広がります。`;
   // alerts
   const box = $('alerts'); box.innerHTML = '';
   for (const a of sim.alerts.values()) if (sim.mtime - a.t < 3) { const div = document.createElement('div'); div.className = 'alert'; div.textContent = a.msg; box.appendChild(div); }

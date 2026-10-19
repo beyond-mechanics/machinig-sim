@@ -45,7 +45,7 @@ export class SimHost {
     sim.cfg.dynBudget = m.dynBudget;
     if (m.engine) Object.assign(sim.engine, m.engine);
     const c = sim.chips;
-    c.p = m.chips.p; c.state = m.chips.state; c.size = m.chips.size; c.heat = m.chips.heat; c.rot = m.chips.rot; c.stats = m.chips.stats;
+    c.p = m.chips.p; c.state = m.chips.state; c.size = m.chips.size; c.heat = m.chips.heat; c.rot = m.chips.rot; c.stats = m.chips.stats; c.pool = m.chips.pool;
     const p = m.patch, s = sim.stock;
     if (p && p.H.length === (p.j1 - p.j0 + 1) * s.nx) {
       const off = p.j0 * s.nx;

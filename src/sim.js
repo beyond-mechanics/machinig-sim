@@ -6,7 +6,7 @@ import { parseGcode, discretize, segmentTime } from './gcode.js';
 import { Stock } from './stock.js';
 import { buildStock, stockExtents, cellFor, stockFromPath, originPreset, bestOrigin, ORIGIN_LABEL } from './workpiece.js';
 import { CuttingEngine, BINS } from './cutting.js';
-import { ChipSystem } from './chips.js';
+import { ChipSystem, chipEjection, chipShape, bulkRadius, nozzlePose, NOZZLE_DEFAULT } from './chips.js';
 import { toolModel, toolStress } from './tool.js';
 import { stabilityLobes, alimAt } from './sld.js';
 import { MATERIALS } from './materials.js';
@@ -20,7 +20,7 @@ export class Simulator {
     this.cfg = {
       tool: { D: 10, N: 3, helixDeg: 30, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000 },
       modal: { auto: true, k: 0, fn: 0, zeta: 0.04 },
-      material: 'A5052', coolant: 'air', workpieceFlex: true, cuttingNonlinear: true,
+      material: 'A5052', coolant: 'air', nozzle: { ...NOZZLE_DEFAULT }, workpieceFlex: true, cuttingNonlinear: true,
       feedOverride: 1, spindleOverride: 1,
       dynBudget: 220000, // slice-force evaluations per frame (≈ 5 ms of JS)
       cell: 0.3,
@@ -271,30 +271,54 @@ export class Simulator {
   spawnChips(e, from, compress, p) {
     const ev = e.chipEvents;
     if (ev.length <= from) return;
-    const tool = this.activeTool, R = tool.R;
+    const tool = this.activeTool, R = tool.R, mat = this.mat;
     const Vc = e.omega * R; // mm/s
-    const heat = this.mat.hot ? Math.min(1, Vc / 1000 / 3) : 0.15;
+    const heat = mat.hot ? Math.min(1, Vc / 1000 / 3) : 0.15;
+    // mean undeformed chip thickness over the engagement arc, thickened by the compression ratio
+    const d = this.display, st = d.phiSt ?? 0, ex = Math.max(st + 0.05, d.phiEx ?? Math.PI);
+    const fz = this.fz || 0, cosD = Math.cos(st) - Math.cos(ex);
+    const lam = mat.lam ?? 2, hm = fz * cosD / (ex - st);
+    const shape = chipShape(mat, lam * Math.max(0.003, hm));
+    this.flutePacking(fz, cosD, ex - st, this.ap || 0);
+    const ap = this.ap || 0;
     for (let k = from; k < ev.length; k++) {
       const c = ev[k];
-      const sn = Math.sin(c.phi), cs = Math.cos(c.phi);
-      const nx = sn * c.ux + cs * c.vx, ny = sn * c.uy + cs * c.vy;
-      const tx = cs * c.ux - sn * c.vx, ty = cs * c.uy - sn * c.vy;
-      const pos = [p.x + nx * (R + 0.7), p.y + ny * (R + 0.7), c.z];
-      const r = () => 0.8 + Math.random() * 0.4;
-      // chips leave roughly along the cutting velocity, lifted by the helix
-      const vel = [ (tx * 0.35 + nx * 0.15) * Vc * r(), (ty * 0.35 + ny * 0.15) * Vc * r(), Vc * 0.12 * Math.tan(tool.helixDeg * Math.PI / 180) * r() + 300 ];
-      this.chips.emit(pos, vel, c.vol * compress, heat);
+      const ej = chipEjection(c, R, e.omega, tool.helixDeg, lam);
+      // leave from the exit edge, carried a little along the cutting direction so the chip
+      // starts clear of the cutter (|offset| > R + r) and inside the cut
+      const vol = c.vol * compress, r = bulkRadius(vol, shape.Rb), off = 2 * Math.sqrt(R * r) + 0.3;
+      const zc = Math.max(p.z + r, (p.z + c.z) / 2, p.z + Math.min(ap, 2 * r) / 2);
+      const pos = [p.x + ej.nx * (R - r) + ej.tx * off, p.y + ej.ny * (R - r) + ej.ty * off, zc];
+      // scatter: ±15 % speed, ~10° in direction
+      const k1 = 0.85 + 0.3 * Math.random(), sc = 0.17 * Vc;
+      const vel = [ej.vel[0] * k1 + (Math.random() - 0.5) * sc, ej.vel[1] * k1 + (Math.random() - 0.5) * sc, ej.vel[2] * k1 + (Math.random() - 0.5) * sc * 0.5];
+      this.chips.emit(pos, vel, vol, heat, shape);
     }
     ev.length = 0;
+  }
+
+  // Flute chip packing (切りくず詰まり): bulk chip volume per tooth (solid volume × bulk factor
+  // Rb) against the gullet volume over the engaged length. The solid chip per tooth is
+  // fz·ap·R·(cosφst − cosφex); the gullet is about half the annulus between the core (0.62R)
+  // and R per flute. Only enclosed cuts (≥ 120° immersion) trap the chip in the flute until
+  // the tooth exits; deep cuts (ap > 1.5D) must also lift it along a longer flute.
+  flutePacking(fz, cosD, arc, ap) {
+    const t = this.activeTool, R = t.R, Rb = this.mat.Rb ?? 5;
+    const gullet = 0.5 * Math.PI * R * R * (1 - 0.62 ** 2) / t.N;
+    const P = Rb * fz * R * cosD / gullet;
+    this.display.pack += (P - this.display.pack) * 0.3;
+    const limit = ap > 3 * R ? 0.45 : 0.6;
+    if (arc >= 2 * Math.PI / 3 && this.display.pack > limit) this.alert('pack', `切りくず詰まりの恐れ: 1刃の切りくずの嵩が刃溝の ${Math.round(this.display.pack * 100)}% (目安 ${Math.round(limit * 100)}%以下)`);
   }
 
   updateChips(dtReal) {
     const tool = this.activeTool, e = this.engine;
     this.chips.flush(10);
-    const t = { x: this.pos.x + e.x * 1e3, y: this.pos.y + e.y * 1e3, tipZ: this.pos.z, R: tool.R, len: tool.stickout, omega: e.omega || 0, cutTop: this.pos.z + (this.ap || 0), cutting: (this.ap || 0) > 0.01 };
+    const eta = tool.helixDeg * Math.PI / 180;
+    const t = { x: this.pos.x + e.x * 1e3, y: this.pos.y + e.y * 1e3, tipZ: this.pos.z, R: tool.R, len: tool.stickout, omega: this.S > 0 ? (e.omega || 0) : 0, sinCos: Math.sin(eta) * Math.cos(eta), cutTop: this.pos.z + (this.ap || 0), cutting: (this.ap || 0) > 0.01, ux: this.u[0], uy: this.u[1] };
     // chips move in machine time, capped so that fast-forward stays smooth
     const dt = Math.min(dtReal * this.speed, 0.04);
-    this.chips.update(dt, { stock: this.stock, tool: t, coolant: this.cfg.coolant, rho: this.mat.rho, nozzle: { x: t.x - 45, y: t.y - 35, z: t.tipZ + 55 } });
+    this.chips.update(dt, { stock: this.stock, tool: t, coolant: this.cfg.coolant, nozzle: nozzlePose({ x: t.x, y: t.y, z: t.tipZ }, this.cfg.nozzle) });
   }
 
   collect(fs, dtReal) {
@@ -318,6 +342,7 @@ export class Simulator {
     const ci = cutting ? e.chatterIndex() : { index: 0, amp: 0 };
     d.chatterIdx += ((cutting ? ci.index : 0) - d.chatterIdx) * 0.2;
     d.once += ((cutting ? ci.once || 0 : 0) - d.once) * 0.2;
+    if (!cutting) d.pack *= 0.8;
     const stress = toolStress(this.activeTool, this.tm.I, this.tm.De, m.Fmax, m.zc, m.Tmax);
     Object.assign(d, {
       cutting, F: m.F, Fmax: m.Fmax, Fz: m.Fz, torque: m.T / 1000, // N·m
@@ -335,5 +360,5 @@ export class Simulator {
 }
 
 function blankDisplay() {
-  return { cutting: false, F: 0, Fmax: 0, Fz: 0, torque: 0, power: 0, defl: 0, vib: 0, stress: 0, mrr: 0, ap: 0, S: 0, F_: 0, fz: 0, chatterIdx: 0, once: 0, wallDefl: 0, wallMax: 0, wall: null, state: 'idle', phiSt: 0, phiEx: Math.PI };
+  return { cutting: false, F: 0, Fmax: 0, Fz: 0, torque: 0, power: 0, defl: 0, vib: 0, stress: 0, mrr: 0, ap: 0, S: 0, F_: 0, fz: 0, chatterIdx: 0, once: 0, pack: 0, wallDefl: 0, wallMax: 0, wall: null, state: 'idle', phiSt: 0, phiEx: Math.PI };
 }

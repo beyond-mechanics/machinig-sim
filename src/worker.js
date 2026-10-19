@@ -54,7 +54,8 @@ function post() {
       wallSamplesPi: { ...e.wallSamplesPi, x: copy(e.wallSamplesPi.x), y: copy(e.wallSamplesPi.y) },
       ux: e.ux, uy: e.uy,
     } : null,
-    chips: { p: copy(c.p), state: copy(c.state), size: copy(c.size), heat: copy(c.heat), rot: copy(c.rot), stats: c.stats },
+    chips: { p: copy(c.p), state: copy(c.state), size: copy(c.size), heat: copy(c.heat), rot: copy(c.rot), stats: c.stats,
+      pool: c.pool ? { nx: c.pool.nx, ny: c.pool.ny, cx: c.pool.cx, cy: c.pool.cy, bed: copy(c.pool.bed), depth: copy(c.pool.depth) } : null },
     patch,
   }, transfer);
 }
