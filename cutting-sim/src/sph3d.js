@@ -14,8 +14,11 @@
 // radial return to Johnson-Cook, linear EOS with a tension cut-off, Monaghan artificial viscosity,
 // a diagonal (component-wise) artificial stress, XSPH, Shepard filter, Taylor-Quinney heating,
 // SPH conduction, Coulomb friction capped at the shear flow stress, mass scaling.
-// Not modelled here (yet): the tool temperature field, wear and ductile fracture; the tool is
-// adiabatic and takes no heat from the chip.
+// Ductile fracture as in 2D: Johnson-Cook damage under tensile mean stress in interior particles,
+// softening from D = 1 to 1.5, failed particles keep only compressive pressure; broken chip
+// pieces are tracked and removed once clear of the edge.
+// Not modelled here (yet): the tool temperature field and wear; the tool is adiabatic and takes
+// no heat from the chip.
 // Units: SI. Axes: x cutting direction, y up, z across the strip (helix: x feed, y towards the
 // cutter centre from the work, z along the cutter axis).
 import { MATERIALS, flowStress } from './materials.js';
@@ -25,6 +28,7 @@ import { Mill } from './process.js';
 export const DEFAULTS3D = {
   mat: 'S45C', vc: 200, h: 0.1, b: 0.3, lambda: 15, rake: 5, clearance: 7, edgeRadius: 10, mu: null,
   nh: 5, cutLen: 0.5, T0: 20, beta: 0.9, heatToWork: 0.5, avAlpha: null, avBeta: null, sides: 'periodic',
+  fracture: true, efScale: 1,
   // Helical end mill (mode 'helix'): diameter, flutes, feed per tooth, radial and axial depth [mm],
   // helix angle [°], up/down milling, degrees followed after the tooth leaves the work.
   D: 2, z: 3, fz: 0.1, ae: 0.2, ap: 0.3, helix: 30, dir: 'down', track: 5,
@@ -62,7 +66,7 @@ export class Cutting3D {
     // LM = (L row-major, M row-major, dρ/dt), PK = ((S − p I)/ρ² diagonal, S/ρ² shear, artificial
     // stress diagonal), AC = (acceleration, XSPH correction).
     this.Q = f(4 * N); this.LM = f(19 * N); this.PK = f(9 * N); this.AC = f(6 * N);
-    this.z0 = f(N);                                             // initial height (helix: away from the plate faces)
+    this.z0 = f(N); this.dmg = f(N); this.frag = new Int32Array(N); this.nEvac = 0; this.chipInfo = null;                                             // initial height (helix: away from the plate faces)
     this.fixed = new Uint8Array(N); this.contact = new Uint8Array(N); this.dead = new Uint8Array(N); this.nDead = 0;
     this.m = this.rho0 * dx * dx * dx; this.mReal = mat.rho * dx * dx * dx;
     for (let k = 0; k < N; k++) {
@@ -73,6 +77,9 @@ export class Cutting3D {
     this.ad = 1 / (PI * this.hk ** 3);
     this.Wdx = this.kernelW(dx / this.hk);
     this.dt = (c.cfl ?? 0.3) * this.hk / (this.cs + this.V);
+    // Plastic strain rate is smoothed over a fixed time (0.84 h / c, i.e. a factor 0.7 per step at
+    // the default CFL 0.3), so that the result does not depend on the step size.
+    this.epKeep = Math.exp(-this.dt / (0.84 * this.hk / (this.cs + this.V)));
     this.dtTh = 0.08 * mat.rho * mat.c * this.hk * this.hk / mat.k;
     this.nSub = Math.max(1, Math.ceil(this.dt / this.dtTh));
     this.cap = N * 40; this.allocPairs(this.cap);
@@ -116,7 +123,7 @@ export class Cutting3D {
     const nz = Math.max(3, Math.round(c.ap * 1e-3 / dx));
     this.bz = nz * dx;
     this.kh = Math.tan(this.lam) / m.R;                         // tooth lag per unit height [rad/m]
-    const band = m.build(dx, Math.max(1.5 * m.hRef, 6 * dx)), pts = [];
+    const band = m.build(dx, c.band ? c.band * 1e-3 : Math.max(1.5 * m.hRef, 6 * dx)), pts = [];
     for (let kz = 0; kz < nz; kz++) for (const [x, y, fx] of band) pts.push(x, y, (kz + 0.5) * dx, fx);
     this.L = m.L; this.H = m.H;
     // Kinematics as Mill.init, with the bottom tooth leading: θ(z) = θ0 − z·kh. The pass ends when
@@ -204,7 +211,7 @@ export class Cutting3D {
     for (let c = 1; c <= nc + 1; c++) cnt[c] += cnt[c - 1];
     const perm = new Int32Array(N);
     for (let i = 0; i < N; i++) perm[cnt[kk[i]]++] = i;
-    const arrs = [this.x, this.y, this.z, this.vx, this.vy, this.vz, this.rho, this.p, this.T, this.ep, this.epd, this.seq, this.sr, this.z0,
+    const arrs = [this.x, this.y, this.z, this.vx, this.vy, this.vz, this.rho, this.p, this.T, this.ep, this.epd, this.seq, this.sr, this.z0, this.dmg,
       ...this.s, this.fixed, this.contact, this.dead];
     for (const a of arrs) {
       const tmp = a.slice();
@@ -217,7 +224,7 @@ export class Cutting3D {
   // candidates inside the kernel support and evaluates the kernel.
   buildPairs() {
     const { N, x, y, z, dead } = this, skin = 0.3 * this.hk, per = this.periodic, P = this.bz;
-    let need = !this.xr || this.nDead !== this.deadRef;
+    let need = !this.xr || this.nDead + this.nEvac !== this.deadRef;
     if (!need) {
       const lim = 0.25 * skin * skin, xr = this.xr, yr = this.yr, zr = this.zr;
       for (let i = 0; i < N; i++) {
@@ -230,7 +237,7 @@ export class Cutting3D {
     }
     if (need) {
       this.searchPairs(2 * this.hk + skin);
-      this.xr = x.slice(); this.yr = y.slice(); this.zr = z.slice(); this.deadRef = this.nDead;
+      this.xr = x.slice(); this.yr = y.slice(); this.zr = z.slice(); this.deadRef = this.nDead + this.nEvac;
     }
     const { ci, cj, nc } = this, hk = this.hk, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
     let np = 0;
@@ -346,6 +353,7 @@ export class Cutting3D {
 
     // 2. Constitutive update.
     const eps = 0.3, sq23 = Math.sqrt(2 / 3), pCut = -2 * mat.A * 1e6;
+    const dmg = this.dmg, frac = cfg.fracture && mat.D1 != null, efs = cfg.efScale, Tr = mat.Tr, Tm = mat.Tm;
     for (let i = 0; i < N; i++) {
       const o = 19 * i, pk = 9 * i;
       if (fixed[i] === 2 || this.dead[i]) {
@@ -376,7 +384,9 @@ export class Cutting3D {
       const wxy = 0.5 * (l01 - l10), wyz = 0.5 * (l12 - l21), wxz = 0.5 * (l02 - l20);
       rho[i] += LM[o + 18] * dt;
       p[i] = K * (rho[i] / rho0 - 1);
-      if (p[i] < pCut) { p[i] = pCut; rho[i] = rho0 * (1 + pCut / K); }
+      // Damage softening: full strength up to D = 1, then linear loss until D = 1.5.
+      const fs = dmg[i] <= 1 ? 1 : dmg[i] >= 1.5 ? 0 : 3 - 2 * dmg[i], pc = pCut * fs;
+      if (p[i] < pc) { p[i] = pc; rho[i] = rho0 * (1 + pc / K); }
       let sxx = Sxx[i], syy = Syy[i], szz = Szz[i], sxy = Sxy[i], syz = Syz[i], sxz = Sxz[i];
       // Jaumann rotation: Ṡ = 2G D' + Ω S − S Ω = 2G D' + A + Aᵀ with A = Ω S.
       const Axx = wxy * sxy + wxz * sxz, Ayy = -wxy * sxy + wyz * syz, Azz = -wxz * sxz - wyz * syz;
@@ -386,15 +396,25 @@ export class Cutting3D {
       sxx += dt * (2 * G * dxx + 2 * Axx); syy += dt * (2 * G * dyy + 2 * Ayy); szz += dt * (2 * G * dzz + 2 * Azz);
       sxy += dt * (2 * G * dxy + Axy + Ayx); syz += dt * (2 * G * dyz + Ayz + Azy); sxz += dt * (2 * G * dxz + Axz + Azx);
       const seq = Math.sqrt(1.5 * (sxx * sxx + syy * syy + szz * szz + 2 * (sxy * sxy + syz * syz + sxz * sxz)));
-      const sy = flowStress(mat, ep[i], epd[i], T[i]);
+      const sy = flowStress(mat, ep[i], epd[i], T[i]) * fs;
       let dep = 0;
       if (seq > sy) {
         const sc = sy / seq;
         sxx *= sc; syy *= sc; szz *= sc; sxy *= sc; syz *= sc; sxz *= sc;
-        dep = (seq - sy) / (3 * G); ep[i] += dep;
+        dep = sy > 0 ? (seq - sy) / (3 * G) : 0; ep[i] += dep;
         T[i] += cfg.beta * sy * dep / (mat.rho * mat.c);
+        // Johnson-Cook fracture strain under tensile mean stress, interior particles only (see sph.js).
+        if (frac && fs > 0 && det > 0.6 && !this.contact[i]) {
+          const eta = -p[i] / Math.max(sy, 1e6);
+          if (eta > 0) {
+            let ts = (T[i] - Tr) / (Tm - Tr); ts = ts < 0 ? 0 : ts > 1 ? 1 : ts;
+            const r = epd[i] > 1 ? Math.log(epd[i]) : 0;
+            const ef = Math.max(0.02, (mat.D1 + mat.D2 * Math.exp(mat.D3 * eta)) * (1 + mat.D4 * r) * (1 + mat.D5 * ts) * efs);
+            dmg[i] += dep / ef;
+          }
+        }
       }
-      epd[i] = 0.7 * epd[i] + 0.3 * dep / dt;
+      epd[i] = this.epKeep * epd[i] + (1 - this.epKeep) * dep / dt;
       this.sr[i] = sq23 * Math.sqrt(dxx * dxx + dyy * dyy + dzz * dzz + 2 * (dxy * dxy + dyz * dyz + dxz * dxz));
       Sxx[i] = sxx; Syy[i] = syy; Szz[i] = szz; Sxy[i] = sxy; Syz[i] = syz; Sxz[i] = sxz;
       this.seq[i] = Math.min(seq, sy);
@@ -428,7 +448,8 @@ export class Cutting3D {
       txx += fq * (PK[si + 6] + PK[sj + 6]); tyy += fq * (PK[si + 7] + PK[sj + 7]); tzz += fq * (PK[si + 8] + PK[sj + 8]);
       const g1 = gx[k], g2 = gy[k], g3 = gz[k];
       const fx = m * (txx * g1 + txy * g2 + txz * g3), fy = m * (txy * g1 + tyy * g2 + tyz * g3), fz = m * (txz * g1 + tyz * g2 + tzz * g3);
-      const wx = xs * pw[k] * 2 / rs, ux = -dvx * wx, uy = -dvy * wx, uz = -dvz * wx;
+      // XSPH, not across a crack.
+      const wx = this.dmg[i] >= 1.5 || this.dmg[j] >= 1.5 ? 0 : xs * pw[k] * 2 / rs, ux = -dvx * wx, uy = -dvy * wx, uz = -dvz * wx;
       const ai = 6 * i, aj = 6 * j;
       AC[ai] += fx; AC[ai + 1] += fy; AC[ai + 2] += fz; AC[ai + 3] += ux; AC[ai + 4] += uy; AC[ai + 5] += uz;
       AC[aj] -= fx; AC[aj + 1] -= fy; AC[aj + 2] -= fz; AC[aj + 3] -= ux; AC[aj + 4] -= uy; AC[aj + 5] -= uz;
@@ -470,7 +491,8 @@ export class Cutting3D {
       let jt = 0;
       if (vt > 1e-12) {
         tx /= vt; ty /= vt; tz /= vt;
-        const tauMax = flowStress(mat, ep[i], epd[i], T[i]) / Math.sqrt(3);
+        const fsd = this.dmg[i] <= 1 ? 1 : Math.max(0, 3 - 2 * this.dmg[i]);
+        const tauMax = flowStress(mat, ep[i], epd[i], T[i]) * fsd / Math.sqrt(3);
         jt = Math.min(m * vt, mu * jn, tauMax * area * dt);
         T[i] += fw * jt * (vt - 0.5 * jt / m) / (this.mReal * mat.c);
       }
@@ -492,7 +514,46 @@ export class Cutting3D {
   stepSample() {
     this.step();
     const p = this.progress();
-    if (p - this.lastSample >= 1 / 100 || this.done) { this.sample(); this.lastSample = p; }
+    if (p - this.lastSample >= 1 / 100 || this.done) { this.sample(); this.lastSample = p; if (this.cfg.fracture) this.analyzeChips(); }
+  }
+
+  // Chip pieces as in sph.js: groups of intact particles closer than 1.6 Δx; a group with no
+  // supported particle has broken off, and once its centre is rEvac from the edge it is removed.
+  analyzeChips() {
+    const { N, x, y, z, dmg, fixed, dead, pi, pj, np, prx, pry, prz } = this, par = this.frag;
+    for (let i = 0; i < N; i++) par[i] = i;
+    const find = (i) => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+    const r2 = (1.6 * this.dx) ** 2;
+    for (let k = 0; k < np; k++) {
+      const i = pi[k], j = pj[k];
+      if (dmg[i] >= 1.5 || dmg[j] >= 1.5 || dead[i] || dead[j]) continue;
+      if (prx[k] * prx[k] + pry[k] * pry[k] + prz[k] * prz[k] > r2) continue;
+      const a = find(i), b = find(j); if (a !== b) par[a] = b;
+    }
+    const g = new Map();
+    for (let i = 0; i < N; i++) {
+      if (dead[i]) continue;
+      const r = find(i);
+      let e = g.get(r);
+      if (!e) { e = { n: 0, sx: 0, sy: 0, sz: 0, base: false, ids: [] }; g.set(r, e); }
+      e.n++; e.sx += x[i]; e.sy += y[i]; e.sz += z[i]; e.ids.push(i);
+      if (fixed[i]) e.base = true;
+    }
+    // Edge position: oblique, in the normal plane (the edge is a line); helix, the tooth tip at the
+    // piece's height.
+    const rEvac = Math.max(1.2e-3, 12 * this.h), m = this.mill;
+    let pieces = 0;
+    for (const e of g.values()) {
+      if (e.base) continue;
+      if (e.n >= 6) pieces++;
+      const cx = e.sx / e.n, cy = e.sy / e.n, cz = e.sz / e.n;
+      let d;
+      if (this.helix) { const th = m.beta - cz * this.kh; d = Math.hypot(cx - m.cx - m.R * Math.cos(th), cy - m.cy - m.R * Math.sin(th)); }
+      else d = Math.hypot((cx - this.ox) * this.nx_ + (this.periodic ? 0 : cz * this.nz_), cy - this.oy);
+      if (d > rEvac) { for (const i of e.ids) dead[i] = 2; this.nEvac += e.n; }
+    }
+    let failed = 0; for (let i = 0; i < N; i++) if (!dead[i] && dmg[i] >= 1) failed++;
+    this.chipInfo = { pieces, failed };
   }
 
   shepard() {
@@ -638,12 +699,13 @@ export class Cutting3D {
       heat += this.T[i] - c.T0;
     }
     heat *= this.mReal * this.mat.c;
-    if (this.helix) return this.summaryHelix({ tmax, epMax, heatRatio: this.workIn > 0 ? heat / this.workIn : 0, progress: Math.min(1, this.progress()),
+    const ci = this.chipInfo, frac = { pieces: ci ? ci.pieces : 0, failed: ci ? ci.failed : 0, evacuated: this.nEvac };
+    if (this.helix) return this.summaryHelix({ ...frac, tmax, epMax, heatRatio: this.workIn > 0 ? heat / this.workIn : 0, progress: Math.min(1, this.progress()),
       t: this.t, steps: this.steps, N: this.N, dx: this.dx * 1e6, ms: this.ms, done: this.done, kcRef: this.mat.kcRef });
     const fc = avg(hs.fc), ft = avg(hs.ft), fr = avg(hs.fr), fl = this.chipFlow();
     const area = (this.periodic ? this.bz * 1e3 * Math.cos(this.lam) : this.bz * 1e3) * c.h;   // mm², normal to V
     return {
-      fc, ft, fr, kc: area > 0 ? fc / area : 0, tmax, epMax, flow: n ? avg(hs.flow) : null, flowNow: fl.eta,
+      ...frac, fc, ft, fr, kc: area > 0 ? fc / area : 0, tmax, epMax, flow: n ? avg(hs.flow) : null, flowNow: fl.eta,
       hc: fl.hc * 1e3, ratio: fl.hc > 0 ? fl.hc / this.h : 0, lambda: c.lambda, kcRef: this.mat.kcRef,
       heatRatio: this.workIn > 0 ? heat / this.workIn : 0, progress: Math.min(1, this.progress()),
       travel: (this.ox - this.x0) / (this.tvx / this.V) * 1e3, periodic: this.periodic, t: this.t, steps: this.steps, N: this.N, dx: this.dx * 1e6, ms: this.ms, done: this.done,

@@ -74,11 +74,11 @@ function readCfg() {
   const shape = $('shape').value;
   if (mode === 'helix') return {
     mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'),
-    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), dir: $('dir').value, track: num('track'),
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), dir: $('dir').value, track: num('track'), fracture: $('fracture').checked, efScale: num('efs'),
   };
   if (mode === '3d') return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), b: num('b3'), lambda: num('lambda'), rake: num('rake'),
-    clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'), cutLen: num('len'), sides: $('sides').value,
+    clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'), cutLen: num('len'), sides: $('sides').value, fracture: $('fracture').checked, efScale: num('efs'),
   };
   return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
@@ -103,8 +103,6 @@ function showShapeRows() {
     const okShape = !el.dataset.shape || el.dataset.shape.split(' ').includes(sh);
     el.hidden = !(okMode && okShape);
   }
-  for (const b of $('fields').children) b.hidden = is3() && b.dataset.f === 'D';
-  if (is3() && field === 'D') field = 'T';
   view.hidden = is3(); $('view3d').hidden = !is3();
   if (is3()) view3d();
 }
@@ -453,6 +451,7 @@ const CELLS = {
     ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', () => '切りくずの裏面付近'],
     ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
     ['工具の移動量', (s) => f3(s.travel), 'mm', () => '傾けた刃が全幅にかかるまでを含む'],
+    ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `刃から離れて排出 ${s.evacuated} 粒子 · 割れた粒子 ${s.failed}`],
     ['粒子数', (s) => s.N.toLocaleString(), '個', (s) => `間隔 ${s.dx.toFixed(0)} µm`],
     ['質量スケーリング', (s) => `×${f0(s.ms)}`, '', () => '慣性だけ密度を上げて高速化'],
   ],
@@ -468,6 +467,7 @@ const CELLS = {
     ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '工具への熱の逃げは含まない'],
     ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', () => '切りくずの裏面付近'],
     ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `刃から離れて排出 ${s.evacuated} 粒子 · 割れた粒子 ${s.failed}`],
     ['粒子数', (s) => s.N.toLocaleString(), '個', (s) => `間隔 ${s.dx.toFixed(0)} µm · 質量スケーリング ×${f0(s.ms)}`],
   ],
   ortho: [

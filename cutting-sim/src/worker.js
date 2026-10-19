@@ -57,7 +57,7 @@ function send3d() {
   let n = 0;
   for (let i = 0; i < N; i++) if (!s.dead[i]) n++;
   const F = () => new Float32Array(n);
-  const x = F(), y = F(), z = F(), T = F(), seq = F(), ep = F(), sr = F(), p = F(), flag = new Uint8Array(n);
+  const x = F(), y = F(), z = F(), T = F(), seq = F(), ep = F(), sr = F(), p = F(), D = F(), flag = new Uint8Array(n);
   // Periodic box: the edge lies along z there; turn the scene so the cutting velocity points
   // along +x and the edge shows its inclination λ, as on the machine.
   const c = s.periodic ? Math.cos(s.lam) : 1, sn = s.periodic ? Math.sin(s.lam) : 0;
@@ -65,7 +65,7 @@ function send3d() {
   for (let i = 0; i < N; i++) {
     if (s.dead[i]) continue;
     x[k] = (s.x[i] * c + s.z[i] * sn) * 1e3; y[k] = s.y[i] * 1e3; z[k] = (-s.x[i] * sn + s.z[i] * c) * 1e3; T[k] = s.T[i]; seq[k] = s.seq[i] * 1e-6; ep[k] = s.ep[i];
-    sr[k] = s.sr[i]; p[k] = s.p[i] * 1e-6; flag[k] = s.contact[i] ? 2 : s.fixed[i] === 1 ? 1 : 0; k++;
+    sr[k] = s.sr[i]; p[k] = s.p[i] * 1e-6; D[k] = s.dmg[i]; flag[k] = s.contact[i] ? 2 : s.fixed[i] === 1 ? 1 : 0; k++;
   }
   const now = running ? wall + performance.now() - t0 : wall;
   const outline = s.outline(3 * s.h).map(([a, b]) => [a * 1e3, b * 1e3]);
@@ -76,9 +76,9 @@ function send3d() {
     : { pos: [s.ox * c * 1e3, s.oy * 1e3, -s.ox * sn * 1e3], lam: s.lam, outline,
       len: ((s.periodic ? s.bz : s.bz / Math.max(Math.cos(s.lam), 0.3)) + 4 * s.h) * 1e3 };
   postMessage({
-    type: 'frame', dim: 3, x, y, z, T, seq, ep, sr, p, flag, dx: s.dx * 1e3, h: s.h * 1e3,
+    type: 'frame', dim: 3, x, y, z, T, seq, ep, sr, p, D, flag, dx: s.dx * 1e3, h: s.h * 1e3,
     tool,
     box: [s.L * 1e3, s.H * 1e3, s.bz * 1e3],
     hist: s.hist, summary: s.summary(), running, wall: now, dt: s.dt,
-  }, [x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer]);
+  }, [x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer, D.buffer]);
 }
