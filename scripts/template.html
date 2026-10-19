@@ -159,6 +159,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <legend>被削材</legend>
           <div class="row wide"><select id="material"></select></div>
           <p class="hint" id="matHint"></p>
+          <div class="seg" style="grid-template-columns:repeat(2,1fr)"><button id="coefLoad" aria-pressed="false">切削シミュの係数 (JSON)</button><button id="coefClear" aria-pressed="false" disabled>外す</button></div>
+          <input type="file" id="coefFile" accept=".json,application/json" hidden>
+          <p class="hint" id="coefInfo">切削現象シミュレーターで同定した Ktc・Kte などを書き出した JSON を読み込むと、表の値の代わりに使います。</p>
         </fieldset>
         <fieldset>
           <legend>工具</legend>

@@ -3,7 +3,7 @@ import { SimHost } from './host.js';
 import { wallProfile, wallSides } from './roughness.js';
 import { parseFrfCsv, fitModes, exampleCsv, staticK, dominant } from './frf.js';
 import { View } from './view.js';
-import { MATERIALS } from './materials.js';
+import { MATERIALS, parseCoeffs } from './materials.js';
 import { SAMPLES } from './samples.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
@@ -69,10 +69,29 @@ $('btnPocket').onclick = () => {
   setSpindle(r.S);
   $('pocketHint').textContent = `${cur} → ${r.S} min⁻¹(この切込み条件での安定限界 ${r.alim.toFixed(2)} mm)。`;
 };
-$('material').onchange = e => { sim.cfg.material = e.target.value; host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); };
+function materialChanged() { host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); }
+$('material').onchange = e => { sim.cfg.material = e.target.value; clearCoeffs(); materialChanged(); };
+// Coefficients from the cutting simulator: switch to the matching material and lay them over it.
+const COEF_HINT = $('coefInfo').textContent;
+function clearCoeffs() { sim.cfg.coeffs = null; $('coefClear').disabled = true; $('coefInfo').textContent = COEF_HINT; }
+$('coefLoad').onclick = () => $('coefFile').click();
+$('coefFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    const r = parseCoeffs(await f.text());
+    if (r.material) { sim.cfg.material = r.material; $('material').value = r.material; }
+    sim.cfg.coeffs = r.coeffs; $('coefClear').disabled = false;
+    materialChanged();
+    const list = Object.entries(r.coeffs).map(([k, v]) => `${k} ${v}`).join(' / ');
+    $('coefInfo').textContent = `${f.name}（${r.from}、${r.mode}）を ${MATERIALS[sim.cfg.material].name} に適用：${list}` +
+      (r.material ? '' : '。対応する材料が表にないので、選択中の材料に当てています');
+  } catch (err) { $('coefInfo').textContent = `読み込めませんでした：${err.message}`; }
+};
+$('coefClear').onclick = () => { clearCoeffs(); materialChanged(); };
 function updateMatHint() {
   const m = sim.mat;
-  $('matHint').textContent = `Ktc ${m.Ktc} / Krc ${m.Krc} N/mm² · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.cfg.tool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.cfg.tool.D))} min⁻¹)`;
+  $('matHint').textContent = `Ktc ${m.Ktc} / Krc ${m.Krc} N/mm²${sim.cfg.coeffs ? '（切削シミュの係数）' : ''} · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.cfg.tool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.cfg.tool.D))} min⁻¹)`;
 }
 document.querySelectorAll('[data-ttype]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-ttype]').forEach(x => x.setAttribute('aria-pressed', x === b));

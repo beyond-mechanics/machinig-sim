@@ -15,3 +15,20 @@ export const MATERIALS = {
   SUS304: { name: 'SUS304 ステンレス', Ktc: 2600, Krc: 1100, Kac: 500, Kte: 40, Kre: 55, Kae: 12, mc: 0.12, Ci: 2e5, curl: [3.8, 0.35, 0.75], rho: 7930, E: 193000, chip: [0.60, 0.58, 0.55], hot: true, vc: 90 },
   Ti64: { name: 'Ti-6Al-4V チタン合金', Ktc: 1950, Krc: 650, Kac: 520, Kte: 25, Kre: 40, Kae: 10, mc: 0.12, Ci: 2.5e5, curl: [0.55, 0.08, 0.7], rho: 4430, E: 114000, chip: [0.62, 0.60, 0.58], hot: true, vc: 60 },
 };
+
+// Coefficients identified by cutting-sim (its "係数を JSON で書き出す" file): the material it
+// names maps to the closest one here, and every finite coefficient it carries replaces the
+// table value (a 2D end-mill section has no axial terms, so Kac/Kae stay as tabled).
+const FROM_CUTTING_SIM = { S45C: 'S50C', SUS304: 'SUS304', Ti64: 'Ti64', Ti64s: 'Ti64', Al7075: 'A7075', Al6061: 'A5052', Al2024: 'A5052', Al5083: 'A5052' };
+export function parseCoeffs(text) {
+  let d;
+  try { d = JSON.parse(text); } catch { throw new Error('JSON として読めません'); }
+  if (!d || typeof d.coefficients !== 'object' || !d.coefficients) throw new Error('coefficients がありません（cutting-sim の係数ファイルではないようです）');
+  const coeffs = {};
+  for (const k of ['Ktc', 'Krc', 'Kac', 'Kte', 'Kre', 'Kae']) {
+    const v = d.coefficients[k];
+    if (typeof v === 'number' && Number.isFinite(v)) coeffs[k] = v;
+  }
+  if (!(coeffs.Ktc > 0)) throw new Error('Ktc が正の数ではありません');
+  return { material: FROM_CUTTING_SIM[d.material] || null, from: d.material || '?', mode: d.mode || '?', coeffs };
+}

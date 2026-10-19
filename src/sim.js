@@ -61,7 +61,9 @@ export class Simulator {
     t.R = t.D / 2;
     this.tm = toolModel(t);
     if (this.cfg.modal.auto) { this.cfg.modal.k = Math.round(this.tm.k); this.cfg.modal.fn = Math.round(this.tm.fn); }
-    this.mat = MATERIALS[this.cfg.material];
+    // cfg.coeffs: coefficients read from a cutting-sim file, laid over the tabled material
+    const base = MATERIALS[this.cfg.material], o = this.cfg.coeffs;
+    this.mat = o ? { ...base, ...o } : base;
     this.lastS = -1;
     this.lobeKey = '';
   }

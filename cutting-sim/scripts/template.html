@@ -227,7 +227,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="btns" data-only="ortho"><button id="wear" type="button" disabled>摩耗した工具で再計算</button></div>
         <p class="hint" data-only="ortho">計算が終わると、工具表面の摩耗速度 × 時間だけ刃先を後退させた形（逃げ面摩耗とクレーター）に切り替えて、もう一度削ります。繰り返すと摩耗が進む様子を追えます。</p>
         <div class="btns" data-only="mill helix" hidden><button id="export" type="button" disabled>切削係数を書き出す（JSON）</button></div>
-        <p class="hint" data-only="mill helix" hidden id="exhint">計算が終わると、3軸加工シミュレーターと同じ形（Ktc, Krc, Kac, Kte, Kre, Kae）の切削係数を JSON で保存できます。</p>
+        <p class="hint" data-only="mill helix" hidden id="exhint">計算が終わると、3軸加工シミュレーターと同じ形（Ktc, Krc, Kac, Kte, Kre, Kae）の切削係数を JSON で保存できます。3軸加工シミュレーターの「被削材」でこの JSON を読み込むと、その係数で加工を計算します。</p>
       </fieldset>
     </aside>
   </div>
