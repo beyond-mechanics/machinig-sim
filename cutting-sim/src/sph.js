@@ -34,6 +34,11 @@ export const DEFAULTS = {
   tool: 'wedge', land: 0.1, landDeg: -20, gw: 0.35, gd: 0.05, wallDeg: 35, wh: 0.06, profile: null,
   // Ductile fracture (Johnson-Cook damage) and a multiplier on the fracture strain.
   fracture: true, efScale: 1,
+  // Thermal expansion in the pressure (needed for the residual stress of the machined surface).
+  thermalExp: false,
+  // Residual stress (orthogonal cutting): thermal expansion on, a deeper work piece, and after the
+  // cut an unloading and cooling phase of relaxSteps steps before the depth profile is taken.
+  residual: false, relaxSteps: 5000,
   // End mill: keep following the chip for this many degrees after the tooth leaves the work.
   track: 10,
 };
@@ -43,6 +48,7 @@ const PI = Math.PI;
 export class CuttingSim {
   constructor(cfg = {}) {
     const c = this.cfg = { ...DEFAULTS, ...cfg };
+    if (c.residual && c.mode === 'ortho') { c.thermalExp = true; c.depth = Math.max(c.depth || 0, 0.8, 5 * c.h); }
     const mat = this.mat = MATERIALS[c.mat];
     if (c.mu == null) c.mu = mat.mu;
     if (c.avAlpha == null) c.avAlpha = mat.av ?? 1;
@@ -241,6 +247,8 @@ export class CuttingSim {
 
     // 2. Constitutive update per particle.
     const eps = 0.3, sq23 = Math.sqrt(2 / 3), pCut = -2 * mat.A * 1e6;
+    // Thermal expansion (cfg.thermalExp): the volumetric strain 3α ΔT enters the pressure only.
+    const thE = cfg.thermalExp ? 3 * (mat.cte || 0) * 1e-6 : 0, T0 = cfg.T0;
     const dmg = this.dmg, frac = cfg.fracture && mat.D1 != null, dd = mat, efs = cfg.efScale, Tr = mat.Tr, Tm = mat.Tm;
     let seqMax = 0;
     for (let i = 0; i < N; i++) {
@@ -257,11 +265,11 @@ export class CuttingSim {
       const dxx = lxx, dyy = lyy, dxy = 0.5 * (lxy + lyx), w = 0.5 * (lxy - lyx);
       const tr = dxx + dyy;
       rho[i] += drho[i] * dt;
-      p[i] = K * (rho[i] / rho0 - 1);
+      p[i] = K * (rho[i] / rho0 - 1 + thE * (T[i] - T0));
       // Damage softening: full strength up to D = 1, then linear loss of strength until D = 1.5.
       const fs = dmg[i] <= 1 ? 1 : dmg[i] >= 1.5 ? 0 : 3 - 2 * dmg[i];
       const pc = pCut * fs;
-      if (p[i] < pc) { p[i] = pc; rho[i] = rho0 * (1 + pc / K); }  // tensile cut-off (none once failed)
+      if (p[i] < pc) { p[i] = pc; rho[i] = rho0 * (1 + pc / K - thE * (T[i] - T0)); }  // tensile cut-off (none once failed)
       const ddx = dxx - tr / 3, ddy = dyy - tr / 3, ddz = -tr / 3;
       let a = sxx[i], b = syy[i], cz = szz[i], s = sxy[i];
       const na = a + dt * (2 * G * ddx + 2 * s * w);
@@ -342,18 +350,19 @@ export class CuttingSim {
 
     // 4. Integrate, then enforce tool contact and supports.
     const tool = this.tool, proc = this.proc, heat = this.heat, dx = this.dx, d0 = 0.5 * dx, out = tool.out;
-    proc.pose(this, this.t + dt);
+    if (!this.relax) proc.pose(this, this.t + dt);    // unloading: the tool stays where it ended, out of contact
     const mu = cfg.mu, fw = cfg.heatToWork, cMat = mat.c, mReal = this.mReal, acc = proc.accumulate(this);
     const tvx0 = tool.vx, tvy0 = tool.vy, om = tool.om, ox = tool.ox, oy = tool.oy;
     let ix = 0, iy = 0, qt = 0, work = 0, tRake = cfg.T0;
     const dead = this.dead, vEsc2 = 100 * this.V * this.V;
     for (let i = 0; i < N; i++) {
-      if (!fixed[i] && proc.freezes(this, x[i], y[i])) fixed[i] = 2;
+      if (!fixed[i] && !this.relax && proc.freezes(this, x[i], y[i])) fixed[i] = 2;
       if (fixed[i] || dead[i]) { vx[i] = 0; vy[i] = 0; this.contact[i] = 0; continue; }
       vx[i] += ax[i] * dt; vy[i] += ay[i] * dt;
       // A particle ejected far faster than the tool has lost its neighbours: retire it.
       if (vx[i] * vx[i] + vy[i] * vy[i] > vEsc2) { dead[i] = 1; this.nDead++; vx[i] = 0; vy[i] = 0; continue; }
       x[i] += (vx[i] + cx[i]) * dt; y[i] += (vy[i] + cy[i]) * dt;
+      if (this.relax) { this.contact[i] = 0; continue; }
       const dist = toolSdf(tool, x[i], y[i]);
       if (dist >= d0) { this.contact[i] = 0; continue; }
       this.contact[i] = 1;
@@ -387,6 +396,7 @@ export class CuttingSim {
       ix -= dpx; iy -= dpy; work += dpx * tvx + dpy * tvy;
       if (T[i] > tRake) tRake = T[i];
     }
+    if (this.relax) { this.relaxStep(); return; }
     heat.step(dt);
     if (acc) heat.aTime += dt;
     this.impX += ix; this.impY += iy; this.impT += dt; this.qTool += qt; this.tRake = tRake;
@@ -397,14 +407,50 @@ export class CuttingSim {
 
   // Called once at the end: steady tool temperature and wear from the averaged contact.
   finish() {
-    if (this.done) return;
-    this.done = true;
+    if (this.done || this.relax) return;
     if (this.proc instanceof Ortho) this.heat.steady();
+    if (this.cfg.residual && this.proc instanceof Ortho) { this.startRelax(); return; }
+    this.done = true;
+  }
+
+  // Residual stress: drop the chip and the uncut layer, end the tool contact, release the frozen
+  // surface, then cool every particle to room temperature (instantly, as a ramp) with damped
+  // motion so the machined layer settles under its own plastic misfit and thermal shrinkage.
+  startRelax() {
+    this.cutSummary = this.summary();
+    const { N, y, fixed, dead, h } = this;
+    for (let i = 0; i < N; i++) {
+      if (!dead[i] && y[i] > -h) { dead[i] = 2; this.nEvac++; }
+      if (fixed[i] === 2) fixed[i] = 0;
+    }
+    this.relax = { n: 0, xEnd: this.tool.ex };
+  }
+  relaxStep() {
+    const { N, vx, vy, T, cfg } = this, r = this.relax;
+    for (let i = 0; i < N; i++) { vx[i] *= 0.995; vy[i] *= 0.995; T[i] = cfg.T0 + (T[i] - cfg.T0) * 0.998; }
+    this.t += this.dt; this.steps++;
+    if (++r.n >= cfg.relaxSteps) { this.residual = this.residualProfile(); this.done = true; }
+  }
+  // Depth profile below the machined surface (σxx along the cut, σyy normal to it) over the
+  // steady part of the cut, in bins of two particle spacings.
+  residualProfile() {
+    const { N, x, y, sxx, syy, p, dead, fixed, h, dx } = this, xEnd = this.relax.xEnd, bw = 2 * dx, bins = [];
+    for (let i = 0; i < N; i++) {
+      if (dead[i] || fixed[i] === 1 || x[i] < 0.3 * xEnd || x[i] > xEnd - 2 * h) continue;
+      const d = -h - y[i];
+      if (d < 0) continue;
+      const k = Math.floor(d / bw), b = bins[k] || (bins[k] = [0, 0, 0]);
+      b[0] += sxx[i] - p[i]; b[1] += syy[i] - p[i]; b[2]++;
+    }
+    const out = [];
+    for (let k = 0; k < bins.length; k++) if (bins[k] && bins[k][2]) out.push({ d: (k + 0.5) * bw * 1e6, sxx: bins[k][0] / bins[k][2] * 1e-6, syy: bins[k][1] / bins[k][2] * 1e-6 });
+    return out;
   }
 
   // Run until a new averaging window is due (about 160 per cut), then close it.
   stepSample() {
     this.step();
+    if (this.relax) return;
     const p = this.proc.progress(this);
     if (p - this.lastSample >= 1 / 160 || this.done) { this.sample(); this.lastSample = p; }
   }
@@ -534,6 +580,14 @@ export class CuttingSim {
   // Summary. Orthogonal: steady-state averages over the second half of the cut.
   // Milling: peaks over the tooth pass and cutting coefficients fitted to F = K·b·h + Ke·b.
   summary() {
+    if (this.relax) {
+      const r = this.residual, base = { ...this.cutSummary, done: this.done, relax: this.relax.n / this.cfg.relaxSteps, steps: this.steps, t: this.t };
+      if (!r) return base;
+      const surf = r[0].sxx;
+      let pk = r[0];
+      for (const b of r) if (b.sxx < pk.sxx) pk = b;
+      return { ...base, residual: r, rsSurf: surf, rsMin: pk.sxx, rsMinDepth: pk.d };
+    }
     const hs = this.hist, n = hs.fc.length, cfg = this.cfg, b = cfg.width;
     const avg = (arr, from) => { let s = 0, c = 0; for (let i = from; i < arr.length; i++) { s += arr[i]; c++; } return c ? s / c : 0; };
     let tmax = -Infinity, epMax = 0, edMax = 0, heat = 0;

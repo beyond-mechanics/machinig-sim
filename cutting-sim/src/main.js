@@ -87,11 +87,11 @@ function readCfg() {
     D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'),
     tool: shape === 'custom' && !custom.profile ? 'wedge' : shape, land: num('land'), landDeg: num('landDeg'),
     gw: num('gw'), gd: num('gd'), wallDeg: num('wallDeg'), wh: num('wh'), profile: shape === 'custom' ? custom.profile : null,
-    fracture: $('fracture').checked, efScale: num('efs'),
+    fracture: $('fracture').checked, efScale: num('efs'), residual: mode === 'ortho' && $('residual').checked,
   };
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track',
-  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor']) $(id).addEventListener('change', reset);
+  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
 const custom = { text: null, name: '', rot: 0, flip: false, profile: null };
@@ -357,22 +357,23 @@ function niceStep(span, n) {
   const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
   return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
 }
-function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty }) {
+function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty, signed = false }) {
   const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   const c = canvas.getContext('2d'), css = getComputedStyle(document.documentElement);
   c.scale(dpr, dpr); c.clearRect(0, 0, W, H);
   const L = 48, R = 12, T = 18, B = 26, pw = W - L - R, ph = H - T - B;
-  let ymax = 0;
-  for (const s of series) for (const v of s.data) if (v > ymax) ymax = v;
-  if (!(ymax > 0)) ymax = 1;
-  const ystep = niceStep(ymax, 4); ymax = Math.ceil(ymax / ystep - 1e-9) * ystep;
+  // signed: the axis also covers negative values (residual stress).
+  let ymax = 0, ymin = 0;
+  for (const s of series) for (const v of s.data) { if (v > ymax) ymax = v; if (signed && v < ymin) ymin = v; }
+  if (!(ymax > 0) && !(ymin < 0)) ymax = 1;
+  const ystep = niceStep(ymax - ymin, 4); ymax = Math.ceil(ymax / ystep - 1e-9) * ystep; ymin = Math.floor(ymin / ystep + 1e-9) * ystep;
   const span = xmax - xmin, xstep = niceStep(span, pw < 320 ? 3 : 5);
-  const X = (v) => L + (v - xmin) / span * pw, Y = (v) => T + ph - v / ymax * ph;
+  const X = (v) => L + (v - xmin) / span * pw, Y = (v) => T + ph - (v - ymin) / (ymax - ymin) * ph;
   c.font = `11px ${css.getPropertyValue('--font-mono')}`; c.fillStyle = css.getPropertyValue('--ink-mute');
   c.strokeStyle = css.getPropertyValue('--rule'); c.lineWidth = 1;
   c.textAlign = 'right'; c.textBaseline = 'middle';
-  for (let v = 0; v <= ymax + 1e-9; v += ystep) {
+  for (let v = ymin; v <= ymax + 1e-9; v += ystep) {
     c.beginPath(); c.moveTo(L, Y(v)); c.lineTo(L + pw, Y(v)); c.stroke();
     c.fillText(ystep < 0.01 ? v.toFixed(3) : ystep < 0.1 ? v.toFixed(2) : ystep < 1 ? v.toFixed(1) : v.toFixed(0), L - 6, Y(v));
   }
@@ -443,6 +444,9 @@ function drawCharts() {
     { xmin: xr[0], xmax: xr[1], unit: '°C', xlabel: '逃げ面 ← 刃先からの距離 [µm] → すくい面', empty: '計算が終わると表示します' });
   lineChart($('chart-w'), ps, [{ data: pr.map((r) => r.wear), color: '--s3', dot: false }],
     { xmin: xr[0], xmax: xr[1], unit: 'µm/min', xlabel: '逃げ面 ← 刃先からの距離 [µm] → すくい面', empty: '計算が終わると表示します' });
+  const rs = frame && frame.summary.residual ? frame.summary.residual.filter((b) => b.d < 400) : [];
+  lineChart($('chart-rs'), rs.map((b) => b.d), [{ data: rs.map((b) => b.sxx), color: '--s1', dot: false }, { data: rs.map((b) => b.syy), color: '--s2', dot: false }],
+    { xmax: rs.length ? rs[rs.length - 1].d : 400, unit: 'MPa（+ 引張）', xlabel: '加工面からの深さ [µm]', empty: cfg && cfg.residual ? '切削後の除荷・冷却が終わると表示します' : '「残留応力」をオンにすると計算します', signed: true });
   $('cf-a').textContent = mill ? '接線分力 Ft' : '主分力 Fc';
   $('cf-b').textContent = mill ? '半径分力 Fr' : '背分力 Ft';
 }
@@ -497,8 +501,9 @@ const CELLS = {
     ['工具へ流れる熱', (s) => f1(s.qTool), 'W', () => '摩擦熱の分担と接触面の熱伝導'],
     ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
     ['切りくずのカール半径', (s) => (s.curl == null ? '—' : isFinite(s.curl) ? f3(s.curl) : '∞'), 'mm', (s) => (s.curl == null ? '切りくずが伸びると表示' : isFinite(s.curl) ? '円で近似した上向きカール' : 'ほぼまっすぐ')],
-    ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `刃先から離れて排出 ${s.evacuated} 粒子`],
-    ['割れた粒子', (s) => f0(s.failed), '個', () => '損傷度 1 以上（延性破壊）'],
+    ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `排出 ${s.evacuated} 粒子 · 割れた粒子 ${s.failed}`],
+    ['残留応力（表面、切削方向）', (s) => (s.residual ? f0(s.rsSurf) : '—'), 'MPa',
+      (s) => (s.residual ? `圧縮の最大 ${f0(s.rsMin)} MPa（深さ ${f0(s.rsMinDepth)} µm）` : s.relax != null ? `除荷・冷却中 ${f0(s.relax * 100)} %` : '「残留応力」をオンにすると切削後に計算')],
     ['実効すくい角', (s) => f1(s.toolRake), '°', () => '刃先から 0.3〜1.0 h の工具表面'],
   ],
   mill: [
@@ -572,7 +577,7 @@ function readouts() {
     $(`rs${i}`).textContent = has ? sub(s) : '—';
   });
   $('prog').style.width = s.progress * 100 + '%';
-  $('clock').textContent = (cfg.mode === 'helix' ? `回転角 ${f1(s.angle)}° · ${f0(s.progress * 100)} % · ` : cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : cfg.mode === '3d' ? `移動 ${f3(s.travel)} mm · ${f0(s.progress * 100)} % · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `)
+  $('clock').textContent = (cfg.mode === 'helix' ? `回転角 ${f1(s.angle)}° · ${f0(s.progress * 100)} % · ` : cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : cfg.mode === '3d' ? `移動 ${f3(s.travel)} mm · ${f0(s.progress * 100)} % · ` : (s.relax != null && !s.residual ? `除荷・冷却 ${f0(s.relax * 100)} % · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `))
     + `${(s.t * 1e6).toFixed(1)} µs · 計算 ${(frame.wall / 1000).toFixed(0)} s`;
   $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ`
     + (is3(cfg.mode) ? ' · 3D は計算に数分〜十数分かかります' : '');
@@ -641,7 +646,7 @@ $('swrun').addEventListener('click', () => {
   }
   const base = readCfg();
   sw = { key, rows: values.map((v) => ({ v, p: null, s: null })), done: false, cfg: base };
-  sweeper.postMessage({ type: 'sweep', cfg: { ...base, mode: 'ortho' }, key, values });
+  sweeper.postMessage({ type: 'sweep', cfg: { ...base, mode: 'ortho', residual: false }, key, values });
   $('swrun').textContent = 'スイープを止める';
   sweepTable();
 });

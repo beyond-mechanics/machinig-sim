@@ -18,7 +18,7 @@ export class Ortho {
   build(dx) {
     const c = this.c, h = this.h;
     const L = c.cutLen * 1e-3 + Math.max(3 * h, 0.2e-3);
-    const H = Math.max(3.5 * h, h + 12 * dx);
+    const H = Math.max(3.5 * h, h + 12 * dx, (c.depth || 0) * 1e-3);
     const nx = Math.round(L / dx), ny = Math.round(H / dx);
     this.L = nx * dx; this.H = ny * dx;
     const pts = [];
