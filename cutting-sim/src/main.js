@@ -74,7 +74,7 @@ function readCfg() {
   const shape = $('shape').value;
   if (mode === 'helix') return {
     mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'),
-    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), dir: $('dir').value, track: num('track'), fracture: $('fracture').checked, efScale: num('efs'),
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), floor: $('floor').checked, dir: $('dir').value, track: num('track'), fracture: $('fracture').checked, efScale: num('efs'),
   };
   if (mode === '3d') return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), b: num('b3'), lambda: num('lambda'), rake: num('rake'),
@@ -90,7 +90,7 @@ function readCfg() {
   };
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track',
-  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix']) $(id).addEventListener('change', reset);
+  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
 const custom = { text: null, name: '', rot: 0, flip: false, profile: null };

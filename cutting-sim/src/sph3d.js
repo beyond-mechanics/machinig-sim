@@ -131,6 +131,9 @@ export class Cutting3D {
     this.kh = Math.tan(this.lam) / m.R;                         // tooth lag per unit height [rad/m]
     const band = m.build(dx, c.band ? c.band * 1e-3 : Math.max(1.5 * m.hRef, 6 * dx)), pts = [];
     for (let kz = 0; kz < nz; kz++) for (const [x, y, fx] of band) pts.push(x, y, (kz + 0.5) * dx, fx);
+    // Shoulder: below the end of the tooth the work goes on (the floor), held by fixed layers; a
+    // cut through the full wall (floor off) leaves both faces of the layer free.
+    if (c.floor) for (let kz = 1; kz <= 3; kz++) for (const [x, y] of band) pts.push(x, y, (0.5 - kz) * dx, 1);
     this.L = m.L; this.H = m.H;
     // Kinematics as Mill.init, with the bottom tooth leading: θ(z) = θ0 − z·kh. The pass ends when
     // the top of the tooth has left the work.
