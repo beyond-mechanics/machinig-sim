@@ -3,8 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CuttingSim } from '../src/sph.js';
 import { MATERIALS, flowStress } from '../src/materials.js';
-import { makeTool, toolSdf, setPose, localSdf, arcPos } from '../src/tool.js';
-import { importProfile, breakerProfile, rakeOf } from '../src/profile.js';
+import { makeTool, toolSdf, setPose, localSdf, arcPos, toolOutline } from '../src/tool.js';
+import { importProfile, breakerProfile, rakeOf, wornProfile } from '../src/profile.js';
 
 const run = (cfg) => { const s = new CuttingSim(cfg); while (!s.done) s.stepSample(); return s; };
 
@@ -42,6 +42,25 @@ test('tool outline import: DXF lines are chained, closed with a body and give a 
   const b = breakerProfile({ rake: 5, clearance: 7, r: 10, land: 0.1, gw: 0.35, gd: 0.05, wallDeg: 35, wh: 0.06 });
   let a = 0; for (let i = 0; i < b.length; i++) { const q = b[(i + 1) % b.length]; a += b[i][0] * q[1] - q[0] * b[i][1]; }
   assert.ok(a > 0); assert.ok(Math.min(...b.map((p) => p[1])) === 0);
+});
+
+test('worn tool outline: no wear keeps the shape, flank wear lifts the edge and a crater recesses the rake face', () => {
+  const t = makeTool({ rakeDeg: 5, clearanceDeg: 7, edgeRadius: 10e-6 });
+  const base = toolOutline(t, 3e-3).map(([u, w]) => [u, w + t.r]);
+  const area = (p) => { let a = 0; for (let i = 0; i < p.length; i++) { const [x1, y1] = p[i], [x2, y2] = p[(i + 1) % p.length]; a += x1 * y2 - x2 * y1; } return a / 2; };
+  const fresh = wornProfile(base, [], 1), a0 = area(fresh);           // resampled near the edge
+  assert.ok(Math.abs(a0 - Math.abs(area(base))) < 1e-12, 'no wear, same area');
+  // 2 µm/min over the first 100 µm of the rake face, 1 µm/min on the first 30 µm of the flank, for 5 min.
+  const rows = [];
+  for (let s = -200; s <= 300; s += 5) rows.push({ s, wear: s >= 0 && s <= 100 ? 2 : s < 0 && s >= -30 ? 1 : 0 });
+  const worn = wornProfile(base, rows, 5);
+  const lost = a0 - area(worn);
+  assert.ok(lost > 0.7 * 1100e-12 && lost < 1.3 * 1100e-12, `material removed ${(lost * 1e12).toFixed(0)} µm² (about 10 × 100 + 5 × 30 − corner)`);
+  // The rake face 50 µm up is 10 µm further inside the tool than the unworn face 250 µm up (the
+  // worn outline is placed with its new lowest point at the origin, so compare within each outline).
+  const rakeU = (p, w) => { let best = null; for (const [u, ww] of p) if (Math.abs(ww - w) < 3e-6 && u > -80e-6 && (best == null || u > best)) best = u; return best; };
+  const d = (rakeU(fresh, 50e-6) - rakeU(fresh, 250e-6)) - (rakeU(worn, 50e-6) - rakeU(worn, 250e-6));
+  assert.ok(d > 7e-6 && d < 13e-6, `crater depth ${(d * 1e6).toFixed(1)} µm`);
 });
 
 test('flow stress: Johnson-Cook trends and strain softening of the tanh model', () => {
