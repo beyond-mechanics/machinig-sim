@@ -17,18 +17,20 @@
 // Ductile fracture as in 2D: Johnson-Cook damage under tensile mean stress in interior particles,
 // softening from D = 1 to 1.5, failed particles keep only compressive pressure; broken chip
 // pieces are tracked and removed once clear of the edge.
-// Not modelled here (yet): the tool temperature field and wear; the tool is adiabatic and takes
-// no heat from the chip.
+// Tool temperature and wear: the 2D grid of toolheat.js in the tool section (normal to the edge for
+// oblique cutting, normal to the cutter axis for the helix), fed with the contact heat averaged
+// along the edge, i.e. the mean section of the tool.
 // Units: SI. Axes: x cutting direction, y up, z across the strip (helix: x feed, y towards the
 // cutter centre from the work, z along the cutter axis).
-import { MATERIALS, flowStress } from './materials.js';
+import { MATERIALS, TOOLS, flowStress } from './materials.js';
+import { ToolHeat } from './toolheat.js';
 import { makeTool, localSdf, toolOutline } from './tool.js';
 import { Mill } from './process.js';
 
 export const DEFAULTS3D = {
   mat: 'S45C', vc: 200, h: 0.1, b: 0.3, lambda: 15, rake: 5, clearance: 7, edgeRadius: 10, mu: null,
   nh: 5, cutLen: 0.5, T0: 20, beta: 0.9, heatToWork: 0.5, avAlpha: null, avBeta: null, sides: 'periodic',
-  fracture: true, efScale: 1,
+  fracture: true, efScale: 1, toolMat: 'WC', hc: 1e8,
   // Helical end mill (mode 'helix'): diameter, flutes, feed per tooth, radial and axial depth [mm],
   // helix angle [°], up/down milling, degrees followed after the tooth leaves the work.
   D: 2, z: 3, fz: 0.1, ae: 0.2, ap: 0.3, helix: 30, dir: 'down', track: 5,
@@ -74,6 +76,10 @@ export class Cutting3D {
       this.rho[k] = this.rho0; this.T[k] = c.T0;
     }
 
+    // Tool heat grid (per unit edge length): contact energies are divided by the edge length Lz.
+    const Lb = Math.max(10 * h, 0.8e-3);
+    this.heat = new ToolHeat(tool, TOOLS[c.toolMat], { cell: Math.max(dx, Lb / 90), Lb, T0: c.T0, hc: c.hc });
+    this.Lz = this.bz; this.heatTool = 0;
     this.ad = 1 / (PI * this.hk ** 3);
     this.Wdx = this.kernelW(dx / this.hk);
     this.dt = (c.cfl ?? 0.3) * this.hk / (this.cs + this.V);
@@ -86,7 +92,7 @@ export class Cutting3D {
     this.next = new Int32Array(N); this.head = new Int32Array(1);
     this.t = 0; this.steps = 0; this.done = false; this.lastSample = 0;
     this.imp = [0, 0, 0, 0, 0, 0]; this.impT = 0; this.workIn = 0;
-    this.hist = { axis: [], fc: [], ft: [], fr: [], tmax: [], flow: [], area: [], len: [] };
+    this.hist = { axis: [], fc: [], ft: [], fr: [], tmax: [], ttool: [], flow: [], area: [], len: [] };
     this.pose(0);
   }
 
@@ -462,7 +468,8 @@ export class Cutting3D {
     const per = this.periodic, P = this.bz, helix = this.helix, ml = this.mill;
     const freezeU = -this.h - tool.r, vEsc2 = 100 * V * V, area = dx * dx;
     const freezeA = helix ? (this.h + tool.r + 2 * dx) / ml.R : 0;
-    let i0 = 0, i1 = 0, i2 = 0, work = 0, lt = 0, lr = 0;
+    let i0 = 0, i1 = 0, i2 = 0, work = 0, lt = 0, lr = 0, qt = 0;
+    const heat = this.heat, Lz = this.Lz, acc = helix || this.progress() > 0.5, cMat = mat.c;
     for (let i = 0; i < N; i++) {
       if (fixed[i] || this.dead[i]) { vx[i] = 0; vy[i] = 0; vz[i] = 0; this.contact[i] = 0; continue; }
       // Machined surface well behind the edge (normal distance) has unloaded: freeze it.
@@ -488,14 +495,19 @@ export class Cutting3D {
       const vn = rvx * nx + rvy * ny + rvz * nz, jn = m * (vn < 0 ? -vn : 0);
       let tx = rvx - vn * nx, ty = rvy - vn * ny, tz = rvz - vn * nz;
       const vt = Math.hypot(tx, ty, tz);
-      let jt = 0;
+      let jt = 0, eTool = 0;
       if (vt > 1e-12) {
         tx /= vt; ty /= vt; tz /= vt;
         const fsd = this.dmg[i] <= 1 ? 1 : Math.max(0, 3 - 2 * this.dmg[i]);
         const tauMax = flowStress(mat, ep[i], epd[i], T[i]) * fsd / Math.sqrt(3);
         jt = Math.min(m * vt, mu * jn, tauMax * area * dt);
-        T[i] += fw * jt * (vt - 0.5 * jt / m) / (this.mReal * mat.c);
+        const e = jt * (vt - 0.5 * jt / m);
+        T[i] += fw * e / (this.mReal * cMat); eTool = (1 - fw) * e;
       }
+      // Interface conduction into the tool grid, per unit edge length (face area dx² over Lz).
+      const qc = heat.contact(heat.cellOf(o[4], o[5]), T[i], area / Lz, eTool / Lz, jn / dt / Lz, vt, dt, acc) * Lz;
+      T[i] -= qc / (this.mReal * cMat);
+      qt += qc + eTool;
       const dpx = jn * nx - jt * tx, dpy = jn * ny - jt * ty, dpz = jn * nz - jt * tz;
       if (vn < 0) { vx[i] -= vn * nx; vy[i] -= vn * ny; vz[i] -= vn * nz; }
       vx[i] -= jt / m * tx; vy[i] -= jt / m * ty; vz[i] -= jt / m * tz;
@@ -507,8 +519,11 @@ export class Cutting3D {
     }
     const im = this.imp;
     im[0] += i0; im[1] += i1; im[2] += i2; im[3] += lt; im[4] += lr; this.impT += dt; this.workIn += work;
+    heat.step(dt);
+    if (acc) heat.aTime += dt;
+    this.heatTool += qt;
     this.t += dt; this.steps++;
-    if (this.progress() >= 1) this.done = true;
+    if (this.progress() >= 1) { this.done = true; if (!helix) heat.steady(); }
   }
 
   stepSample() {
@@ -641,7 +656,7 @@ export class Cutting3D {
     let tmax = -Infinity;
     for (let i = 0; i < this.N; i++) if (!this.dead[i] && this.T[i] > tmax) tmax = this.T[i];
     const hs = this.hist, fl = this.chipFlow();
-    hs.axis.push((this.ox - this.x0) / Math.max(this.tvx / this.V, 1e-9) * 1e3); hs.fc.push(-f[0]); hs.ft.push(f[1]); hs.fr.push(f[2]); hs.tmax.push(tmax); hs.flow.push(fl.eta);
+    hs.axis.push((this.ox - this.x0) / Math.max(this.tvx / this.V, 1e-9) * 1e3); hs.fc.push(-f[0]); hs.ft.push(f[1]); hs.fr.push(f[2]); hs.tmax.push(tmax); hs.ttool.push(this.heat.maxT()); hs.flow.push(fl.eta);
   }
 
   // Helix: tangential Ft and radial Fr (towards the axis) summed at each contact point, axial Fa
@@ -653,7 +668,7 @@ export class Cutting3D {
     let tmax = -Infinity;
     for (let i = 0; i < this.N; i++) if (!this.dead[i] && this.T[i] > tmax) tmax = this.T[i];
     const [A, Lc] = this.helixSection();
-    hs.axis.push(m.beta / DEG + 90); hs.fc.push(ft); hs.ft.push(fr); hs.fr.push(fa); hs.tmax.push(tmax);
+    hs.axis.push(m.beta / DEG + 90); hs.fc.push(ft); hs.ft.push(fr); hs.fr.push(fa); hs.tmax.push(tmax); hs.ttool.push(this.heat.maxT());
     hs.flow.push(A > 0 ? this.chipFlow().eta : null); hs.area.push(A); hs.len.push(Lc);
   }
 
@@ -698,8 +713,16 @@ export class Cutting3D {
       if (this.ep[i] > epMax) epMax = this.ep[i];
       heat += this.T[i] - c.T0;
     }
-    heat *= this.mReal * this.mat.c;
-    const ci = this.chipInfo, frac = { pieces: ci ? ci.pieces : 0, failed: ci ? ci.failed : 0, evacuated: this.nEvac };
+    heat = heat * this.mReal * this.mat.c + this.heatTool;
+    // Tool: maximum temperature (now, and steady for oblique cutting) and Usui wear rates.
+    const ht = this.heat;
+    let wearCrater = 0, wearFlank = 0;
+    if (this.done) for (const r of ht.profile()) {
+      if (r.s > 0 && r.wear > wearCrater) wearCrater = r.wear;
+      if (r.s <= 0 && r.wear > wearFlank) wearFlank = r.wear;
+    }
+    const tl = { toolT: ht.maxT(), toolSteadyT: ht.steadyT ? ht.maxT(ht.steadyT) : null, wearCrater, wearFlank };
+    const ci = this.chipInfo, frac = { ...tl, pieces: ci ? ci.pieces : 0, failed: ci ? ci.failed : 0, evacuated: this.nEvac };
     if (this.helix) return this.summaryHelix({ ...frac, tmax, epMax, heatRatio: this.workIn > 0 ? heat / this.workIn : 0, progress: Math.min(1, this.progress()),
       t: this.t, steps: this.steps, N: this.N, dx: this.dx * 1e6, ms: this.ms, done: this.done, kcRef: this.mat.kcRef });
     const fc = avg(hs.fc), ft = avg(hs.ft), fr = avg(hs.fr), fl = this.chipFlow();

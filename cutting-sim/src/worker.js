@@ -79,6 +79,7 @@ function send3d() {
     type: 'frame', dim: 3, x, y, z, T, seq, ep, sr, p, D, flag, dx: s.dx * 1e3, h: s.h * 1e3,
     tool,
     box: [s.L * 1e3, s.H * 1e3, s.bz * 1e3],
+    profile: s.done ? s.heat.profile() : null,
     hist: s.hist, summary: s.summary(), running, wall: now, dt: s.dt,
   }, [x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer, D.buffer]);
 }

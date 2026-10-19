@@ -130,6 +130,9 @@ test('3D oblique cutting (wide plate): chip flow angle follows Stabler, ηc ≈ 
   assert.ok(ra.kc > 1500 && ra.kc < 2800, `kc ${ra.kc.toFixed(0)}`);
   assert.ok(Math.abs(ra.fr) < 0.05 * ra.fc, `Fr ${ra.fr.toFixed(2)}`);
   assert.ok(Math.abs(ra.flow) < 3, `ηc ${ra.flow.toFixed(1)}° at λ = 0`);
+  // Tool heat from the contact averaged along the edge: a steady tool temperature like 2D's.
+  assert.ok(ra.toolSteadyT > 250 && ra.toolSteadyT < 900, `tool steady ${ra.toolSteadyT && ra.toolSteadyT.toFixed(0)} °C`);
+  assert.ok(ra.heatRatio > 0.7 && ra.heatRatio < 1.05, `heat / work ${ra.heatRatio.toFixed(2)}`);
   // Inclined edge: chip flow angle within ±25 % of λ, a side force appears.
   assert.ok(rb.flow > 22.5 && rb.flow < 37.5, `ηc ${rb.flow.toFixed(1)}° at λ = 30°`);
   assert.ok(rb.fr > 0.15 * rb.fc, `Fr ${rb.fr.toFixed(1)} vs Fc ${rb.fc.toFixed(1)}`);
@@ -142,20 +145,16 @@ test('3D helical end mill (A7075, φ2, down milling): the helix spreads the entr
   const a = run3({ ...cfg, helix: 0 }), b = run3({ ...cfg, helix: 30 });
   const ra = a.summary(), rb = b.summary();
   for (const s of [a, b]) assert.equal(s.nDead, 0);
-  // Rotation angle over which the tangential force climbs from 10 % to 90 % of its peak.
-  const rise = (s) => {
-    const h = s.hist, pk = Math.max(...h.fc);
-    const at = (f) => h.axis[h.fc.findIndex((v) => v >= f * pk)];
-    return at(0.9) - at(0.1);
-  };
+  // Rotation angle of the tangential force peak.
+  const peakAt = (s) => { const h = s.hist, pk = Math.max(...h.fc); return h.axis[h.fc.indexOf(pk)]; };
   // Straight tooth: the force follows the chip thickness, no axial force, no axial chip flow.
   assert.ok(ra.Ktc > 300 && ra.Ktc < 2000, `Ktc ${ra.Ktc.toFixed(0)}`);
   assert.ok(Math.abs(ra.faMax) < 0.05 * ra.ftMax, `Fa ${ra.faMax.toFixed(2)}`);
   assert.ok(Math.abs(ra.flow) < 5, `ηc ${ra.flow.toFixed(1)}° at β = 0`);
-  // Helix: the tooth enters progressively (the rise takes longer; helix lag ~10°),
-  // the peak drops, the chip pushes towards the shank and flows up the flute.
-  assert.ok(rise(b) > rise(a) + 0.2 * rb.lag, `rise ${rise(a).toFixed(1)}° → ${rise(b).toFixed(1)}° (lag ${rb.lag.toFixed(1)}°)`);
-  assert.ok(rb.ftMax < ra.ftMax, `peak Ft ${ra.ftMax.toFixed(1)} → ${rb.ftMax.toFixed(1)} N`);
+  // Helix: the upper part of the tooth enters later (lag ~10°), so the force peak comes later and
+  // lower; the chip pushes towards the shank and flows up the flute.
+  assert.ok(peakAt(b) > peakAt(a) + 0.25 * rb.lag, `peak at ${peakAt(a).toFixed(1)}° → ${peakAt(b).toFixed(1)}° (lag ${rb.lag.toFixed(1)}°)`);
+  assert.ok(rb.ftMax < 0.95 * ra.ftMax, `peak Ft ${ra.ftMax.toFixed(1)} → ${rb.ftMax.toFixed(1)} N`);
   assert.ok(rb.faMax > 0.15 * rb.ftMax, `Fa ${rb.faMax.toFixed(1)} vs Ft ${rb.ftMax.toFixed(1)}`);
   assert.ok(rb.flow > 0.8 * 30 && rb.flow < 2 * 30, `ηc ${rb.flow.toFixed(1)}° at β = 30°`);
 });

@@ -390,6 +390,13 @@ function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty }) 
     if (s.data[i] != null && s.dot !== false) { c.fillStyle = css.getPropertyValue(s.color); c.beginPath(); c.arc(X(xs[i]), Y(s.data[i]), 3, 0, 7); c.fill(); }
   }
 }
+// Wear rate along the tool surface (the mean section in 3D), once the cut is done.
+function wearChart() {
+  const pr = frame && frame.profile ? frame.profile.filter((r) => r.s > -400 && r.s < 500) : [];
+  const ps = pr.map((r) => r.s), xr = pr.length ? [Math.min(...ps), Math.max(...ps)] : [-200, 300];
+  lineChart($('chart-w'), ps, [{ data: pr.map((r) => r.wear), color: '--s3', dot: false }],
+    { xmin: xr[0], xmax: xr[1], unit: 'µm/min', xlabel: '逃げ面 ← 刃先からの距離 [µm] → すくい面', empty: '計算が終わると表示します' });
+}
 function drawCharts() {
   const d3 = cfg && cfg.mode === '3d', hx = cfg && cfg.mode === 'helix';
   $('cf-c-wrap').hidden = !(d3 || hx);
@@ -398,11 +405,12 @@ function drawCharts() {
     const xmax = frame && frame.dim === 3 ? Math.max(1, frame.summary.arc + frame.summary.lag + frame.summary.track + 6) : 40;
     const xl = '横軸 刃の回転角 [°]（下端の刃、最下点から）';
     lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
-    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }], { xmax, unit: '°C', xlabel: xl });
+    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+    wearChart();
     lineChart($('chart-ts'), h.axis, [{ data: h.flow.map((v) => (v == null ? null : Math.max(0, v))), color: '--s1' }, { data: h.axis.map(() => cfg.helix), color: '--s2', dot: false }],
       { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します' });
     $('cf-a').textContent = '接線分力 Ft'; $('cf-b').textContent = '半径分力 Fr'; $('cf-c').textContent = '軸方向分力 Fa';
-    $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span>';
+    $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span><span><i style="background: var(--s2)"></i>工具の最高</span>';
     $('h-ts').innerHTML = '切りくず流出角 ηc<span><i style="background: var(--s1)"></i>計算値</span><span><i style="background: var(--s2)"></i>ねじれ角 β</span>';
     return;
   }
@@ -411,11 +419,12 @@ function drawCharts() {
     const xmax = frame && frame.dim === 3 ? Math.max(cfg.cutLen, frame.summary.travel, ...h.axis) : cfg.cutLen;
     const xl = '横軸 工具の移動量 [mm]';
     lineChart($('chart-f'), h.axis, [{ data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl });
-    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }], { xmax, unit: '°C', xlabel: xl });
+    lineChart($('chart-t'), h.axis, [{ data: h.tmax, color: '--s3' }, { data: h.ttool || [], color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+    wearChart();
     lineChart($('chart-ts'), h.axis, [{ data: h.flow.map((v) => (v == null ? null : Math.max(0, v))), color: '--s1' }, { data: h.axis.map(() => cfg.lambda), color: '--s2', dot: false }],
       { xmax, unit: '°', xlabel: xl, empty: '切りくずができると表示します' });
     $('cf-a').textContent = '主分力 Fc'; $('cf-b').textContent = '背分力 Ft'; $('cf-c').textContent = '横分力 Fr';
-    $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span>';
+    $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span><span><i style="background: var(--s2)"></i>工具の最高</span>';
     $('h-ts').innerHTML = '切りくず流出角 ηc<span><i style="background: var(--s1)"></i>計算値</span><span><i style="background: var(--s2)"></i>傾き角 λ（Stabler の法則）</span>';
     return;
   }
@@ -447,9 +456,11 @@ const CELLS = {
     ['比切削抵抗 kc', (s) => f0(s.kc), 'N/mm²', (s) => `便覧値の目安 ${s.kcRef}`],
     ['切りくず流出角 ηc', (s) => (s.flow == null ? '—' : f1(s.flow)), '°', (s) => `傾き角 λ = ${s.lambda}°（Stabler：ηc ≈ λ）`],
     ['切りくず厚さ hc', (s) => (s.ratio > 0 ? f3(s.hc) : '—'), 'mm', (s) => `切りくず厚さ比 ${s.ratio > 0 ? s.ratio.toFixed(2) : '—'}（中央部）`],
-    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '工具への熱の逃げは含まない'],
+    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '切りくずのすくい面側'],
+    ['工具の最高温度', (s) => f0(s.toolSteadyT ?? s.toolT), '°C', (s) => (s.toolSteadyT != null ? `定常推定。切削終了時点 ${f0(s.toolT)} °C` : '切削中の値（定常推定は終了後）')],
+    ['クレーター摩耗速度', (s) => (s.done ? f1(s.wearCrater) : '—'), 'µm/min', (s) => `逃げ面 ${s.done ? f1(s.wearFlank) : '—'} µm/min、Usui 式`],
     ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', () => '切りくずの裏面付近'],
-    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量（工具へ流れた分を含む） / 工具がした仕事'],
     ['工具の移動量', (s) => f3(s.travel), 'mm', () => '傾けた刃が全幅にかかるまでを含む'],
     ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `刃から離れて排出 ${s.evacuated} 粒子 · 割れた粒子 ${s.failed}`],
     ['粒子数', (s) => s.N.toLocaleString(), '個', (s) => `間隔 ${s.dx.toFixed(0)} µm`],
@@ -464,9 +475,10 @@ const CELLS = {
     ['軸方向の切削係数', (s) => (s.done ? f0(s.Kac) : '—'), 'N/mm²', (s) => `エッジ係数 Kae ${s.done ? f1(s.Kae) : '—'} N/mm`],
     ['切りくず流出角 ηc', (s) => (s.flow == null ? '—' : f1(s.flow)), '°', (s) => `ねじれ角 β = ${s.helix}°（Stabler：ηc ≈ β）`],
     ['最大切取り厚さ', (s) => f3(s.hmax), 'mm', (s) => `接触角 ${f1(s.arc)}°、刃の遅れ ${f1(s.lag)}°`],
-    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '工具への熱の逃げは含まない'],
-    ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', () => '切りくずの裏面付近'],
-    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '切りくずのすくい面側'],
+    ['工具の最高温度', (s) => f0(s.toolT), '°C', () => '1刃の通過中の値（高さ方向の平均断面）'],
+    ['クレーター摩耗速度', (s) => (s.done ? f1(s.wearCrater) : '—'), 'µm/min', (s) => `逃げ面 ${s.done ? f1(s.wearFlank) : '—'} µm/min、接触中の値`],
+    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量（工具へ流れた分を含む） / 工具がした仕事'],
     ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `刃から離れて排出 ${s.evacuated} 粒子 · 割れた粒子 ${s.failed}`],
     ['粒子数', (s) => s.N.toLocaleString(), '個', (s) => `間隔 ${s.dx.toFixed(0)} µm · 質量スケーリング ×${f0(s.ms)}`],
   ],
