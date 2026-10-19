@@ -205,6 +205,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row"><label for="res">解像度</label>
           <select id="res"><option value="3">ごく粗い（h/3）</option><option value="4">かなり粗い（h/4）</option><option value="5">とても粗い（h/5）</option><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option><option value="16">とても細かい（h/16）</option></select></div>
         <div class="meta" id="meta">—</div>
+        <div class="btns" data-only="mill helix" hidden><button id="export" type="button" disabled>切削係数を書き出す（JSON）</button></div>
+        <p class="hint" data-only="mill helix" hidden id="exhint">計算が終わると、3軸加工シミュレーターと同じ形（Ktc, Krc, Kac, Kte, Kre, Kae）の切削係数を JSON で保存できます。</p>
       </fieldset>
     </aside>
   </div>

@@ -518,8 +518,29 @@ function buildCells() {
     root.appendChild(d);
   });
 }
+// Cutting coefficients in the 3-axis simulator's material format (linear edge-force model).
+function exportCoeffs() {
+  const s = frame.summary, c = cfg, r = (v) => (v == null ? null : Math.round(v * 10) / 10);
+  const out = {
+    source: 'cutting-sim', mode: c.mode, material: c.mat,
+    conditions: { vc: c.vc, D: c.D, flutes: c.z, fz: c.fz, ae: c.ae, ap: c.mode === 'helix' ? c.ap : c.width, helix: c.mode === 'helix' ? c.helix : 0,
+      dir: c.dir, rake: c.rake, edgeRadius: c.edgeRadius },
+    coefficients: { Ktc: r(s.Ktc), Krc: r(s.Krc), Kac: c.mode === 'helix' ? r(s.Kac) : null, Kte: r(s.Kte), Kre: r(s.Kre), Kae: c.mode === 'helix' ? r(s.Kae) : null },
+    units: { K_c: 'N/mm²', K_e: 'N/mm' },
+  };
+  const text = JSON.stringify(out, null, 2);
+  try { navigator.clipboard && navigator.clipboard.writeText(text); } catch (e) { /* clipboard may be blocked */ }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.download = `coeffs_${c.mat}_${c.mode}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  $('exhint').textContent = 'JSON を保存し、クリップボードにもコピーしました。';
+}
+$('export').addEventListener('click', exportCoeffs);
+
 function readouts() {
   const s = frame.summary, has = s.steps > 0;
+  $('export').disabled = !(s.done && (cfg.mode === 'mill' || cfg.mode === 'helix'));
   CELLS[cfg.mode].forEach(([, v, , sub], i) => {
     $(`rv${i}`).textContent = has ? v(s) : '—';
     $(`rs${i}`).textContent = has ? sub(s) : '—';
