@@ -73,7 +73,11 @@ export class Mill {
     let xmin = Infinity, xmax = -Infinity;
     for (let j = 0; j < ny; j++) for (let i = nx0; i < nx1; i++) {
       const x = (i + 0.5) * dx, y = -(j + 0.5) * dx;
-      if (this.removed(x, y, px, cy)) continue;                // removed by the previous tooth
+      // Removed by the previous tooth. A tooth leaves its surface half a spacing (the contact
+      // distance) outside its path, so the first tooth's surface is laid out there too; on the
+      // path itself the first chip was thicker by that much than every later one (in 3D at h/4,
+      // a first tooth 19 % above the second).
+      if (this.removed(x, y, px, cy, 0, -0.5 * dx)) continue;
       const rc = Math.hypot(x, y - cy);
       if (rc > R + band) continue;
       const ang = Math.atan2(y - cy, x);
