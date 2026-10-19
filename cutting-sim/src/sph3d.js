@@ -130,10 +130,13 @@ export class Cutting3D {
     this.bz = nz * dx;
     this.kh = Math.tan(this.lam) / m.R;                         // tooth lag per unit height [rad/m]
     const band = m.build(dx, c.band ? c.band * 1e-3 : Math.max(1.5 * m.hRef, 6 * dx)), pts = [];
-    for (let kz = 0; kz < nz; kz++) for (const [x, y, fx] of band) pts.push(x, y, (kz + 0.5) * dx, fx);
+    // The tooth reaches a layer z·kh later, the feed having moved the cutter on by drift(b0 + z·kh)
+    // meanwhile: each layer's comma shifts by that much (Mill.drift).
+    const lay = (z) => m.drift(m.b0 + z * this.kh);
+    for (let kz = 0; kz < nz; kz++) { const z = (kz + 0.5) * dx, sx = lay(z); for (const [x, y, fx] of band) pts.push(x + sx, y, z, fx); }
     // Shoulder: below the end of the tooth the work goes on (the floor), held by fixed layers; a
     // cut through the full wall (floor off) leaves both faces of the layer free.
-    if (c.floor) for (let kz = 1; kz <= 3; kz++) for (const [x, y] of band) pts.push(x, y, (0.5 - kz) * dx, 1);
+    if (c.floor) for (let kz = 1; kz <= 3; kz++) for (const [x, y] of band) pts.push(x + lay(0), y, (0.5 - kz) * dx, 1);
     this.L = m.L; this.H = m.H;
     // Kinematics as Mill.init, with the bottom tooth leading: θ(z) = θ0 − z·kh. The pass ends when
     // the top of the tooth has left the work.
@@ -166,7 +169,7 @@ export class Cutting3D {
   pose(time) {
     if (!this.helix) { this.ox = this.x0 + this.tvx * time; return; }
     const m = this.mill;
-    m.beta = m.bStart + m.om * time; m.cx = m.vf * time; m.cy = m.R - m.ae;
+    m.beta = m.bStart + m.om * time; m.cx = m.drift(m.beta); m.cy = m.R - m.ae;
   }
   progress() {
     if (this.helix) { const m = this.mill; return (m.beta - m.bStart) / (m.bEnd - m.bStart); }

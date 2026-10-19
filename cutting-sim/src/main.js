@@ -84,13 +84,13 @@ function readCfg() {
   return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
     edgeRadius: num('edge'), mu: num('mu'), width: num('width'), cutLen: num('len'), nh: num('res'),
-    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'),
+    D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'), passes: num('passes'),
     tool: shape === 'custom' && !custom.profile ? 'wedge' : shape, land: num('land'), landDeg: num('landDeg'),
     gw: num('gw'), gd: num('gd'), wallDeg: num('wallDeg'), wh: num('wh'), profile: shape === 'custom' ? custom.profile : null,
     fracture: $('fracture').checked, efScale: num('efs'), residual: mode === 'ortho' && $('residual').checked,
   };
 }
-for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track',
+for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
   'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
@@ -442,8 +442,9 @@ function drawCharts() {
   $('h-ts').innerHTML = '工具表面の温度<span><i style="background: var(--s2)"></i>切削終了時点</span><span><i style="background: var(--s1)"></i>定常推定</span>';
   const mill = cfg && cfg.mode === 'mill';
   const h = frame ? frame.hist : { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [] };
-  const xmax = mill ? (frame ? Math.max(1, frame.summary.arc + frame.summary.track + 6) : 40) : cfg ? cfg.cutLen : 1;
-  const xl = mill ? '横軸 刃の回転角 [°]' : '横軸 切削長さ [mm]';
+  const np = mill && frame ? frame.summary.passes || 1 : 1;
+  const xmax = mill ? (frame ? Math.max(1, (np - 1) * frame.summary.span + frame.summary.arc + frame.summary.track + 6) : 40) : cfg ? cfg.cutLen : 1;
+  const xl = mill ? (np > 1 ? '横軸 刃の回転角 [°]（刃ごとに続けて表示）' : '横軸 刃の回転角 [°]') : '横軸 切削長さ [mm]';
   lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], { xmax, unit: 'N', xlabel: xl });
   lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('trake', '--s1'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }, { data: h.ttool, color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
   const pr = frame && frame.profile ? frame.profile.filter((r) => r.s > -400 && r.s < 500) : [];
@@ -515,8 +516,8 @@ const CELLS = {
     ['実効すくい角', (s) => f1(s.toolRake), '°', () => '刃先から 0.3〜1.0 h の工具表面'],
   ],
   mill: [
-    ['接線分力 Ft の最大', (s) => f0(s.ftMax), 'N', () => '1刃の通過中'],
-    ['半径分力 Fr の最大', (s) => f0(s.frMax), 'N', () => '1刃の通過中'],
+    ['接線分力 Ft の最大', (s) => f0(s.ftMax), 'N', (s) => (s.passes > 1 ? `刃ごと ${s.passMax.map(f0).join(' → ')} N` : '1刃の通過中')],
+    ['半径分力 Fr の最大', (s) => f0(s.frMax), 'N', (s) => (s.passes > 1 ? `${s.passes} 刃の通過中。係数は最後の刃から` : '1刃の通過中')],
     ['最大切取り厚さ', (s) => f3(s.hmax), 'mm', (s) => `接触角 ${f1(s.arc)}°`],
     ['接線方向の切削係数', (s) => (s.done ? f0(s.Ktc) : '—'), 'N/mm²', (s) => `エッジ係数 Kte ${s.done ? f1(s.Kte) : '—'} N/mm`],
     ['半径方向の切削係数', (s) => (s.done ? f0(s.Krc) : '—'), 'N/mm²', (s) => `エッジ係数 Kre ${s.done ? f1(s.Kre) : '—'} N/mm`],

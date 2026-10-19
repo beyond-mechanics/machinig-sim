@@ -4,7 +4,8 @@
 //    tool axis (no helix). The tooth rotates at Vc about the moving cutter centre and removes
 //    the comma-shaped chip left between the previous tooth's arc and its own: h(β) = fz·|cos β|
 //    from 0 to fz·sin Δ, with Δ = acos((R − ae)/R). Up milling enters at h = 0 and exits at hmax,
-//    down milling the reverse.
+//    down milling the reverse. With passes > 1 the next teeth follow, each one fz further on,
+//    cutting the surface the previous one left (work-hardened, residual stress, real shape).
 import { setPose } from './tool.js';
 
 const DEG = Math.PI / 180;
@@ -55,12 +56,13 @@ export class Mill {
     this.Delta = Math.acos((this.R - this.ae) / this.R);
     this.hRef = this.fz * Math.sin(this.Delta);
     this.h = this.hRef;
+    this.passes = Math.max(1, Math.round(c.passes || 1)); this.k = 0; this.tk = 0;
     // Engaged arc (angle of the tooth tip about the cutter centre, CCW rotation).
     if (this.s > 0) { this.b0 = -90 * DEG; this.b1 = -90 * DEG + this.Delta; }
     else { this.b0 = -90 * DEG - this.Delta; this.b1 = -90 * DEG; }
   }
   // band: thickness of work kept beyond the cut surface (the 3D solver passes a thinner one).
-  build(dx, band = Math.max(3 * this.hRef, 10 * dx)) {
+  build(dx, band = Math.max(3 * this.hRef, 10 * dx) + (this.passes - 1) * this.fz) {
     const { R, fz, ae, s } = this;
     this.band = band;
     const cy = R - ae, px = -s * fz;
@@ -71,7 +73,7 @@ export class Mill {
     let xmin = Infinity, xmax = -Infinity;
     for (let j = 0; j < ny; j++) for (let i = nx0; i < nx1; i++) {
       const x = (i + 0.5) * dx, y = -(j + 0.5) * dx;
-      if (Math.hypot(x - px, y - cy) < R) continue;           // removed by the previous tooth
+      if (this.removed(x, y, px, cy)) continue;                // removed by the previous tooth
       const rc = Math.hypot(x, y - cy);
       if (rc > R + band) continue;
       const ang = Math.atan2(y - cy, x);
@@ -84,6 +86,16 @@ export class Mill {
     this.view = { x0: xmin - 0.05e-3, x1: xmax + 0.05e-3, y0: -ae - band - 0.02e-3, y1: Math.max(0.25e-3, 6 * this.hRef) };
     return pts;
   }
+  // Centre of a tooth's arc drifts with the feed while it turns: at angle β it is fz·z·(β − b0)/2π
+  // past where it was at b0 (every tooth alike, one fz apart). The previous tooth's path is
+  // that trochoid too; a fixed circle would leave the first tooth a chip thicker by the drift
+  // (up to 20 % at the exit of a φ10 two-flute cut).
+  drift(beta) { return this.s * this.fz * this.c.z * (beta - this.b0) / (2 * Math.PI); }
+  removed(x, y, px, cy) {
+    let ox = px + this.drift(Math.atan2(y - cy, x - px));
+    ox = px + this.drift(Math.atan2(y - cy, x - ox));
+    return Math.hypot(x - ox, y - cy) < this.R;
+  }
   init(sim) {
     const t = sim.tool, c = this.c;
     this.V = sim.V; this.om = this.V / this.R;
@@ -94,14 +106,31 @@ export class Mill {
     t.om = this.om;
     this.pose(sim, 0);
   }
-  angle(time) { return this.bStart + this.om * time; }
+  angle(time) { return this.bStart + this.om * (time - this.tk); }
   pose(sim, time) {
-    const t = sim.tool, b = this.angle(time), cx = this.vf * time, cy = this.R - this.ae, rr = this.R + t.wmin;
+    const t = sim.tool, b = this.angle(time), cx = this.k * this.s * this.fz + this.drift(b), cy = this.R - this.ae, rr = this.R + t.wmin;
     this.cx = cx; this.cy = cy; this.beta = b;
     t.ox = cx; t.oy = cy; t.vx = this.vf; t.vy = 0;
     setPose(t, cx + rr * Math.cos(b), cy + rr * Math.sin(b), b + Math.PI / 2);
   }
-  progress() { return (this.beta - this.bStart) / (this.bEnd - this.bStart); }
+  progress() { return (this.k + this.passProgress()) / this.passes; }
+  passProgress() { return (this.beta - this.bStart) / (this.bEnd - this.bStart); }
+  // Next tooth: the chip of this one is gone by then (dropped), the frozen surface it left is
+  // released, and the tooth starts its own arc about a centre fz further on. The tooth goes
+  // round the rest of the turn in the air, which is skipped.
+  nextPass(sim) {
+    if (this.k + 1 >= this.passes || this.passProgress() < 1) return false;
+    const { N, x, y, fixed, dead } = sim, R2 = this.R * this.R;
+    for (let i = 0; i < N; i++) {
+      if (dead[i]) continue;
+      const dx = x[i] - this.cx, dy = y[i] - this.cy;
+      if (dx * dx + dy * dy < R2 || y[i] > sim.dx) { dead[i] = 2; sim.nEvac++; }
+      else if (fixed[i] === 2) fixed[i] = 0;
+    }
+    this.k++; this.tk = sim.t;
+    this.pose(sim, sim.t);
+    return true;
+  }
   accumulate() { return true; }
   freezes(sim, x, y) {
     const rc = Math.hypot(x - this.cx, y - this.cy);
@@ -109,7 +138,9 @@ export class Mill {
     const ang = Math.atan2(y - this.cy, x - this.cx);
     return ang < this.beta - (this.hRef + sim.tool.r + 2 * sim.dx) / this.R;
   }
-  axis() { return this.beta / DEG + 90; }                     // tooth angle from the bottom [°]
+  // Chart abscissa: tooth angle from the bottom [°]; later teeth are laid end to end after it.
+  axis() { return this.beta / DEG + 90 + this.k * this.span(); }
+  span() { return (this.bEnd - this.bStart) / DEG; }
   hNom(beta = this.beta) {                                     // nominal uncut chip thickness [m]
     if (beta < this.b0 || beta > this.b1) return 0;
     return Math.max(0, this.s * this.fz * Math.cos(beta));

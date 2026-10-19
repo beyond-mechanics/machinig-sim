@@ -40,7 +40,7 @@ export const DEFAULTS = {
   // cut an unloading and cooling phase of relaxSteps steps before the depth profile is taken.
   residual: false, relaxSteps: 5000,
   // End mill: keep following the chip for this many degrees after the tooth leaves the work.
-  track: 10,
+  track: 10, passes: 1,
 };
 
 const PI = Math.PI;
@@ -116,7 +116,7 @@ export class CuttingSim {
     this.impX = 0; this.impY = 0; this.impT = 0; this.qTool = 0; this.qToolT = 0;
     this.workIn = 0; this.heatTool = 0;   // cumulative energy per unit width [J/m]
     // fc/ft: cutting and thrust force (ortho) or tangential and radial force (mill).
-    this.hist = { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [], hnom: [] };
+    this.hist = { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [], hnom: [], pass: [] };
   }
 
   allocPairs(n) {
@@ -410,6 +410,7 @@ export class CuttingSim {
     this.impX += ix; this.impY += iy; this.impT += dt; this.qTool += qt; this.tRake = tRake;
     this.workIn += work; this.heatTool += qt;
     this.t += dt; this.steps++;
+    if (proc.nextPass) proc.nextPass(this);
     if (proc.progress(this) >= 1) this.finish();
   }
 
@@ -460,7 +461,7 @@ export class CuttingSim {
     this.step();
     if (this.relax) return;
     const p = this.proc.progress(this);
-    if (p - this.lastSample >= 1 / 160 || this.done) { this.sample(); this.lastSample = p; }
+    if (p - this.lastSample >= 1 / (160 * (this.proc.passes || 1)) || this.done) { this.sample(); this.lastSample = p; }
   }
 
   shepard() {
@@ -504,6 +505,7 @@ export class CuttingSim {
     hst.axis.push(this.proc.axis(this)); hst.fc.push(f.a); hst.ft.push(f.b); hst.tmax.push(tmax);
     hst.trake.push(this.tRake); hst.ttool.push(this.heat.maxT());
     hst.hnom.push(this.proc instanceof Mill ? this.proc.hNom() * 1e3 : this.cfg.h);
+    hst.pass.push(this.proc.k || 0);
     return { fc: f.a, ft: f.b, tmax };
   }
 
@@ -624,12 +626,16 @@ export class CuttingSim {
     base.wearCrater = wearCrater; base.wearFlank = wearFlank;
     if (this.proc instanceof Mill) {
       const pr = this.proc;
-      // Least squares over samples with h > 15 % of hmax (entry/exit transients excluded).
+      // Least squares over samples with 15 % < h < 90 % of hmax. Near h = 0 the edge only ploughs;
+      // near hmax the tooth meets the free top face (the exit of up milling, where the chip lets go
+      // and the force drops; the entry of down milling, an impact). With both ends left in, up
+      // milling gave Ktc 453 and down milling 1,100 N/mm² for the same A7075 cut; without the top
+      // end, 1,217 and 1,143.
       const fit = (F) => {
         let sh = 0, sf = 0, shh = 0, shf = 0, c = 0;
         for (let i = 0; i < n; i++) {
           const hh = hs.hnom[i];
-          if (hh < 0.15 * pr.hRef * 1e3) continue;
+          if (hh < 0.15 * pr.hRef * 1e3 || hh > 0.9 * pr.hRef * 1e3 || hs.pass[i] !== pr.k) continue;   // the last tooth only
           sh += hh; sf += F[i] / b; shh += hh * hh; shf += hh * F[i] / b; c++;
         }
         const det = c * shh - sh * sh;
@@ -646,7 +652,10 @@ export class CuttingSim {
         ejectV = Math.hypot(big.vx, big.vy) * 60;
         ejectAng = Math.atan2(big.vx * rx + big.vy * ry, big.vx * tx + big.vy * ty) * 180 / PI;
       }
-      return { ...base, ftMax: Math.max(0, ...hs.fc), frMax: Math.max(0, ...hs.ft), hmax: pr.hRef * 1e3,
+      // Peak tangential force of each tooth (several teeth: the later ones cut the surface left behind).
+      const passMax = [];
+      for (let i = 0; i < n; i++) passMax[hs.pass[i]] = Math.max(passMax[hs.pass[i]] || 0, hs.fc[i]);
+      return { ...base, ftMax: Math.max(0, ...hs.fc), frMax: Math.max(0, ...hs.ft), hmax: pr.hRef * 1e3, passMax, passes: pr.passes, span: pr.span(),
         Ktc, Kte, Krc, Kre, angle: pr.axis(this), arc: pr.Delta * 180 / PI, trake: base.trakeMax, ejectV, ejectAng,
         track: cfg.track };
     }
