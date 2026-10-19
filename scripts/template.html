@@ -203,7 +203,12 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         </fieldset>
         <fieldset>
           <legend>切粉の排出</legend>
-          <div class="seg"><button data-cool="dry" aria-pressed="false">ドライ</button><button data-cool="air" aria-pressed="true">エアブロー</button><button data-cool="flood" aria-pressed="false">クーラント</button></div>
+          <div class="seg" style="grid-template-columns:repeat(4,1fr)"><button data-cool="dry" aria-pressed="false">ドライ</button><button data-cool="air" aria-pressed="true">エアブロー</button><button data-cool="flood" aria-pressed="false">クーラント</button><button data-cool="through" aria-pressed="false">スルー</button></div>
+          <div style="display:grid;gap:8px" id="nozzleBox">
+            <div class="slider"><label for="nzAz">ノズルの向き (工具まわりの方位)</label><output id="nzAzOut">218°</output><input type="range" id="nzAz" min="0" max="355" step="5" value="218"></div>
+            <div class="slider"><label for="nzH">ノズルの高さ (刃先から)</label><output id="nzHOut">55 mm (仰角 44°)</output><input type="range" id="nzH" min="5" max="120" step="1" value="55"></div>
+          </div>
+          <p class="hint" id="coolHint">ノズルは主軸に付いて工具と一緒に動き、常に刃先を狙います。スルーは工具内部の穴から刃先へ出すスルースピンドルクーラントです。</p>
         </fieldset>
         <fieldset>
           <legend>表示</legend>
@@ -268,14 +273,17 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li><b>ワーク(薄肉壁)の変形</b>: 工具が押している壁の厚さ・自由高さ・長さを高さマップから読み取り、根元固定の片持ち板(有効幅は荷重高さの約2倍)として剛性と質量を出します。壁は壁の法線方向の1自由度振動系として工具と連成し、切りくず厚さは工具と壁の相対変位で決まります。壁が逃げた分だけ削り残しが生じます。</li>
           <li><b>素材とプログラムの取り込み</b>: 素材は直方体・丸棒・STL から選べます。STL は真上から見た一番上の面を高さマップにします (上から見える穴やポケットは残り、オーバーハングの下は埋まります)。プログラム原点は、切削送りが素材に一番よく収まる位置を自動で選ぶか、素材上面の角から測った位置で指定します。T□ M6 で工具が替わり、寸法はプログラムのコメントから読みます。</li>
           <li><b>工具とホルダー</b>: シャンク径・首・ホルダー(焼きばめ・コレット・ミーリングチャック・サイドロック)を指定するか、工具 STL・ホルダー STL・Fusion 360 の工具ライブラリ(JSON)を読み込めます。剛性は段付きの片持ちはりとして積分し、工具 STL の先端形状(ドリルの円すい・ボールなど)はそのまま削った形に出ます。シャンクやホルダーが素材に食い込むと、部位と食い込み量を警告し、場所を赤い点で示します。</li>
-          <li><b>切粉</b>: 刃が切れ刃から抜けるたびに体積を持った粒子を放出し、重力・空気やクーラントの流れ・工具の回転・素材形状との衝突で動かします。ポケット内に残った量と再切削の回数を数えます。</li>
+          <li><b>切粉の排出</b>: 刃が材料から抜けるたびに、その刃が削った体積の切粉を出します。速さは切削速度、向きは切削方向にすくい面を上がる流れ (流出角 ≈ ねじれ角、Stabler の法則) を加えたもので、上向きの成分は 切削速度 × sin(ねじれ角) / 圧縮比 です。切粉 1 個の質量と投影面積は実際の切りくず厚さ (平均切取り厚さ × 被削材ごとの圧縮比) から求め、空気・クーラント中の抗力 ½ρC<sub>d</sub>A|u−v|(u−v)、浮力、付加質量、重力で動かします (アルミの切粉の終端速度は空気中で約 3 m/s、水溶性クーラント中で約 0.08 m/s)。</li>
+          <li><b>クーラントの流れ</b>: エアブローは乱流噴流 (中心速度がノズル径/距離に比例して落ち、幅が距離の約 1 割で広がる)、クーラントは崩れない液柱、スルーは工具先端から真下へ出る噴流とし、床に当たると放射状の壁面噴流になります。壁面噴流は高さマップの壁で止まって壁をはい上がり、縁を越えて外へ流れます。ノズルが低いとポケットの縁に当たって底まで届きません。クーラントは素材上に浅水流の層をつくり、ポケットにたまり、縁からあふれて端から流れ落ちます (薄い青の面)。工具の回転が周りの流体を引きずる旋回流と、乱れによる不規則な速度も入れています。</li>
+          <li><b>切粉どうしと床</b>: 切粉は球として互いに重なり (山を作る)、床や壁では反発と摩擦 (クーラントで濡れると小さく) を受けます。止まった切粉は眠らせて計算を省き、流れの力が静止摩擦を超えたとき・下の支えが無くなったとき・工具が来たときに起こします。切削中に工具の切れ刃範囲へ入った切粉を「再切削」として数えます。</li>
+          <li><b>切りくず詰まり</b>: 1 刃分の切粉のかさ (体積 × かさ係数) が刃溝の容積に対して大きすぎると警告します (接触角 120° 以上の溝加工・深い切込みで、目安 60%、刃径の 1.5 倍を超える深さでは 45%)。</li>
         </ul>
         <h3>精度とリアルタイム性のトレードオフ</h3>
         <ul>
           <li>振動の積分には 1 刃あたり数十〜数百ステップが要ります。等倍以下なら加工時間をすべて積分しますが、早送り再生では1フレームあたりの計算量に上限を設け、区間の一部だけを積分して全体を代表させています。びびりの成長速度は実時間より遅く見えることがあります。</li>
           <li>切削係数と動特性は代表値です。実機の値はハンマリング試験(FRF)と切削力測定で同定して入力してください。</li>
           <li>薄肉壁は荷重高さの壁厚だけで剛性を見積もる簡易モデルで、テーパ状の壁や床(薄い底面)のたわみは扱いません。壁の固有振動数は時間刻みの都合で 5 kHz を上限にしています。</li>
-          <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。底刃の切削力(プランジ・ドリル)、工具摩耗、熱は未対応です。固定サイクルの穴あけは材料除去だけを計算します。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
+          <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。底刃の切削力(プランジ・ドリル)、工具摩耗、熱は未対応です。固定サイクルの穴あけは材料除去だけを計算します。切粉は 1 粒子が数個分の切粉を代表し (最大 5000 粒子)、流体は CFD ではなく噴流・壁面噴流・浅水流の工学的な近似を重ねた速度場です。ポケット内の渦や、工具が噴流をさえぎる効果は入れていません。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
         <h3>見どころ</h3>
@@ -293,7 +301,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="tile"><span class="k">ワークたわみ</span><span class="v" id="vW">0.0<small>µm</small></span><span class="s" id="sW">剛体として扱い中</span></div>
     <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s" id="stS">許容目安 1500 MPa</span></div>
     <div class="tile"><span class="k">除去率</span><span class="v" id="vM">0.0<small>cm³/min</small></span><span class="s" id="sM">ap 0.00 mm · fz 0.000 mm</span></div>
-    <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">素材上に残留 0 · 再切削 0 回</span></div>
+    <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">残留 0 mm³ · 再切削 0 回</span></div>
   </section>
 
   <section class="charts">
