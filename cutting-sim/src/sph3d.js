@@ -736,14 +736,19 @@ export class Cutting3D {
   }
 
   // Helix summary: peaks, and mechanistic coefficients from F = K·A + Ke·Lc over the samples with
-  // a chip section above 15 % of hmax·ap (A: nominal chip area, Lc: engaged length).
+  // a chip section above 15 % of hmax·ap (A: nominal chip area, Lc: engaged length), on the thin
+  // side of the force peak. Past it the tooth meets the free top face: in up milling the chip lets
+  // go before the exit while A still grows (Ktc came out near 0), in down milling the entry knocks.
   summaryHelix(base) {
     const hs = this.hist, m = this.mill, n = hs.fc.length, aMin = 0.15 * m.hRef * this.bz * 1e6;
+    let ipk = -1;
+    for (let i = 0; i < n; i++) if (hs.pass[i] === m.k && (ipk < 0 || hs.fc[i] > hs.fc[ipk])) ipk = i;
     const fit = (F) => {
       let saa = 0, sal = 0, sll = 0, saf = 0, slf = 0, c = 0;
       for (let i = 0; i < n; i++) {
         const A = hs.area[i], L = hs.len[i];
         if (A < aMin || hs.pass[i] !== m.k) continue;   // the last tooth only
+        if (m.s > 0 ? i > ipk : i < ipk) continue;
         saa += A * A; sal += A * L; sll += L * L; saf += A * F[i]; slf += L * F[i]; c++;
       }
       const det = saa * sll - sal * sal;

@@ -182,7 +182,9 @@ test('3D helical end mill (A7075, φ2, down milling): the helix spreads the entr
   // Rotation angle of the tangential force peak.
   const peakAt = (s) => { const h = s.hist, pk = Math.max(...h.fc); return h.axis[h.fc.indexOf(pk)]; };
   // Straight tooth: the force follows the chip thickness, no axial force, no axial chip flow.
-  assert.ok(ra.Ktc > 300 && ra.Ktc < 2000, `Ktc ${ra.Ktc.toFixed(0)}`);
+  // (Fitted past the force peak only: the chip takes ~10° after the entry to form, which the old
+  // whole-arc fit averaged in at 1,080; the slope where the force follows the chip is ~2,100.)
+  assert.ok(ra.Ktc > 300 && ra.Ktc < 2500, `Ktc ${ra.Ktc.toFixed(0)}`);
   assert.ok(Math.abs(ra.faMax) < 0.05 * ra.ftMax, `Fa ${ra.faMax.toFixed(2)}`);
   assert.ok(Math.abs(ra.flow) < 5, `ηc ${ra.flow.toFixed(1)}° at β = 0`);
   // Helix: the upper part of the tooth enters later (lag ~10°), so the force peak comes later and
