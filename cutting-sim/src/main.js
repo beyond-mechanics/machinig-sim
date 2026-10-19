@@ -529,12 +529,14 @@ function exportCoeffs() {
     units: { K_c: 'N/mm²', K_e: 'N/mm' },
   };
   const text = JSON.stringify(out, null, 2);
-  try { navigator.clipboard && navigator.clipboard.writeText(text); } catch (e) { /* clipboard may be blocked */ }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   a.download = `coeffs_${c.mat}_${c.mode}.json`;
   document.body.appendChild(a); a.click(); a.remove();
-  $('exhint').textContent = 'JSON を保存し、クリップボードにもコピーしました。';
+  $('exhint').textContent = 'JSON を保存しました。';
+  // Also to the clipboard where the page may write it (embedded pages often may not).
+  const clip = navigator.clipboard && navigator.clipboard.writeText(text);
+  if (clip) clip.then(() => { $('exhint').textContent = 'JSON を保存し、クリップボードにもコピーしました。'; }, () => {});
 }
 $('export').addEventListener('click', exportCoeffs);
 
