@@ -149,23 +149,31 @@ export class CuttingSim {
       this.searchPairs(2 * hk + skin);
       this.xr = x.slice(); this.yr = y.slice(); this.deadRef = this.nDead + this.nEvac;
     }
-    const { ci, cj, nc } = this, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
-    let np = 0;
-    for (let k = 0; k < nc; k++) {
-      const i = ci[k], j = cj[k];
-      if (dead[i] || dead[j]) continue;
+    // Pairs with a moving particle first (npMove), then pairs of two held particles (supports or
+    // the frozen surface), which the momentum loop skips.
+    const { ci, cj, nc, fixed } = this, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
+    if (!this.qi || this.qi.length < nc) this.qi = new Int32Array(nc + 1024);
+    const qi = this.qi;
+    let np = 0, nq = 0;
+    for (let pass = 0; pass < 2; pass++) for (let q = 0, qn = pass ? nq : nc; q < qn; q++) {
+      const k = pass ? qi[q] : q, i = ci[k], j = cj[k];
+      if (!pass) {
+        if (dead[i] || dead[j]) continue;
+        if (fixed[i] && fixed[j]) { qi[nq++] = k; continue; }
+      } else if (q === 0) this.npMove = np;
       const rx = x[i] - x[j], ry = y[i] - y[j], r2 = rx * rx + ry * ry;
       if (r2 >= r2max || r2 === 0) continue;
       if (np >= this.cap) this.growPairs();
-      const r = Math.sqrt(r2), q = r * inv;
+      const r = Math.sqrt(r2), qq = r * inv;
       let w, dw;
-      if (q < 1) { w = ad * (1 - 1.5 * q * q + 0.75 * q * q * q); dw = ad * inv * (-3 * q + 2.25 * q * q); }
-      else { const s = 2 - q; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
+      if (qq < 1) { w = ad * (1 - 1.5 * qq * qq + 0.75 * qq * qq * qq); dw = ad * inv * (-3 * qq + 2.25 * qq * qq); }
+      else { const s = 2 - qq; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
       this.pi[np] = i; this.pj[np] = j;
       this.gx[np] = dw * rx / r; this.gy[np] = dw * ry / r;
       this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
       np++;
     }
+    if (!nq) this.npMove = np;
     this.np = np;
   }
 
@@ -322,7 +330,7 @@ export class CuttingSim {
     const ax = this.ax, ay = this.ay, cx = this.cx, cy = this.cy, xs = 0.5 * m;
     ax.fill(0); ay.fill(0); cx.fill(0); cy.fill(0);
     const hk = this.hk, cs = this.cs, eta = 0.01 * hk * hk, alpha = cfg.avAlpha, betaV = cfg.avBeta, iWdx = 1 / this.Wdx;
-    for (let k = 0; k < np; k++) {
+    for (let k = 0, nm = this.npMove; k < nm; k++) {
       const i = pi[k], j = pj[k];
       const ri2 = 1 / (rho[i] * rho[i]), rj2 = 1 / (rho[j] * rho[j]);
       let txx = (sxx[i] - p[i]) * ri2 + (sxx[j] - p[j]) * rj2;
