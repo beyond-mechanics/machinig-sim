@@ -1,7 +1,7 @@
 // UI: condition form, particle field view (Canvas 2D), charts and readouts.
 import { MATERIALS } from './materials.js';
 import { DEFAULTS } from './sph.js';
-import { chamferProfile, breakerProfile, importProfile } from './profile.js';
+import { chamferProfile, breakerProfile, importProfile, wornProfile } from './profile.js';
 import { makeTool, toolOutline } from './tool.js';
 import { View3D } from './view3d.js';
 
@@ -94,7 +94,7 @@ for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res
   'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
-const custom = { text: null, name: '', rot: 0, flip: false, profile: null };
+const custom = { text: null, name: '', rot: 0, flip: false, profile: null, wornMin: 0 };
 // Visibility: data-only lists the modes an element belongs to, data-shape the tool shapes
 // (3D supports only the standard wedge).
 function showShapeRows() {
@@ -126,7 +126,7 @@ function loadCustom() {
 $('pfile').addEventListener('change', async () => {
   const f = $('pfile').files[0];
   if (!f) return;
-  custom.text = await f.text(); custom.name = f.name; custom.rot = 0; custom.flip = false;
+  custom.text = await f.text(); custom.name = f.name; custom.rot = 0; custom.flip = false; custom.wornMin = 0;
   loadCustom(); reset();
 });
 $('punit').addEventListener('change', () => { loadCustom(); reset(); });
@@ -569,9 +569,26 @@ let downloads = null;
 if (window.claude && window.claude.use) window.claude.use('downloads').then((d) => { downloads = d; }, () => {});
 $('export').addEventListener('click', exportCoeffs);
 
+// Worn tool: move the outline into the tool by the computed wear rate × the chosen time, switch
+// to that outline and cut again (repeat to follow the wear step by step).
+$('wear').addEventListener('click', () => {
+  const min = parseFloat($('wearmin').value);
+  if (!(min > 0) || !frame || !frame.profile) return;
+  const worn = wornProfile(shapeOutline(cfg), frame.profile, min);
+  const total = (cfg.tool === 'custom' && custom.wornMin ? custom.wornMin : 0) + min;
+  custom.profile = worn; custom.text = null; custom.wornMin = total; custom.name = `摩耗した工具（累計 ${total} 分）`;
+  $('shape').value = 'custom';
+  showShapeRows();
+  $('pinfo').textContent = `${custom.name}：Usui 式の摩耗速度 × 時間だけ工具表面を後退させた形。摩耗係数は仮の値なので、時間は目安です。`;
+  $('pinfo').classList.remove('err');
+  reset();
+  worker.postMessage({ type: 'run' }); status = 'running'; updateRunButton();
+});
+
 function readouts() {
   const s = frame.summary, has = s.steps > 0;
   $('export').disabled = !(s.done && (cfg.mode === 'mill' || cfg.mode === 'helix'));
+  $('wear').disabled = !(s.done && cfg.mode === 'ortho' && frame.profile);
   CELLS[cfg.mode].forEach(([, v, , sub], i) => {
     $(`rv${i}`).textContent = has ? v(s) : '—';
     $(`rs${i}`).textContent = has ? sub(s) : '—';

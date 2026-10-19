@@ -318,6 +318,50 @@ function finish(poly) {
   return area(p) < 0 ? p.reverse() : p;
 }
 
+// Worn tool: the outline moved into the tool body by the wear depth, rate(s) × minutes, where s
+// is the arc length from the cutting edge (+ up the rake face, − along the flank) and rows are the
+// tool-surface rows of toolheat.js profile() ({ s µm, wear µm/min }). Near the edge the outline is
+// resampled every 2 µm; the depth is smoothed over 3 points so the offset stays a simple curve.
+export function wornProfile(poly, rows, minutes) {
+  const P = finish(poly), n = P.length;
+  let e = 0;
+  P.forEach(([u, w], i) => { if (w < P[e][1] - 1e-12 || (Math.abs(w - P[e][1]) <= 1e-12 && u > P[e][0])) e = i; });
+  // Arc length of every vertex from the edge vertex, along the counter-clockwise loop (towards the rake).
+  const L = [];
+  let per = 0;
+  for (let i = 0; i < n; i++) { const [a, b] = P[i], [c, d] = P[(i + 1) % n]; L.push(Math.hypot(c - a, d - b)); per += L[i]; }
+  const pts = [], ss = [];
+  let acc = 0;
+  for (let k = 0; k < n; k++) {
+    const i = (e + k) % n, [a, b] = P[i], [c, d] = P[(i + 1) % n];
+    const sg = (v) => (v > 0.5 * per ? v - per : v), near = Math.min(Math.abs(sg(acc)), Math.abs(sg(acc + L[i]))) < 1e-3;
+    const m = near ? Math.max(1, Math.ceil(L[i] / 2e-6)) : 1;
+    for (let q = 0; q < m; q++) {
+      const t = q / m;
+      pts.push([a + (c - a) * t, b + (d - b) * t]);
+      let sv = acc + L[i] * t; if (sv > 0.5 * per) sv -= per;
+      ss.push(sv);
+    }
+    acc += L[i];
+  }
+  const rs = rows.map((r) => r.s * 1e-6), rw = rows.map((r) => Math.max(0, r.wear) * 1e-6 * minutes);
+  const depthAt = (sv) => {
+    if (!rs.length || sv <= rs[0] || sv >= rs[rs.length - 1]) return 0;
+    let j = 1; while (rs[j] < sv) j++;
+    const t = (sv - rs[j - 1]) / (rs[j] - rs[j - 1]);
+    return rw[j - 1] + (rw[j] - rw[j - 1]) * t;
+  };
+  const N = pts.length, dep = ss.map(depthAt), sm = dep.map((d, i) => (dep[(i + N - 1) % N] + d + dep[(i + 1) % N]) / 3);
+  const out = [];
+  for (let i = 0; i < N; i++) {
+    const [pa, pb] = pts[(i + N - 1) % N], [qa, qb] = pts[(i + 1) % N];
+    const tx = qa - pa, ty = qb - pb, tl = Math.hypot(tx, ty) || 1;
+    // Outward normal of a counter-clockwise loop is (ty, −tx); the wear moves the surface inward.
+    out.push([pts[i][0] - ty / tl * sm[i], pts[i][1] + tx / tl * sm[i]]);
+  }
+  return finish(out);
+}
+
 // Rake angle seen by a chip of thickness h: direction of the outline 0.3 h … 1.0 h up from the edge.
 export function rakeOf(tool, h) {
   const P = tool.poly;
