@@ -595,14 +595,23 @@ function kienzle(rows) {
   const n = p.length, b = (n * sxy - sx * sy) / (n * sxx - sx * sx);
   return { kc11: Math.exp((sy - b * sx) / n), mc: -b };
 }
+// Taylor exponent from the flank wear rate: tool life T ∝ 1 / rate, V·Tⁿ = C, so ln rate = ln V / n + c.
+function taylor(rows) {
+  const p = rows.filter((r) => r.s && r.v > 0 && r.s.wearFlank > 0);
+  if (p.length < 2) return null;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const r of p) { const x = Math.log(r.v), y = Math.log(r.s.wearFlank); sx += x; sy += y; sxx += x * x; sxy += x * y; }
+  const n = p.length, b = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+  return b > 0 ? 1 / b : null;
+}
 function sweepTable() {
   const k = SWEEP[sw.key], body = $('swbody');
   $('swth').textContent = `${k.label}${k.unit ? ' ' + k.unit : ''}`;
   body.textContent = '';
   for (const r of sw.rows) {
     const tr = document.createElement('tr'), s = r.s;
-    const cells = [String(r.v), ...(s ? [f1(s.fc / sw.cfg.width), f1(s.ft / sw.cfg.width), f0(s.kc), f1(s.phi), s.ratio.toFixed(2), f0(s.tmax), f0(s.toolSteadyT ?? s.toolT)]
-      : [r.p == null ? '待ち' : `計算中 ${f0(r.p * 100)} %`, '', '', '', '', '', ''])];
+    const cells = [String(r.v), ...(s ? [f1(s.fc / sw.cfg.width), f1(s.ft / sw.cfg.width), f0(s.kc), f1(s.phi), s.ratio.toFixed(2), f0(s.tmax), f0(s.toolSteadyT ?? s.toolT), s.wearFlank.toFixed(2)]
+      : [r.p == null ? '待ち' : `計算中 ${f0(r.p * 100)} %`, '', '', '', '', '', '', ''])];
     for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
     body.appendChild(tr);
   }
@@ -610,9 +619,9 @@ function sweepTable() {
   const lo = Math.min(...sw.rows.map((r) => r.v)), hi = Math.max(...sw.rows.map((r) => r.v));
   lineChart($('chart-sw'), xs, [{ data: done.map((r) => r.s.kc), color: '--s1' }],
     { xmin: Math.min(0, lo), xmax: hi > lo ? hi : lo + 1, unit: 'kc N/mm²', xlabel: `${k.label}${k.unit ? ' [' + k.unit + ']' : ''}`, empty: '計算中' });
-  const kz = sw.key === 'h' && sw.done ? kienzle(sw.rows) : null;
+  const kz = sw.key === 'h' && sw.done ? kienzle(sw.rows) : null, ty = sw.key === 'vc' && sw.done ? taylor(sw.rows) : null;
   $('swhint').textContent = sw.done
-    ? (kz ? `完了。Kienzle 式：kc1.1 = ${f0(kz.kc11)} N/mm²、mc = ${kz.mc.toFixed(2)}（材料の便覧値 kc ≈ ${frame ? f0(frame.summary.kcRef) : '—'} N/mm² @ h 0.1）。` : '完了。')
+    ? (ty ? `完了。工具寿命を逃げ面摩耗速度に反比例とみた Taylor 指数 n = ${ty.toFixed(2)}（V·Tⁿ = 一定。摩耗係数の校正によらない値）。` : kz ? `完了。Kienzle 式：kc1.1 = ${f0(kz.kc11)} N/mm²、mc = ${kz.mc.toFixed(2)}（材料の便覧値 kc ≈ ${frame ? f0(frame.summary.kcRef) : '—'} N/mm² @ h 0.1）。` : '完了。')
     : `計算中：${sw.rows.filter((r) => r.s).length} / ${sw.rows.length}`;
   $('swcsv').disabled = !done.length;
 }
@@ -638,8 +647,8 @@ $('swrun').addEventListener('click', () => {
 });
 $('swcsv').addEventListener('click', () => {
   const k = SWEEP[sw.key];
-  const lines = [`${sw.key} [${k.unit}],Fc [N/mm],Ft [N/mm],kc [N/mm2],phi [deg],hc/h,Tmax [C],tool Tmax [C]`];
-  for (const r of sw.rows) if (r.s) { const s = r.s; lines.push([r.v, s.fc / sw.cfg.width, s.ft / sw.cfg.width, s.kc, s.phi, s.ratio, s.tmax, s.toolSteadyT ?? s.toolT].map((v) => (typeof v === 'number' ? +v.toPrecision(5) : v)).join(',')); }
+  const lines = [`${sw.key} [${k.unit}],Fc [N/mm],Ft [N/mm],kc [N/mm2],phi [deg],hc/h,Tmax [C],tool Tmax [C],flank wear [um/min]`];
+  for (const r of sw.rows) if (r.s) { const s = r.s; lines.push([r.v, s.fc / sw.cfg.width, s.ft / sw.cfg.width, s.kc, s.phi, s.ratio, s.tmax, s.toolSteadyT ?? s.toolT, s.wearFlank].map((v) => (typeof v === 'number' ? +v.toPrecision(5) : v)).join(',')); }
   const text = `# cutting-sim sweep, ${sw.cfg.mat}, ${JSON.stringify({ vc: sw.cfg.vc, h: sw.cfg.h, rake: sw.cfg.rake, edgeRadius: sw.cfg.edgeRadius, mu: sw.cfg.mu, nh: sw.cfg.nh })}\n` + lines.join('\n') + '\n';
   const name = `sweep_${sw.cfg.mat}_${sw.key}.csv`;
   if (downloads) downloads.save({ filename: name, data: text }).then(() => { $('swhint').textContent = 'CSV を保存しました。'; }, (e) => { $('swhint').textContent = e && e.code === 'declined' ? '保存を取りやめました。' : 'この表示では保存できません。'; });

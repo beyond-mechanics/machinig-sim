@@ -255,9 +255,9 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
       <button id="swrun" type="button">スイープ開始</button>
       <button id="swcsv" type="button" disabled>CSV を保存</button>
     </div>
-    <p class="hint" id="swhint">ほかの条件は左の設定のまま、値ごとに1回ずつ最後まで計算します（上の計算とは別に裏で進みます）。h を変えるときは粒子間隔を左の h と解像度で決まる値に固定し（h が大きいほど粒子が増えます）、Kienzle 式 kc = kc1.1 · h^(−mc) を当てはめます。</p>
+    <p class="hint" id="swhint">ほかの条件は左の設定のまま、値ごとに1回ずつ最後まで計算します（上の計算とは別に裏で進みます）。h を変えるときは粒子間隔を左の h と解像度で決まる値に固定し（h が大きいほど粒子が増えます）、Kienzle 式 kc = kc1.1 · h^(−mc) を当てはめ、切削速度なら摩耗速度から Taylor 指数 n を出します。</p>
     <div class="grid">
-      <div class="tbl"><table><thead><tr><th id="swth">h</th><th>Fc N/mm</th><th>Ft N/mm</th><th>kc N/mm²</th><th>φ °</th><th>hc/h</th><th>最高温度 °C</th><th>工具最高 °C</th></tr></thead><tbody id="swbody"></tbody></table></div>
+      <div class="tbl"><table><thead><tr><th id="swth">h</th><th>Fc N/mm</th><th>Ft N/mm</th><th>kc N/mm²</th><th>φ °</th><th>hc/h</th><th>最高温度 °C</th><th>工具最高 °C</th><th>逃げ面摩耗 µm/min</th></tr></thead><tbody id="swbody"></tbody></table></div>
       <canvas id="chart-sw" aria-label="スイープ結果のグラフ"></canvas>
     </div>
   </section>
