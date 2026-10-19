@@ -569,6 +569,26 @@ let downloads = null;
 if (window.claude && window.claude.use) window.claude.use('downloads').then((d) => { downloads = d; }, () => {});
 $('export').addEventListener('click', exportCoeffs);
 
+// Result as CSV: the summary values as comment lines, then the time histories (one row per sample).
+const HCOL = { axis: null, tmax: 'Tmax_work [C]', trake: 'T_rake [C]',
+  ttool: 'Tmax_tool [C]', hnom: 'h_nominal [mm]', flow: 'chip_flow_angle [deg]', area: 'chip_area [mm2]', len: 'edge_length [mm]' };
+function saveResult() {
+  const s = frame.summary, h = frame.hist, c = cfg;
+  const axis = c.mode === 'mill' || c.mode === 'helix' ? 'rotation [deg]' : c.mode === '3d' ? 'tool travel [mm]' : 'cut length [mm]';
+  const lines = [`# cutting-sim ${c.mode} ${c.mat}`, `# conditions ${JSON.stringify(c, (k, v) => (k === 'profile' ? undefined : v))}`];
+  for (const [k, v] of Object.entries(s)) if (typeof v === 'number' && isFinite(v)) lines.push(`# ${k} = ${+v.toPrecision(6)}`);
+  const keys = Object.keys(h).filter((k) => Array.isArray(h[k]) && h[k].length === h.axis.length && h[k].length);
+  const mill = c.mode === 'mill' || c.mode === 'helix';
+  const force = { fc: mill ? 'Ft_tangential [N]' : 'Fc_cutting [N]', ft: mill ? 'Fr_radial [N]' : 'Ft_thrust [N]', fr: mill ? 'Fa_axial [N]' : 'Fr_lateral [N]' };
+  lines.push(keys.map((k) => (k === 'axis' ? axis : force[k] || HCOL[k] || k)).join(','));
+  for (let i = 0; i < h.axis.length; i++) lines.push(keys.map((k) => (h[k][i] == null ? '' : +h[k][i].toPrecision(6))).join(','));
+  const text = lines.join('\n') + '\n', name = `cutting_${c.mode}_${c.mat}.csv`;
+  if (downloads) downloads.save({ filename: name, data: text }).then(() => { $('savehint').textContent = 'CSV を保存しました。'; },
+    (e) => { $('savehint').textContent = e && e.code === 'declined' ? '保存を取りやめました。' : 'この表示では保存できません。'; });
+  else { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); $('savehint').textContent = 'CSV を保存しました。'; }
+}
+$('saveres').addEventListener('click', saveResult);
+
 // Worn tool: move the outline into the tool by the computed wear rate × the chosen time, switch
 // to that outline and cut again (repeat to follow the wear step by step).
 $('wear').addEventListener('click', () => {
@@ -589,6 +609,7 @@ function readouts() {
   const s = frame.summary, has = s.steps > 0;
   $('export').disabled = !(s.done && (cfg.mode === 'mill' || cfg.mode === 'helix'));
   $('wear').disabled = !(s.done && cfg.mode === 'ortho' && frame.profile);
+  $('saveres').disabled = !s.done;
   CELLS[cfg.mode].forEach(([, v, , sub], i) => {
     $(`rv${i}`).textContent = has ? v(s) : '—';
     $(`rs${i}`).textContent = has ? sub(s) : '—';

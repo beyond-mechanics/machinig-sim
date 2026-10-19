@@ -220,6 +220,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row"><label for="res">解像度</label>
           <select id="res"><option value="3">ごく粗い（h/3）</option><option value="4">かなり粗い（h/4）</option><option value="5">とても粗い（h/5）</option><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option><option value="16">とても細かい（h/16）</option></select></div>
         <div class="meta" id="meta">—</div>
+        <div class="btns"><button id="saveres" type="button" disabled>結果を保存（CSV）</button></div>
+        <p class="hint" id="savehint">計算が終わると、結果の一覧と力・温度の推移を CSV で保存できます。</p>
         <div class="row" data-only="ortho"><label for="wearmin">摩耗を進める時間<small>min</small></label><input id="wearmin" type="number" min="0.5" max="60" step="0.5" value="5"></div>
         <div class="btns" data-only="ortho"><button id="wear" type="button" disabled>摩耗した工具で再計算</button></div>
         <p class="hint" data-only="ortho">計算が終わると、工具表面の摩耗速度 × 時間だけ刃先を後退させた形（逃げ面摩耗とクレーター）に切り替えて、もう一度削ります。繰り返すと摩耗が進む様子を追えます。</p>
