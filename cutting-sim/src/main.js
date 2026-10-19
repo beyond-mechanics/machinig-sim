@@ -360,7 +360,7 @@ function niceStep(span, n) {
   const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
   return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
 }
-function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty, signed = false }) {
+function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty, signed = false, marks = [] }) {
   const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   const c = canvas.getContext('2d'), css = getComputedStyle(document.documentElement);
@@ -384,6 +384,14 @@ function lineChart(canvas, xs, series, { xmin = 0, xmax, unit, xlabel, empty, si
   for (let v = Math.ceil(xmin / xstep) * xstep; v <= xmax + 1e-9; v += xstep) c.fillText(Math.abs(v) < 1e-9 ? '0' : xstep < 0.1 ? v.toFixed(2) : xstep < 1 ? v.toFixed(1) : v.toFixed(0), X(v), T + ph + 6);
   c.textAlign = 'left'; c.fillText(unit, 4, 0);
   c.textAlign = 'right'; c.fillText(xlabel, L + pw, 0);
+  // marks: vertical dashed lines with a label (where the next tooth starts).
+  c.textAlign = 'left'; c.setLineDash([3, 3]);
+  for (const m of marks) {
+    if (m.x < xmin || m.x > xmax) continue;
+    c.beginPath(); c.moveTo(X(m.x), T); c.lineTo(X(m.x), T + ph); c.stroke();
+    c.fillText(m.label, X(m.x) + 3, T + 2);
+  }
+  c.setLineDash([]);
   if (empty && !series.some((s) => s.data.length)) { c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(empty, L + pw / 2, T + ph / 2); return; }
   for (const s of series) {
     if (!s.data.length) continue;
@@ -445,8 +453,10 @@ function drawCharts() {
   const np = mill && frame ? frame.summary.passes || 1 : 1;
   const xmax = mill ? (frame ? Math.max(1, (np - 1) * frame.summary.span + frame.summary.arc + frame.summary.track + 6) : 40) : cfg ? cfg.cutLen : 1;
   const xl = mill ? (np > 1 ? '横軸 刃の回転角 [°]（刃ごとに続けて表示）' : '横軸 刃の回転角 [°]') : '横軸 切削長さ [mm]';
-  lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], { xmax, unit: 'N', xlabel: xl });
-  lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('trake', '--s1'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }, { data: h.ttool, color: '--s2' }], { xmax, unit: '°C', xlabel: xl });
+  const marks = [];
+  if (np > 1 && h.pass) for (let i = 1; i < h.pass.length; i++) if (h.pass[i] !== h.pass[i - 1]) marks.push({ x: h.axis[i], label: `${h.pass[i] + 1}刃目` });
+  lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }], { xmax, unit: 'N', xlabel: xl, marks });
+  lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), ...pv('trake', '--s1'), ...pv('ttool', '--s2'), { data: h.tmax, color: '--s3' }, { data: h.trake, color: '--s1' }, { data: h.ttool, color: '--s2' }], { xmax, unit: '°C', xlabel: xl, marks });
   const pr = frame && frame.profile ? frame.profile.filter((r) => r.s > -400 && r.s < 500) : [];
   const ps = pr.map((r) => r.s), xr = pr.length ? [Math.min(...ps), Math.max(...ps)] : [-200, 300];
   lineChart($('chart-ts'), ps, [{ data: pr.map((r) => r.T), color: '--s2', dot: false }, { data: pr.map((r) => r.Tst), color: '--s1', dot: false }],
