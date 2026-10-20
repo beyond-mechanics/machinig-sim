@@ -90,7 +90,7 @@ function readCfg() {
     return {
       mode, mat: matSel.value, vc: num('vc'), mu: num('mu'), friction: $('fric').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
       motion: mot, spin: parseFloat($('sspin').value), z: num('sflutes'), fz: num('sfz'), fr: num('sfr'), travel: num('stravel'), angle: num('sangle'), dxUm: num('sdx'),
-      toolTris: toM(stl.tool && stl.tool.t, off), workTris: toM(stl.work && stl.work.t, [0, 0, 0]), maxN: STL_MAX,
+      toolTris: toM(stl.tool && stl.tool.t, off), workTris: toM(stl.work && stl.work.t, [0, 0, 0]), maxN: STL_MAX, axis: stlAxis() && stlAxis().map((v) => v * 1e-3),
     };
   }
   if (mode === '3d') return {
@@ -145,11 +145,17 @@ $('sex').addEventListener('change', () => {
   if (c.fz) $('sfz').value = c.fz;
   if (c.fr) $('sfr').value = c.fr;
   for (const id of ['sox', 'soy', 'soz']) $(id).value = 0;
+  $('sax').value = c.axis ? c.axis[0] : ''; $('say').value = c.axis ? c.axis[1] : '';
   showShapeRows(); stlInfo(); reset();
 });
 $('smotion').addEventListener('change', () => { showShapeRows(); stlInfo(); reset(); });
-for (const id of ['sdx', 'sox', 'soy', 'soz']) $(id).addEventListener('change', () => { stlInfo(); reset(); });
+for (const id of ['sdx', 'sox', 'soy', 'soz', 'sax', 'say']) $(id).addEventListener('change', () => { stlInfo(); reset(); });
 for (const id of ['vc', 'sflutes', 'sfz', 'sfr', 'stravel']) $(id).addEventListener('change', stlInfo);
+// Spin axis given in the form [mm], or null for the centre of the tool's outline.
+function stlAxis() {
+  const x = parseFloat($('sax').value), y = parseFloat($('say').value);
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+}
 function stlCount() {
   const dx = parseFloat($('sdx').value) * 1e-3;
   return stl.work && stl.work.t ? Math.round(Math.abs(volume(stl.work.t)) / (dx * dx * dx)) : 0;
@@ -178,7 +184,7 @@ function stlInfo() {
     if (a[3] + reach < w[0] || a[0] > w[3] || a[4] < w[1] || a[1] > w[4] || a[5] < w[2] || a[2] > w[5]) bad.push('工具とワークが離れています。工具をワークに食い込ませた位置に置いてください');
     const mot = $('smotion').value;
     if (mot !== 'linear') {
-      const ax = 0.5 * (a[0] + a[3]), ay = 0.5 * (a[1] + a[4]), t = stl.tool.t;
+      const ga = stlAxis(), ax = ga ? ga[0] : 0.5 * (a[0] + a[3]), ay = ga ? ga[1] : 0.5 * (a[1] + a[4]), t = stl.tool.t;
       let R = 0;
       for (let i = 0; i < t.length; i += 3) R = Math.max(R, Math.hypot(t[i] + off[0] - ax, t[i + 1] + off[1] - ay));
       const rpm = parseFloat($('vc').value) * 1e3 / (2 * Math.PI * R);
