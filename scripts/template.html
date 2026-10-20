@@ -73,6 +73,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(-
 .row.wide { grid-template-columns: 1fr; }
 .oxbox summary { cursor: pointer; font-size: 13px; padding: 2px 0; }
 .oxbox[open] { display: grid; gap: 8px; }
+#view.picking { cursor: crosshair; }
 #idData { width: 100%; height: 9.5em; min-height: 0; font: 12px var(--font-mono); resize: vertical; white-space: pre; }
 .jcgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .jcgrid label { display: grid; gap: 2px; font: 11px var(--font-mono); color: var(--ink-mute); }
@@ -80,7 +81,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(-
 .oxtable { width: 100%; border-collapse: collapse; font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
 .oxtable th, .oxtable td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--rule); }
 .oxtable th:first-child, .oxtable td:first-child { text-align: left; font-family: inherit; }
-.wcsrow { display: grid; grid-template-columns: 64px repeat(3, minmax(0, 1fr)); gap: 6px; align-items: center; }
+.wcsrow { display: grid; grid-template-columns: 64px repeat(3, minmax(0, 1fr)) 34px; gap: 6px; align-items: center; }
+.wcsrow button { padding: 4px 0; }
 .wcsrow span { font: 12px var(--font-mono); }
 .wcsrow input { width: 100%; }
 .slider { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
@@ -309,10 +311,11 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="orgSel">プログラム原点</label><select id="orgSel">
             <option value="auto">自動</option><option value="corner">上面の左手前の角</option><option value="center">上面の中心</option><option value="center-bottom">下面の中心</option><option value="model">モデルの座標そのまま</option><option value="manual">数値で指定</option>
           </select></div>
+          <button id="orgPick" aria-pressed="false">3D 画面でクリックして原点を指定</button>
           <div class="row"><label for="oX">原点の位置 X <span class="unit">mm</span></label><input type="number" id="oX" step="0.1" value="0"></div>
           <div class="row"><label for="oY">原点の位置 Y <span class="unit">mm</span></label><input type="number" id="oY" step="0.1" value="0"></div>
           <div class="row"><label for="oZ">原点の位置 Z <span class="unit">mm</span></label><input type="number" id="oZ" step="0.1" value="0"></div>
-          <p class="hint">原点の位置は、素材上面の左手前の角から測ったプログラム原点 (X0 Y0 Z0) の位置です。素材の下面は Z = −高さ です。この原点が G54 です。</p>
+          <p class="hint">原点の位置は、素材上面の左手前の角から測ったプログラム原点 (X0 Y0 Z0) の位置です。3D 画面のクリックでも指定でき、素材の角・辺の中点・面の中心に吸着します。素材の下面は Z = −高さ です。この原点が G54 です。</p>
         </fieldset>
         <fieldset id="wcsBox">
           <legend>ワーク座標系</legend>

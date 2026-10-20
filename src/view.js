@@ -759,8 +759,16 @@ export class View {
     const el = this.canvas;
     const pts = new Map();
     let last = null;
-    el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY, btn: e.button, shift: e.shiftKey }); last = null; });
-    el.addEventListener('pointerup', e => { pts.delete(e.pointerId); last = null; });
+    el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY, down: { x: e.clientX, y: e.clientY }, btn: e.button, shift: e.shiftKey }); last = null; });
+    el.addEventListener('pointerup', e => {
+      const p = pts.get(e.pointerId);
+      pts.delete(e.pointerId); last = null;
+      // a click (no drag) in pick mode: the point on the stock under the cursor
+      if (p && this.onPick && Math.hypot(e.clientX - p.down.x, e.clientY - p.down.y) < 5) {
+        const hit = this.pickStock(e.clientX, e.clientY);
+        if (hit) this.onPick(hit); else this.onMiss?.();
+      }
+    });
     el.addEventListener('pointercancel', e => { pts.delete(e.pointerId); last = null; });
     el.addEventListener('pointermove', e => {
       const p = pts.get(e.pointerId); if (!p) return;
@@ -777,6 +785,29 @@ export class View {
     });
     el.addEventListener('wheel', e => { e.preventDefault(); this.orbit.dist = clamp(this.orbit.dist * Math.exp(e.deltaY * 0.001), 20, 2000); }, { passive: false });
     el.addEventListener('contextmenu', e => e.preventDefault());
+  }
+  // Point on the stock under the screen position (stock frame), snapped to a corner, an edge
+  // midpoint or a face centre of the stock box when close: what a program zero is set on.
+  // Returns { x, y, z, snap } or null.
+  pickStock(cx, cy) {
+    const T = THREE, r = this.canvas.getBoundingClientRect();
+    const ndc = new T.Vector2((cx - r.left) / r.width * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+    const ray = new T.Raycaster(); ray.setFromCamera(ndc, this.camera);
+    this.topGeo.computeBoundingSphere(); this.wallGeo.computeBoundingSphere();
+    const hit = ray.intersectObjects([this.top, this.walls], false)[0];
+    if (!hit) return null;
+    const s = this.stock, p = hit.point, zt = s.zTop, zb = s.zBottom;
+    const xs = [0, s.w / 2, s.w], ys = [0, s.l / 2, s.l], zs = [zt, zb];
+    const NAMES = { x: ['左', '中央', '右'], y: ['手前', '中央', '奥'], z: ['上面', '下面'] };
+    let best = null;
+    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) for (let c = 0; c < 2; c++) {
+      // corners, edge midpoints and face centres of the box (not its centre)
+      const d = Math.hypot(p.x - xs[a], p.y - ys[b], p.z - zs[c]);
+      if (!best || d < best.d) best = { d, x: xs[a], y: ys[b], z: zs[c], snap: `${NAMES.z[c]}の${a === 1 && b === 1 ? '中心' : `${NAMES.x[a]}${NAMES.y[b]}`.replace('中央中央', '中心')}` };
+    }
+    const tol = 0.06 * Math.max(s.w, s.l);
+    if (best.d < tol) return { x: best.x, y: best.y, z: best.z, snap: best.snap };
+    return { x: p.x, y: p.y, z: p.z, snap: null };
   }
   pan(dx, dy) {
     const T = THREE, o = this.orbit;

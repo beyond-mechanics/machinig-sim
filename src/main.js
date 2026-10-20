@@ -103,9 +103,17 @@ function showWcs() {
       inp.onchange = () => { const v = +inp.value; if (Number.isFinite(v)) { d[k] = v; wcsDelta[name] = d; loadProgram(); } };
       row.appendChild(inp);
     }
+    // or picked on the 3D view: the offset from G54 to the clicked point
+    const pb = document.createElement('button'); pb.textContent = '⌖'; pb.title = `${name} の原点を 3D 画面でクリックして指定`; pb.setAttribute('aria-label', pb.title);
+    pb.onclick = () => startPick(`${name} の原点`, p => {
+      const o = sim.origin; wcsDelta[name] = { x: +(p.x - o.x).toFixed(3), y: +(p.y - o.y).toFixed(3), z: +(p.z - o.z).toFixed(3) };
+      loadProgram();
+      return `${name} を${p.snap ? `素材の${p.snap}` : 'クリックした点'}に (G54 から Δ ${wcsDelta[name].x} ${wcsDelta[name].y} ${wcsDelta[name].z})`;
+    });
+    row.appendChild(pb);
     box.appendChild(row);
   }
-  if (used.length) { const hdr = document.createElement('div'); hdr.className = 'wcsrow'; hdr.innerHTML = '<span></span><span>ΔX</span><span>ΔY</span><span>ΔZ</span>'; box.prepend(hdr); }
+  if (used.length) { const hdr = document.createElement('div'); hdr.className = 'wcsrow'; hdr.innerHTML = '<span></span><span>ΔX</span><span>ΔY</span><span>ΔZ</span><span></span>'; box.prepend(hdr); }
   $('wcsBox').hidden = !used.length;
   // axes at the work zeros only when the program switches between systems
   view.setWcs((sim.wcsUsed || []).length > 1 ? sim.wcsUsed.map(n => ({ name: n, ...(sim.wcs[n] || sim.origin) })) : []);
@@ -231,6 +239,33 @@ $('gcSave').onclick = async () => {
   a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
+// a point picked on the 3D view (snapped to the corners, edge midpoints and face centres of
+// the stock): the program zero (G54) or another work offset
+let pickBtn = null;
+function endPick() {
+  view.onPick = null; view.onMiss = null; $('view').classList.remove('picking');
+  if (pickBtn) { pickBtn.setAttribute('aria-pressed', 'false'); pickBtn = null; }
+  $('orgPick').textContent = '3D 画面でクリックして原点を指定';
+}
+function startPick(what, apply, btn) {
+  if (view.onPick) { endPick(); return; }
+  pickBtn = btn || null; pickBtn?.setAttribute('aria-pressed', 'true');
+  $('view').classList.add('picking');
+  $('stockInfo').textContent = `${what}にする点を 3D 画面でクリックしてください (角・辺の中点・面の中心に吸着、Esc で取り消し)`;
+  view.onMiss = () => { $('stockInfo').textContent = '素材の上をクリックしてください (Esc で取り消し)'; };
+  view.onPick = p => { endPick(); const msg = apply(p); $('stockInfo').textContent += ` · ${msg}`; };
+}
+$('orgPick').onclick = () => {
+  const on = !view.onPick;
+  startPick('プログラム原点 (G54)', p => {
+    $('orgSel').value = 'manual'; $('orgSel').onchange();
+    $('oX').value = +p.x.toFixed(3); $('oY').value = +p.y.toFixed(3); $('oZ').value = +p.z.toFixed(3);
+    loadProgram();
+    return `原点を${p.snap ? `素材の${p.snap}` : 'クリックした点'} (X ${p.x.toFixed(2)} Y ${p.y.toFixed(2)} Z ${p.z.toFixed(2)}) にしました`;
+  }, $('orgPick'));
+  if (on) $('orgPick').textContent = 'クリック待ち… (もう一度押すと取り消し)';
+};
+addEventListener('keydown', e => { if (e.key === 'Escape' && view.onPick) endPick(); });
 $('orgSel').onchange = () => { const manual = $('orgSel').value === 'manual'; for (const id of ['oX', 'oY', 'oZ']) $(id).readOnly = !manual; };
 for (const id of ['oX', 'oY', 'oZ']) $(id).addEventListener('input', () => { $('orgSel').value = 'manual'; });
 // drop a program or an STL anywhere on the page
