@@ -615,6 +615,7 @@ function lineStart(n) {
     if (ev.key === 'ArrowRight') { ev.preventDefault(); seekTo(sim.mtime + step); }
     else if (ev.key === 'ArrowLeft') { ev.preventDefault(); seekTo(sim.mtime - step); }
     else if (ev.key === 'Home') { ev.preventDefault(); seekTo(0); }
+    else if (ev.key === 'End') { ev.preventDefault(); seekTo(sim.totalTime || 0); }
   });
 }
 

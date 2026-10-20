@@ -119,7 +119,8 @@ export class View {
       const L = Math.hypot(gx, gy, 1);
       N[k * 3] = gx / L; N[k * 3 + 1] = gy / L; N[k * 3 + 2] = 1 / L;
       let r, g, b;
-      const cut = z < s.zTop - 0.005;
+      // a standing cell on a machined wall (the cutter edge passed beside it) is a cut face too
+      const cut = z < s.zTop - 0.005 || (L > 2.2 && s.wallD[k] < 1);
       if (this.colorMode === 'vibration' && cut) [r, g, b] = ramp(Math.min(1, s.err[k] / 40));
       else if (this.colorMode === 'wall') [r, g, b] = s.wallErr[k] > 0.5 ? ramp(Math.min(1, s.wallErr[k] / 50)) : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.62];
       else if (this.colorMode === 'depth') [r, g, b] = ramp(Math.min(1, (s.zTop - z) / depth));
@@ -134,6 +135,48 @@ export class View {
       const vib = Math.min(1, s.err[k] / 30);
       RG[k] = cut ? 0.26 + 0.42 * vib : 0.62;
       M[k * 2] = s.markS[k]; M[k * 2 + 1] = this.colorMode === 'material' && cut ? s.markF[k] : 0;
+    }
+    // Steep faces: the cells straddling a wall that runs along grid nodes are cut on one layer
+    // and left on the next (the edge passes within a hair of their centres), so the heights
+    // along the wall are noise and the gradient above swings sideways: vertical streaks. The wall
+    // vertices themselves were moved onto the cut surface (wallFoot), so their positions lie on
+    // it whatever the heights do: the face direction comes from the principal axis of the wall
+    // vertices around (kept from the gradient at an inside corner, where there is no one axis).
+    for (let j = Math.max(2, j0); j <= Math.min(ny - 3, j1); j++) for (let i = Math.max(2, i0); i <= Math.min(nx - 3, i1); i++) {
+      const k = j * nx + i;
+      if (N[k * 3 + 2] > 0.75) continue;
+      let n = 0, mx = 0, my = 0, sxx = 0, syy = 0, sxy = 0, nz = 0, cr = 0, cg = 0, cb = 0, ro = 0;
+      for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+        const q = k + dj * nx + di;
+        if (N[q * 3 + 2] > 0.75) continue;
+        const x = P[q * 3] - P[k * 3], y = P[q * 3 + 1] - P[k * 3 + 1];
+        n++; mx += x; my += y; sxx += x * x; syy += y * y; sxy += x * y; nz += N[q * 3 + 2];
+        cr += C[q * 3]; cg += C[q * 3 + 1]; cb += C[q * 3 + 2]; ro += RG[q];
+      }
+      // colour, occlusion and roughness follow the height noise as well: even them out on the face
+      C[k * 3] = cr / n; C[k * 3 + 1] = cg / n; C[k * 3 + 2] = cb / n; RG[k] = ro / n;
+      if (n < 4) continue;
+      mx /= n; my /= n; sxx = sxx / n - mx * mx; syy = syy / n - my * my; sxy = sxy / n - mx * my;
+      const tr = sxx + syy, det = sxx * syy - sxy * sxy, disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+      const l1 = tr / 2 + disc, l2 = tr / 2 - disc;
+      if (!(l1 > 9 * Math.max(l2, 1e-12))) continue;
+      // tangent along the major axis; normal across it, on the side the gradient points to
+      let tx = sxy, ty = l1 - sxx;
+      if (Math.abs(tx) + Math.abs(ty) < 1e-12) { tx = 1; ty = 0; }
+      let ex = -ty, ey = tx;
+      const el = Math.hypot(ex, ey);
+      ex /= el; ey /= el;
+      if (ex * N[k * 3] + ey * N[k * 3 + 1] < 0) { ex = -ex; ey = -ey; }
+      // the tilt too: averaged over the face (it follows the same height noise)
+      nz /= n;
+      const h = Math.sqrt(1 - nz * nz);
+      N[k * 3] = ex * h; N[k * 3 + 1] = ey * h; N[k * 3 + 2] = nz;
+      // and the vertex moves only across the face: wallFoot also pulls it along the wall
+      // towards a neighbour that happens to be cut lower on this row
+      if (!this.bentSet?.has(k)) {
+        const ox = i * s.hx, oy = j * s.hy, d = (P[k * 3] - ox) * ex + (P[k * 3 + 1] - oy) * ey;
+        P[k * 3] = ox + ex * d; P[k * 3 + 1] = oy + ey * d;
+      }
     }
     // Split each grid square along the diagonal that joins the two corners closest in height:
     // a curved or diagonal wall then keeps its rim vertices joined to each other (and its feet
