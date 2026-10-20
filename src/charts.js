@@ -158,7 +158,8 @@ export function drawSpectrum(cv, eng, fn) {
 }
 
 // returns the plotting box so clicks can be mapped back to rpm
-export function drawLobes(cv, lobes, op, rpmRange) {
+// rest: optional lobes of the tool at rest, drawn dashed behind the speed-dependent ones
+export function drawLobes(cv, lobes, op, rpmRange, rest = null) {
   const { g, w, h } = setup(cv);
   const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
   const [r0, r1] = rpmRange;
@@ -178,6 +179,11 @@ export function drawLobes(cv, lobes, op, rpmRange) {
   for (let px = 0; px <= box.w; px += 2) { const r = r0 + px / box.w * (r1 - r0); const a = alimAt(lobes, r); env.push([box.x + px, ys(a === Infinity ? Y : a)]); }
   for (const [x, y] of env) g.lineTo(x, y);
   g.lineTo(box.x + box.w, ys(0)); g.fill(); g.globalAlpha = 1;
+  if (rest) {
+    g.strokeStyle = C.mute; g.lineWidth = 1; g.setLineDash([4, 3]); g.beginPath();
+    for (let px = 0; px <= box.w; px += 2) { const r = r0 + px / box.w * (r1 - r0), a = alimAt(rest, r), y = ys(a === Infinity ? Y : a); px ? g.lineTo(box.x + px, y) : g.moveTo(box.x + px, y); }
+    g.stroke(); g.setLineDash([]);
+  }
   g.strokeStyle = C.fg; g.lineWidth = 1.4; g.beginPath();
   env.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke();
   // operating point

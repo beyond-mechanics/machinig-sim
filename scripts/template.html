@@ -191,9 +191,12 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="mK">剛性 k <span class="unit">N/µm</span></label><input type="number" id="mK" min="0.5" max="200" step="0.1"></div>
           <div class="row"><label for="mFn">固有振動数 <span class="unit">Hz</span></label><input type="number" id="mFn" min="100" max="20000" step="10"></div>
           <div class="row"><label for="mZeta">減衰比 ζ</label><input type="number" id="mZeta" min="0.005" max="0.3" step="0.005" value="0.04"></div>
+          <div class="row"><label for="spSoft">主軸の剛性低下 <span class="unit">% @30000</span></label><input type="number" id="spSoft" min="0" max="60" step="1" value="25"></div>
+          <p class="hint" id="spInfo">高速回転では軸受の予圧が抜けホルダーが緩むので、主軸側の剛性が下がり固有振動数が下がります。30000 min⁻¹ での低下率 (0 で無効) です。工具先端には主軸側のコンプライアンスの割合だけ効きます。</p>
+          <div class="row"><label for="frfS">測定時の回転数 <span class="unit">min⁻¹</span></label><input type="number" id="frfS" min="0" max="60000" step="500" placeholder="静止"></div>
           <div class="seg"><button id="frfLoad" aria-pressed="false">実測FRF (CSV)</button><button id="frfExample" aria-pressed="false">FRFの例</button><button id="frfClear" aria-pressed="false" disabled>外す</button></div>
           <input type="file" id="frfFile" accept=".csv,.txt,text/csv,text/plain" hidden>
-          <p class="hint" id="frfInfo" style="white-space:pre-line">ハンマリング試験の FRF を読み込むと、X/Y 別の複数モードで振動と安定限界線図を計算します。列は 周波数 [Hz], Re G<sub>xx</sub>, Im G<sub>xx</sub>, Re G<sub>yy</sub>, Im G<sub>yy</sub> (m/N)。Y の列が無ければ X と同じとみなします。</p>
+          <p class="hint" id="frfInfo" style="white-space:pre-line">ハンマリング試験の FRF を読み込むと、X/Y 別の複数モードで振動と安定限界線図を計算します。列は 周波数 [Hz], Re G<sub>xx</sub>, Im G<sub>xx</sub>, Re G<sub>yy</sub>, Im G<sub>yy</sub> (m/N)。Y の列が無ければ X と同じとみなします。回転中に測った (または切削試験から同定した) FRF は「測定時の回転数」を入れてから読み込むと、回転数ごとに複数持てます。その間の回転数は補間し、主軸の剛性低下のモデルの代わりに使います。</p>
         </fieldset>
         <fieldset>
           <legend>切削モデル</legend>
@@ -296,6 +299,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li>薄肉壁は荷重高さの壁厚だけで剛性を見積もる簡易モデルで、テーパ状の壁や床(薄い底面)のたわみは扱いません。壁の固有振動数は時間刻みの都合で 5 kHz を上限にしています。</li>
           <li>切削温度は二次元切削のエネルギー収支(Merchant のせん断角、Boothroyd の熱配分、Jaeger の移動熱源)による平均値で、FEM による温度場ではありません。断面図の温度分布は各熱源の温度を使った模式図です。工具摩耗は Usui 式を被削材ごとの代表寿命で校正しています。</li>
           <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。ドリル (固定サイクルの穴あけを含む) は先端角のないフラット工具として底刃のスラストとトルクを計算し、チゼルエッジの押し込み力は含みません。切粉は 1 粒子が数個分の切粉を代表し (最大 5000 粒子)、流体は CFD ではなく噴流・壁面噴流・浅水流の工学的な近似を重ねた速度場です。ポケット内の渦や、工具が噴流をさえぎる効果は入れていません。</li>
+          <li><b>回転数で変わる動特性</b>: 高速回転では主軸軸受の予圧が抜けホルダーが緩み、工具先端の固有振動数が下がります。振動と安定限界線図はその回転数の動特性で計算し、静止時の線図を破線で重ねます。安定ポケットは低い回転数側へずれます。回転中に測った FRF を回転数別に読み込むこともできます。</li>
           <li><b>寸法誤差</b>: 同じ素材を指令どおり (たわみ・振動なし) にも削り、加工結果との差を「指令との差」で示します。壁の位置は格子より細かく µm 単位で比べます。目標形状 (STL) を読み込むと「目標との差」で削り残し (青) と削り過ぎ (赤) を示し、原因のプログラム行を出します。目標の壁の位置そのものは格子 (0.3 mm) 単位でしか分からないので、プログラムが目標と食い違う壁際は ± 半格子で表示します。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
