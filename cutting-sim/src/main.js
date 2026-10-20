@@ -4,6 +4,7 @@ import { DEFAULTS } from './sph.js';
 import { chamferProfile, breakerProfile, importProfile, wornProfile } from './profile.js';
 import { makeTool, toolOutline } from './tool.js';
 import { View3D } from './view3d.js';
+import { renderField, legendGradient, bandsOf } from './fieldview.js';
 
 const $ = (id) => document.getElementById(id);
 const workerUrl = URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' }));
@@ -27,15 +28,18 @@ const cssGrad = (name) => `linear-gradient(90deg, ${[0, 0.2, 0.4, 0.6, 0.8, 1].m
 
 const FIELDS = {
   T: { label: '温度', unit: '°C', map: 'turbo', fmt: (v) => v.toFixed(0) },
-  seq: { label: 'ミーゼス応力', unit: 'MPa', map: 'turbo', fmt: (v) => v.toFixed(0) },
+  seq: { label: 'ミーゼス応力', unit: 'MPa', map: 'turbo', fmt: (v) => v.toFixed(0), smooth: 1.6 },
   ep: { label: '相当塑性ひずみ', unit: '', map: 'turbo', fmt: (v) => v.toFixed(2) },
   sr: { label: 'ひずみ速度', unit: 'log₁₀ 1/s', map: 'turbo', fmt: (v) => v.toFixed(1), log: true },
-  p: { label: '静水圧', unit: 'MPa', map: 'div', fmt: (v) => v.toFixed(0) },
+  p: { label: '静水圧', unit: 'MPa', map: 'div', fmt: (v) => v.toFixed(0), smooth: 1.6 },
   D: { label: '損傷度', unit: '1 で割れ始め', map: 'turbo', fmt: (v) => v.toFixed(1) },
 };
 
 // ---- State ----
 let frame = null, field = 'T', zoom = 'tip', status = 'idle', cfg = null, mode = 'ortho', runN = 0;
+// Field picture: 'bands' (contour bands, as in FE post-processing), 'smooth', or 'particles'.
+let render = 'bands';
+try { render = localStorage.getItem('cutting-sim.render') || render; } catch (e) { /* storage blocked */ }
 const is3 = (m = mode) => m === '3d' || m === 'helix';   // 3D solver modes
 const view = $('view'), vctx = view.getContext('2d');
 
@@ -206,6 +210,15 @@ for (const b of document.querySelectorAll('[data-zoom]')) b.addEventListener('cl
   if (is3() && frame && frame.dim === 3) view3d().frame(frame, zoom);
   draw();
 });
+for (const b of document.querySelectorAll('[data-render]')) {
+  b.setAttribute('aria-pressed', b.dataset.render === render);
+  b.addEventListener('click', () => {
+    render = b.dataset.render;
+    for (const c of document.querySelectorAll('[data-render]')) c.setAttribute('aria-pressed', c === b);
+    try { localStorage.setItem('cutting-sim.render', render); } catch (e) { /* storage blocked */ }
+    draw();
+  });
+}
 let section = false;
 $('section').addEventListener('click', () => { section = !section; $('section').setAttribute('aria-pressed', section); draw(); });
 
@@ -243,15 +256,41 @@ function range(f, vals) {
 // Tool temperature: the tool grid painted into a small bitmap, drawn in the tool's frame and
 // clipped to the tool outline.
 const toolCanvas = document.createElement('canvas');
-function toolBitmap(lo, hi) {
-  const g = frame.toolGrid, lut = LUT.turbo;
-  toolCanvas.width = g.nu; toolCanvas.height = g.nw;
-  const c = toolCanvas.getContext('2d'), img = c.createImageData(g.nu, g.nw), d = img.data;
+// Upsampled 6× with bilinear interpolation (cells outside the tool take their inside neighbours),
+// so the bands and their lines run as smoothly as in the workpiece.
+function toolBitmap(lo, hi, nb) {
+  const g = frame.toolGrid, lut = LUT.turbo, up = 6, W = g.nu * up, H = g.nw * up;
+  toolCanvas.width = W; toolCanvas.height = H;
+  const c = toolCanvas.getContext('2d'), img = c.createImageData(W, H), d = img.data;
+  // Fill outside cells with the mean of their inside neighbours (one ring) so interpolation near
+  // the surface does not pull in the 0 of empty cells.
+  const T = Float32Array.from(g.T), ins = Uint8Array.from(g.inside);
   for (let j = 0; j < g.nw; j++) for (let i = 0; i < g.nu; i++) {
-    const k = i + j * g.nu, o = k * 4;   // row j = w index; the draw transform flips w up
-    if (!g.inside[k]) continue;
-    let t = Math.round((g.T[k] - lo) / (hi - lo) * 255); t = t < 0 ? 0 : t > 255 ? 255 : t;
-    const col = lut[t]; d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; d[o + 3] = 255;
+    const k = i + j * g.nu; if (g.inside[k]) continue;
+    let sum = 0, n = 0;
+    for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + a, jj = j + b; if (ii >= 0 && jj >= 0 && ii < g.nu && jj < g.nw && g.inside[ii + jj * g.nu]) { sum += g.T[ii + jj * g.nu]; n++; } }
+    if (n) { T[k] = sum / n; ins[k] = 2; }
+  }
+  const band = new Int16Array(W * H).fill(-1), inv = 1 / (hi - lo);
+  for (let Y = 0; Y < H; Y++) {
+    const gy = (Y + 0.5) / up - 0.5, j = Math.max(0, Math.min(g.nw - 2, Math.floor(gy))), fy = Math.min(1, Math.max(0, gy - j));
+    for (let X = 0; X < W; X++) {
+      const gx = (X + 0.5) / up - 0.5, i = Math.max(0, Math.min(g.nu - 2, Math.floor(gx))), fx = Math.min(1, Math.max(0, gx - i));
+      const k = i + j * g.nu, cells = [k, k + 1, k + g.nu, k + g.nu + 1], wts = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
+      let v = 0, w = 0;
+      for (let q = 0; q < 4; q++) if (ins[cells[q]]) { v += wts[q] * T[cells[q]]; w += wts[q]; }
+      if (!(w > 0)) continue;
+      let u = (v / w - lo) * inv; u = u < 0 ? 0 : u > 1 ? 1 : u;
+      const bi = nb ? Math.min(nb - 1, Math.floor(u * nb)) : 0;
+      const col = lut[nb ? Math.round(bi / (nb - 1) * 255) : Math.round(u * 255)], o = (X + Y * W) * 4;
+      band[X + Y * W] = bi; d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; d[o + 3] = 255;
+    }
+  }
+  if (nb) for (let Y = 0; Y < H - 1; Y++) for (let X = 0; X < W - 1; X++) {
+    const p = X + Y * W, b0 = band[p];
+    if (b0 < 0) continue;
+    const br = band[p + 1], bd = band[p + W];
+    if ((br >= 0 && br !== b0) || (bd >= 0 && bd !== b0)) { const o = p * 4; d[o] *= 0.62; d[o + 1] *= 0.62; d[o + 2] *= 0.62; }
   }
   c.putImageData(img, 0, 0);
   return toolCanvas;
@@ -277,6 +316,12 @@ function draw() {
   const ox = (cw - s * (wx1 - wx0)) / 2 - wx0 * s, oy = (ch - s * (wy1 - wy0)) / 2 + wy1 * s;
   xf = { s, ox, oy, dpr };
   const vals = fieldValues(field), [lo, hi] = range(field, vals), lut = LUT[FIELDS[field].map];
+  const nb = render === 'particles' ? 0 : bandsOf(render);
+  if (render === 'particles' || !renderField(vctx, frame, xf, vals, lo, hi, lut, render, FIELDS[field].smooth || 1)) drawParticles(vals, lo, hi, lut);
+  drawOverlays(lo, hi, nb, wx0, wx1);
+}
+function drawParticles(vals, lo, hi, lut) {
+  const { s, ox, oy } = xf, cw = view.width, ch = view.height;
   const img = vctx.createImageData(cw, ch), buf = new Uint32Array(img.data.buffer);
   const half = Math.max(1, frame.dx * s * 0.5);
   const n = frame.x.length, inv = 255 / (hi - lo);
@@ -292,6 +337,9 @@ function draw() {
     for (let yy = y0; yy < y1; yy++) buf.fill(col, yy * cw + x0, yy * cw + x1);
   }
   vctx.putImageData(img, 0, 0);
+}
+function drawOverlays(lo, hi, nb, wx0, wx1) {
+  const { s, ox, oy, dpr } = xf, cw = view.width, ch = view.height, hmm = frame.h, [tx, ty, , th] = frame.tip;
   const css = getComputedStyle(document.documentElement);
   // Cutter circle (end mill).
   if (frame.mill) {
@@ -307,7 +355,7 @@ function draw() {
   g.addColorStop(0, css.getPropertyValue('--tool-a')); g.addColorStop(1, css.getPropertyValue('--tool-b'));
   vctx.fillStyle = g; vctx.fill(path);
   if (field === 'T') {
-    const tg = frame.toolGrid, bmp = toolBitmap(lo, hi);
+    const tg = frame.toolGrid, bmp = toolBitmap(lo, hi, nb);
     vctx.save(); vctx.clip(path);
     // Local (u, w) → screen: origin at the edge centre, u along th, w normal to it, y flipped.
     const c = Math.cos(th), sn = Math.sin(th);
@@ -329,7 +377,7 @@ function draw() {
   vctx.fillText(`${Math.round(bar * 1000)} µm`, cw - 16 * dpr, ch - 28 * dpr);
   // Legend.
   const f = FIELDS[field];
-  $('lg-bar').style.background = cssGrad(f.map);
+  $('lg-bar').style.background = legendGradient(LUT[f.map], nb);
   $('lg-lo').textContent = f.fmt(lo); $('lg-hi').textContent = f.fmt(hi);
   $('lg-name').textContent = (f.unit ? `${f.label} [${f.unit}]` : f.label) + (field === 'T' ? (frame.toolGrid.steady ? '・工具は定常推定' : '・工具を含む') : '');
 }
