@@ -329,6 +329,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
             <div class="row"><label for="stlRot">Z 軸まわりの回転</label><select id="stlRot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></div>
           </div>
           <p class="hint" id="stockInfo">「プログラム」はコメント <code>(STOCK 幅 奥行 高さ)</code> か <code>(STOCK CYL 直径 高さ)</code> を使い、無ければ切削送りの範囲から直方体を仮定します。</p>
+          <div class="row"><label for="cellSel">格子の細かさ</label><select id="cellSel"><option value="0.3" selected>0.3 mm (標準)</option><option value="0.2">0.2 mm</option><option value="0.15">0.15 mm (小さい部品、重い)</option></select></div>
           <div class="row"><label for="orgSel">プログラム原点</label><select id="orgSel">
             <option value="auto">自動</option><option value="corner">上面の左手前の角</option><option value="center">上面の中心</option><option value="center-bottom">下面の中心</option><option value="model">モデルの座標そのまま</option><option value="manual">数値で指定</option>
           </select></div>
@@ -361,7 +362,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
       <div class="tabpane prose" data-pane="about" hidden>
         <h3>何を計算しているか</h3>
         <ul>
-          <li><b>材料除去</b>: 素材を 0.3 mm 格子の高さマップ(Zデクセル)で持ち、工具がたわんだ実際の位置で削ります。3軸ならアンダーカットが無いのでこの表現で形状は正確です。</li>
+          <li><b>材料除去</b>: 素材を 0.3 mm (0.2・0.15 mm も選べます) 格子の高さマップ(Zデクセル)で持ち、工具がたわんだ実際の位置で削ります。3軸ならアンダーカットが無いのでこの表現で形状は正確です。</li>
           <li><b>側面の仕上げ面</b>: 刃が壁を通る瞬間の工具位置 (送り+振動) から、各刃が残す円弧の包絡として壁の凹凸を計算します。点線は振動がないときの理論値 fz²/(8R) です。</li>
           <li><b>見た目</b>: 底面の円弧状の筋は 1 回転送りの間隔で描いています。実際の間隔は 0.1 mm 前後なので、拡大すると見えます。びびりが出た面はくすんで見えます。</li>
           <li><b>工具先端の動特性</b>: 既定は工具形状から求めた 1 モードですが、実測 FRF (CSV) を読み込むと X/Y 別の複数モードで計算します。共振ピークから固有振動数・減衰比・剛性を同定します。</li>

@@ -160,7 +160,7 @@ $('sample').onchange = e => {
 
 // ---------- files ----------
 // ---------- project: the program with everything set around it, as one JSON file ----------
-const PJ_INPUTS = ['stW', 'stL', 'stH', 'cD', 'cH', 'orgSel', 'oX', 'oY', 'oZ', 'stlUnit', 'stlUp', 'stlRot'];
+const PJ_INPUTS = ['stW', 'stL', 'stH', 'cD', 'cH', 'orgSel', 'oX', 'oY', 'oZ', 'stlUnit', 'stlUp', 'stlRot', 'cellSel'];
 function projectJson() {
   const cfg = JSON.parse(JSON.stringify(sim.cfg));
   delete cfg.dynBudget;
@@ -341,6 +341,8 @@ addEventListener('keydown', e => {
   else if (e.key === 'Home') { e.preventDefault(); seekTo(0); }
   else if (e.key === 'End') { e.preventDefault(); seekTo(sim.totalTime || 0); }
 });
+// the stock grid: finer shows small parts and walls better, at about (0.3 / cell)³ the cost
+$('cellSel').onchange = e => { const v = +e.target.value; if (!(v > 0)) return; sim.cfg.cell = v; host.config(); loadProgram(); };
 $('orgSel').onchange = () => { const manual = $('orgSel').value === 'manual'; for (const id of ['oX', 'oY', 'oZ']) $(id).readOnly = !manual; };
 for (const id of ['oX', 'oY', 'oZ']) $(id).addEventListener('input', () => { $('orgSel').value = 'manual'; });
 // drop a program or an STL anywhere on the page
