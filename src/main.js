@@ -156,6 +156,57 @@ $('sample').onchange = e => {
 };
 
 // ---------- files ----------
+// ---------- project: the program with everything set around it, as one JSON file ----------
+const PJ_INPUTS = ['stW', 'stL', 'stH', 'cD', 'cH', 'orgSel', 'oX', 'oY', 'oZ', 'stlUnit', 'stlUp', 'stlRot'];
+function projectJson() {
+  const cfg = JSON.parse(JSON.stringify(sim.cfg));
+  delete cfg.dynBudget;
+  return JSON.stringify({ app: 'machining-sim', version: 1, saved: new Date().toISOString(), name: $('gcInfo').dataset.file || SAMPLES[$('sample').value]?.name || '',
+    code: $('code').value, stockMode, inputs: Object.fromEntries(PJ_INPUTS.map(id => [id, $(id).value])), wcsDelta, cfg, spindle: +$('ovS').value }, null, 1);
+}
+function openProject(text) {
+  const pj = JSON.parse(text);
+  if (pj.app !== 'machining-sim' || typeof pj.code !== 'string') throw new Error('このシミュレーターのプロジェクトではありません');
+  // configuration first (nested objects merged so newer fields keep their defaults)
+  for (const [k, v] of Object.entries(pj.cfg || {})) sim.cfg[k] = v && typeof v === 'object' && !Array.isArray(v) && sim.cfg[k] && typeof sim.cfg[k] === 'object' ? { ...sim.cfg[k], ...v } : v;
+  for (const k of Object.keys(wcsDelta)) delete wcsDelta[k];
+  Object.assign(wcsDelta, pj.wcsDelta || {});
+  for (const [id, v] of Object.entries(pj.inputs || {})) if ($(id)) $(id).value = v;
+  // the panel controls that mirror cfg
+  const t = sim.cfg.tool;
+  $('material').value = sim.cfg.material;
+  for (const [id, key] of Object.entries(toolInputs)) if (t[key] != null) $(id).value = t[key];
+  for (const [id, key] of [['tRake', 'rakeDeg'], ['tRun', 'runout'], ['tCoat', 'coating'], ['tCR', 'cornerR'], ['tShank', 'shankD'], ['tNeckD', 'neckD'], ['tNeckL', 'neckLen'], ['tHolder', 'holder']]) if ($(id)) $(id).value = t[key] ?? '';
+  document.querySelectorAll('[data-ttype]').forEach(b => b.setAttribute('aria-pressed', b.dataset.ttype === t.type));
+  $('rowCR').hidden = t.type !== 'bull';
+  document.querySelectorAll('[data-cool]').forEach(b => b.setAttribute('aria-pressed', b.dataset.cool === sim.cfg.coolant));
+  $('nozzleBox').hidden = COOLANTS[sim.cfg.coolant]?.jet !== 'nozzle';
+  $('mAuto').checked = sim.cfg.modal.auto !== false;
+  if (sim.cfg.spindleSoft) $('spSoft').value = Math.round((sim.cfg.spindleSoft.drop ?? 0.25) * 100);
+  $('ovF').value = Math.round((sim.cfg.feedOverride ?? 1) * 100); $('ovFOut').textContent = `${$('ovF').value} %`;
+  $('code').value = pj.code; $('sample').value = '';
+  $('gcInfo').dataset.file = pj.name || 'project'; $('gcInfo').textContent = `${pj.name || 'プロジェクト'} · ${pj.code.split('\n').length.toLocaleString()} 行 (プロジェクト)`;
+  setStockMode(pj.stockMode === 'stl' && !stlSpec ? 'prog' : pj.stockMode || 'prog'); $('orgSel').onchange();
+  view.setCoating(t.coating || 'none');
+  host.config(true);
+  loadProgram();
+  if (pj.spindle > 0) setSpindle(pj.spindle);
+  syncModalInputs(); updateMatHint(); showJc();
+  $('pjInfo').textContent = `${pj.name || 'プロジェクト'} を開きました (${pj.saved ? new Date(pj.saved).toLocaleString('ja-JP') : ''} 保存)。${pj.stockMode === 'stl' && !stlSpec ? 'STL / STEP の素材は入っていないので、プログラムから素材を決めています。' : ''}`;
+}
+$('pjSave').onclick = async () => {
+  const text = projectJson(), name = ($('gcInfo').dataset.file || 'program').replace(/(_opt)?\.[^.]+$/, '') + '.machsim.json';
+  if (downloads) { try { await downloads.save({ filename: name, data: text }); } catch { /* declined */ } return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('pjOpen').onclick = () => $('pjFile').click();
+$('pjFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try { openProject(await f.text()); } catch (err) { $('pjInfo').textContent = `${f.name} を開けませんでした: ${err.message}`; }
+};
 async function openProgram(file) {
   const text = decodeText(await file.arrayBuffer());
   $('code').value = text;
@@ -291,7 +342,9 @@ addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $('dropzone').hidden = true;
   const files = [...e.dataTransfer.files];
-  const isMesh = f => /\.(stl|obj)$/i.test(f.name) || CAD_RE.test(f.name);
+  const isMesh = f => /\.(stl|obj)$/i.test(f.name) || CAD_RE.test(f.name), isProject = f => /\.json$/i.test(f.name);
+  const pj = files.find(isProject);
+  if (pj) { pj.text().then(t => { try { openProject(t); } catch (err) { $('pjInfo').textContent = `${pj.name} を開けませんでした: ${err.message}`; } document.querySelector('[data-tab="prog"]').click(); }); return; }
   const stl = files.find(isMesh), prog = files.find(f => !isMesh(f));
   (async () => {
     if (stl) await openStl(stl);

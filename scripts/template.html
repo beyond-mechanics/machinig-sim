@@ -151,7 +151,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
-<div class="dropzone" id="dropzone" hidden>NC プログラムか STL / OBJ / STEP をここに放してください</div>
+<div class="dropzone" id="dropzone" hidden>NC プログラム・STL / OBJ / STEP・プロジェクト (.json) をここに放してください</div>
 <div class="wrap">
   <header class="bar">
     <div class="brand"><h1>3軸加工シミュレーター</h1><span class="sub">切削力 · びびり振動 · たわみ · 切粉</span></div>
@@ -298,6 +298,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         <fieldset>
           <legend>プログラム</legend>
           <div class="seg" style="grid-template-columns:1fr 1fr"><button id="gcOpen" aria-pressed="false">ファイルを開く</button><button id="gcSave" aria-pressed="false">ファイルに保存</button></div>
+          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="pjSave" aria-pressed="false">プロジェクトを保存</button><button id="pjOpen" aria-pressed="false">プロジェクトを開く</button></div>
+          <input type="file" id="pjFile" accept=".json,application/json" hidden>
+          <p class="hint" id="pjInfo">プロジェクト (.json) には、プログラム・素材・原点とワーク座標系・工具・被削材と切削係数・動特性・クーラント・回転数と送りのオーバーライドが入ります (読み込んだ STL / STEP と工具ライブラリは入りません)。</p>
           <input type="file" id="gcFile" accept=".nc,.ngc,.gcode,.tap,.cnc,.eia,.mpf,.min,.txt,.ptp,.iso,text/plain" hidden>
           <div class="row wide"><select id="sample" aria-label="サンプルプログラム"></select></div>
           <p class="hint" id="gcInfo">NC ファイル (.nc .tap .gcode .eia など) を開くか、画面にドラッグ&ドロップできます。文字コードは UTF-8 と Shift_JIS を自動判別します。</p>
