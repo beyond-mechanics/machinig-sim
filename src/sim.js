@@ -140,6 +140,7 @@ export class Simulator {
     // what deflection and chatter did to the part
     this.ideal = new Stock(s.w, s.l, s.h, this.stockCell || this.cfg.cell);
     this.ideal.H.set(this.stock.H);
+    this.ideal.wallBand = 2;
     const n = this.stock.H.length;
     this.stock.devIdeal = new Float32Array(n);  // simulated − commanded [mm], + = material left
     this.stock.devTarget = new Float32Array(n); // simulated − target [mm], + = material left
@@ -491,9 +492,24 @@ export class Simulator {
     if (!s.devIdeal) return null;
     const res = { ideal: { left: 0, gouge: 0, kLeft: -1, kGouge: -1 }, target: T ? { left: 0, gouge: 0, kLeft: -1, kGouge: -1, n: 0, inTol: 0 } : null };
     const top = s.zTop - 1e-3;
+    // a lone cell off by more than the tolerance with no neighbour off the same way is a
+    // heightfield speckle, not a shape error: a node a hair inside the commanded cutter edge that
+    // the (µm-deflected) tool just missed and that a later move, a retract for one, cut at another
+    // height. The sliver is µm wide; on the grid it would read as a whole column.
+    const D = s.devIdeal, nx = s.nx, ny = s.ny;
+    const lone = k => {
+      const v = D[k];
+      if (Math.abs(v) <= tol) return false;
+      const i = k % nx, j = (k - i) / nx;
+      for (let b = Math.max(0, j - 1); b <= Math.min(ny - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(nx - 1, i + 1); a++) {
+        const w = D[b * nx + a];
+        if ((a !== i || b !== j) && Math.sign(w) === Math.sign(v) && Math.abs(w) > tol) return false;
+      }
+      return true;
+    };
     for (let k = 0; k < s.H.length; k++) {
       const machined = s.H[k] < top || Number.isFinite(s.wallD[k]);
-      if (machined) {
+      if (machined && !lone(k)) {
         const v = s.devIdeal[k], r = res.ideal;
         if (v > r.left) { r.left = v; r.kLeft = k; }
         if (v < r.gouge) { r.gouge = v; r.kGouge = k; }

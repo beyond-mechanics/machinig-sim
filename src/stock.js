@@ -118,7 +118,9 @@ export class Stock {
   stamp(cx, cy, tipZ, R, type, errVal, mark = null, lut = null) {
     if (tipZ >= this.zTop) return 0;
     // walls up to two cells outside the cutter record how close its edge came
-    const Rw = R + 2 * Math.max(this.hx, this.hy), Rw2 = Rw * Rw;
+    // (wallBand widens that band: the commanded-cut reference keeps it at 2 mm so that a wall
+    // that chatter pushed far out is still measured as a lateral distance)
+    const Rw = R + Math.max(2 * Math.max(this.hx, this.hy), this.wallBand || 0), Rw2 = Rw * Rw;
     const i0 = Math.max(0, Math.floor((cx - Rw) / this.hx)), i1 = Math.min(this.nx - 1, Math.ceil((cx + Rw) / this.hx));
     const j0 = Math.max(0, Math.floor((cy - Rw) / this.hy)), j1 = Math.min(this.ny - 1, Math.ceil((cy + Rw) / this.hy));
     if (i0 > i1 || j0 > j1) return 0;
