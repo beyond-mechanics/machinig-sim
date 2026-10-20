@@ -851,12 +851,16 @@ const HCOL = { axis: null, tmax: 'Tmax_work [C]', trake: 'T_rake [C]',
   ttool: 'Tmax_tool [C]', hnom: 'h_nominal [mm]', flow: 'chip_flow_angle [deg]', area: 'chip_area [mm2]', len: 'edge_length [mm]' };
 function saveResult() {
   const s = frame.summary, h = frame.hist, c = cfg;
-  const axis = c.mode === 'mill' || c.mode === 'helix' ? 'rotation [deg]' : c.mode === '3d' ? 'tool travel [mm]' : 'cut length [mm]';
-  const lines = [`# cutting-sim ${c.mode} ${c.mat}`, `# conditions ${JSON.stringify(c, (k, v) => (k === 'profile' ? undefined : v))}`];
+  const msh = c.mode === 'mesh';
+  const axis = c.mode === 'mill' || c.mode === 'helix' || (msh && c.motion !== 'linear') ? 'rotation [deg]' : c.mode === '3d' || msh ? 'tool travel [mm]' : 'cut length [mm]';
+  // Conditions without the outlines and meshes themselves (the STL names stand for them).
+  const cond = JSON.stringify(c, (k, v) => (k === 'profile' || k === 'work' || k === 'toolTris' || k === 'workTris' ? undefined : v));
+  const lines = [`# cutting-sim ${c.mode} ${c.mat}`, `# conditions ${cond}`];
+  if (msh) lines.push(`# tool ${stl.tool && stl.tool.name}, work ${stl.work && stl.work.name}`);
   for (const [k, v] of Object.entries(s)) if (typeof v === 'number' && isFinite(v)) lines.push(`# ${k} = ${+v.toPrecision(6)}`);
-  const keys = Object.keys(h).filter((k) => Array.isArray(h[k]) && h[k].length === h.axis.length && h[k].length);
+  const keys = Object.keys(h).filter((k) => Array.isArray(h[k]) && h[k].length === h.axis.length && h[k].length && h[k].some((v) => v != null));
   const mill = c.mode === 'mill' || c.mode === 'helix';
-  const force = { fc: mill ? 'Ft_tangential [N]' : 'Fc_cutting [N]', ft: mill ? 'Fr_radial [N]' : 'Ft_thrust [N]', fr: mill ? 'Fa_axial [N]' : 'Fr_lateral [N]' };
+  const force = msh ? { fc: 'Fx [N]', ft: 'Fy [N]', fr: 'Fz [N]', mz: 'spindle_torque [N m]' } : { fc: mill ? 'Ft_tangential [N]' : 'Fc_cutting [N]', ft: mill ? 'Fr_radial [N]' : 'Ft_thrust [N]', fr: mill ? 'Fa_axial [N]' : 'Fr_lateral [N]' };
   lines.push(keys.map((k) => (k === 'axis' ? axis : force[k] || HCOL[k] || k)).join(','));
   for (let i = 0; i < h.axis.length; i++) lines.push(keys.map((k) => (h[k][i] == null ? '' : +h[k][i].toPrecision(6))).join(','));
   const text = lines.join('\n') + '\n', name = `cutting_${c.mode}_${c.mat}.csv`;

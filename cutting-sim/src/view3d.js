@@ -76,12 +76,12 @@ export class View3D {
     let target, dist, dir;
     if (t.mesh) {
       // Where the tool meets the work: its axis at the top of the work; the whole work for 'all'.
-      // 'tip': the work, close up; 'all': the work and the whole tool.
+      // 'tip': the work, close up, a little towards the tool; 'all': the work and the whole tool.
       const wb = t.wb, span = Math.max(wb[3] - wb[0], wb[4] - wb[1], wb[5] - wb[2]);
       const wc = new THREE.Vector3(0.5 * (wb[0] + wb[3]), 0.5 * (wb[1] + wb[4]), 0.5 * (wb[2] + wb[5]));
       const tc = new THREE.Vector3(t.pose[3] + t.pose[0], t.pose[4], wb[5] + t.pose[1]);
-      target = zoom === 'tip' ? wc : wc.clone().lerp(tc, 0.5);
-      dist = zoom === 'tip' ? Math.max(1.6 * span, 30 * h) : 2.4 * Math.max(span, wc.distanceTo(tc) * 1.5);
+      target = wc.clone().lerp(tc, zoom === 'tip' ? 0.3 : 0.5);
+      dist = zoom === 'tip' ? Math.max(1.25 * span, 30 * h) : 2.4 * Math.max(span, wc.distanceTo(tc) * 1.5);
       target.applyMatrix4(this.root.matrix);
       // From the side of the work away from the tool (ahead of a planing tool, outside a side mill),
       // a little from above; straight above-and-aside for a drill over the work.
