@@ -456,6 +456,7 @@ function frameLoop(now) {
   const dTheta = revPerS * dt * 2 * Math.PI;
   const blur = Math.min(1, Math.max(0, (dTheta * sim.activeTool.N / (2 * Math.PI) - 0.12) / 0.3));
   spinAngle += blur >= 1 ? dt * 2 * Math.PI * 0.7 : dTheta; // when fully blurred, a slow drift keeps the highlights alive
+  view.setPathProgress(sim.seg || 0);
   if (sim.toolVersion !== viewToolVersion) { viewToolVersion = sim.toolVersion; view.setTool(sim.activeTool); syncModalInputs(); updateMatHint(); }
   const wall = sim.display.cutting ? sim.wall : null;
   view.updateWallDeform(wall && e.wk ? wall : null, (e.runMeanW || 0) * 1e3 * view.exag);
@@ -480,7 +481,8 @@ function updateTiles() {
   $('statePill').dataset.s = d.state; $('statePill').textContent = STATE_LABEL[d.state];
   $('tileVib').dataset.s = d.state;
   $('clock').textContent = `${sim.mtime.toFixed(1)} / ${sim.totalTime.toFixed(1)} s`;
-  $('prog').style.width = `${Math.min(100, sim.mtime / (sim.totalTime || 1) * 100)}%`;
+  const pct = Math.min(100, sim.mtime / (sim.totalTime || 1) * 100);
+  $('prog').style.width = `${pct}%`; $('progBar').setAttribute('aria-valuenow', pct.toFixed(0));
   const tl = sim.activeT != null ? `T${sim.activeT} ` : '';
   $('lineInfo').textContent = sim.line ? `${tl}${sim.line}行  ${codeLines[sim.line - 1]?.trim() ?? ''}` : 'プログラム先頭';
   setV('vF', d.F.toFixed(0), 'N'); $('sF').textContent = `最大 ${d.Fmax.toFixed(0)} N · 軸方向 ${d.Fz.toFixed(0)} N`;
@@ -539,6 +541,33 @@ function showDeviation(dev) {
   const head = dev.target ? `目標比 · 公差内 ${(r.inTol / Math.max(1, r.n) * 100).toFixed(1)}%` : '指令比';
   $('sDv').textContent = `${head} · 削り残し ${um(r.left)}${at(r.atLeft)} · 削り過ぎ ${um(-r.gouge)}${at(r.atGouge)}`;
 }
+// ---------- seeking ----------
+// jump to machine time t [s]: backwards means cutting again from the start
+function seekTo(t) {
+  t = Math.max(0, Math.min(sim.totalTime || 0, t));
+  if (t < sim.mtime - 1e-6 || sim.done) restart();
+  host.seek(t);
+  $('lineInfo').textContent = `${t.toFixed(1)} s まで計算中…`;
+}
+// machine time at which program line n starts cutting (its first move)
+function lineStart(n) {
+  const p = sim.path;
+  for (let i = 1; i < p.length; i++) if (p[i].line === n) return sim.times[i - 1];
+  return null;
+}
+{
+  const bar = $('progBar');
+  const at = ev => { const r = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)) * (sim.totalTime || 0); };
+  bar.addEventListener('pointerdown', ev => { bar.setPointerCapture(ev.pointerId); bar.dataset.drag = '1'; });
+  bar.addEventListener('pointerup', ev => { if (bar.dataset.drag) { delete bar.dataset.drag; seekTo(at(ev)); } });
+  bar.addEventListener('keydown', ev => {
+    const step = (sim.totalTime || 0) * (ev.shiftKey ? 0.1 : 0.02);
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); seekTo(sim.mtime + step); }
+    else if (ev.key === 'ArrowLeft') { ev.preventDefault(); seekTo(sim.mtime - step); }
+    else if (ev.key === 'Home') { ev.preventDefault(); seekTo(0); }
+  });
+}
+
 // ---------- machining report ----------
 const BAD = new Set(['びびり', '応力超過']);
 function currentReport() { return host.threaded ? (sim.reportPack ? LineReport.unpack(sim.reportPack) : null) : sim.report; }
@@ -570,6 +599,9 @@ function updateReport() {
   for (const it of r.issues.slice(0, 30)) {
     const tr = document.createElement('tr'); tr.tabIndex = 0;
     const td = (v, cls) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = v; tr.appendChild(c); return c; };
+    const pc = td(''), pb = document.createElement('button'); pb.className = 'play'; pb.textContent = '▶'; pb.title = `${it.line}行から再生`; pb.setAttribute('aria-label', `${it.line}行から再生`);
+    pb.onclick = ev => { ev.stopPropagation(); const t0 = lineStart(it.line); if (t0 !== null) { seekTo(t0); running = true; host.setRunning(true); $('btnPlay').textContent = '❚❚ 一時停止'; } };
+    pc.appendChild(pb);
     td(it.line); td(lineOf(it.line), 'code');
     const tags = td('');
     for (const w of it.why) { const sp = document.createElement('span'); sp.className = `tag ${BAD.has(w) ? 'bad' : 'warn'}`; sp.textContent = w; tags.appendChild(sp); }
@@ -579,7 +611,7 @@ function updateReport() {
     tb.appendChild(tr);
   }
   $('hReport').textContent = `${sim.done ? '完了' : '加工中'} · 注意が必要な行 ${r.issues.length}`;
-  if (!r.issues.length) { const tr = document.createElement('tr'); const c = document.createElement('td'); c.colSpan = 8; c.textContent = sim.done ? '注意が必要な行はありません' : 'まだ注意が必要な行はありません'; tr.appendChild(c); tb.appendChild(tr); }
+  if (!r.issues.length) { const tr = document.createElement('tr'); const c = document.createElement('td'); c.colSpan = 9; c.textContent = sim.done ? '注意が必要な行はありません' : 'まだ注意が必要な行はありません'; tr.appendChild(c); tb.appendChild(tr); }
 }
 // select a program line in the editor (program tab)
 function gotoLine(n) {

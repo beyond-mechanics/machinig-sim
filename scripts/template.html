@@ -40,7 +40,7 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
 button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 select, input[type=number] { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 5px 8px; min-width: 0; }
 .clock { font: 500 13px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-mute); white-space: nowrap; }
-.progress { height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
+.progress { height: 8px; cursor: pointer; touch-action: none; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
 .progress > i { display: block; height: 100%; width: 0; background: var(--accent); }
 
 .main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; align-items: start; }
@@ -118,6 +118,8 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 .rtable td { padding: 5px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 .rtable td.code { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .rtable .n { text-align: right; }
+.rtable button.play { padding: 1px 7px; font-size: 11px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .rtable tbody tr { cursor: pointer; }
 .rtable tbody tr:hover, .rtable tbody tr:focus-visible { background: var(--panel-2); outline: none; }
 .rtable .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; margin-right: 4px; font-size: 11px; border: 1px solid currentColor; }
@@ -143,7 +145,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
       <span class="clock" id="clock">0.0 / 0.0 s</span>
     </div>
   </header>
-  <div class="progress" aria-hidden="true"><i id="prog"></i></div>
+  <div class="progress" id="progBar" role="slider" tabindex="0" aria-label="再生位置 (クリックでその時点へ移動)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" title="クリックでその時点まで進める (戻るときは最初から計算し直します)"><i id="prog"></i></div>
 
   <div class="main">
     <div class="viewport">
@@ -364,10 +366,10 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
       <h2>加工レポート <span id="hReport">加工が始まると、プログラムの行ごとにまとめます</span></h2>
       <dl class="rsum" id="rSum"></dl>
       <div class="rtable-wrap"><table class="rtable" id="rTable" aria-label="注意が必要な行">
-        <thead><tr><th>行</th><th>Gコード</th><th>状態</th><th class="n">最大切削抵抗 N</th><th class="n">振動 µm</th><th class="n">刃先温度 °C</th><th class="n">工具応力 MPa</th><th class="n">切削時間 s</th></tr></thead>
+        <thead><tr><th><span class="sr">再生</span></th><th>行</th><th>Gコード</th><th>状態</th><th class="n">最大切削抵抗 N</th><th class="n">振動 µm</th><th class="n">刃先温度 °C</th><th class="n">工具応力 MPa</th><th class="n">切削時間 s</th></tr></thead>
         <tbody></tbody>
       </table></div>
-      <div class="rfoot"><p class="hint" id="rHint">行をクリックすると、プログラムタブのその行へ移動します。</p><button id="rCsv">全行を CSV で保存</button></div>
+      <div class="rfoot"><p class="hint" id="rHint">行をクリックするとプログラムタブのその行へ、▶ でその行の加工から再生します。</p><button id="rCsv">全行を CSV で保存</button></div>
     </div>
   </section>
 </div>

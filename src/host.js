@@ -28,6 +28,9 @@ export class SimHost {
   config(reconfigure = false) { if (reconfigure) this.sim.reconfigure(); this.send({ type: 'cfg', cfg: this.cfgSnapshot(), reconfigure }); }
   setSpeed(v) { this.sim.speed = v; this.send({ type: 'speed', speed: v }); }
   setRunning(r) { this.send({ type: 'run', running: r }); }
+  // jump to machine time t: the worker runs ahead (after the reset that a backward jump needs,
+  // which the caller has already sent); without a worker the local simulator does it
+  seek(t) { if (this.worker) this.send({ type: 'seek', t }); else this.sim.seekTo(t); }
 
   // advance one render frame; in threaded mode the worker advances on its own
   frame(dt, running) {
@@ -41,7 +44,7 @@ export class SimHost {
     const sim = this.sim;
     if (!sim.stock) return;
     if (m.activeT !== sim.activeT) sim.setActiveTool(m.activeT);
-    Object.assign(sim, { mtime: m.mtime, line: m.line, done: m.done, pos: m.pos, ap: m.ap, wall: m.wall, S: m.S });
+    Object.assign(sim, { mtime: m.mtime, line: m.line, done: m.done, pos: m.pos, ap: m.ap, wall: m.wall, S: m.S, seg: m.seg });
     sim.display = m.display;
     if (m.report) sim.reportPack = m.report;
     sim.hits = m.hits;

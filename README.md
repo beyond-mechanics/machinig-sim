@@ -22,6 +22,7 @@ node test/spindle.test.mjs    # 回転数で変わる工具先端の動特性と
 node test/wcs.test.mjs        # ワーク座標系 (G54〜G59、G54.1、G52)
 node test/runout.test.mjs     # 工具の振れによる刃ごとの切りくずと側面の面粗さ
 node test/report.test.mjs     # 加工レポート (行ごとの集計)
+node test/seek.test.mjs       # 再生位置の移動
 ```
 
 物理計算 (`src/gcode.js` `stock.js` `cutting.js` `sld.js` `tool.js` `thermal.js` `chips.js` `sim.js`) は DOM に依存しないので Node でそのまま動きます。表示は `view.js` `charts.js` `main.js` です。

@@ -378,7 +378,8 @@ export class Simulator {
         const before = e.chipEvents.length;
         e.run(n);
         const compress = want / n;
-        this.spawnChips(e, before, compress, p);
+        if (this.seeking) e.chipEvents.length = before; // no chips while jumping ahead
+        else this.spawnChips(e, before, compress, p);
         frameStats.cutTime += dtm; frameStats.dynTime += n * e.dt;
         if (endCut && ap <= 0.01) { this.display.phiSt = 0; this.display.phiEx = Math.PI; }
         const imm = ap > 0.01 ? this.immersion(p.z) : null;
@@ -504,6 +505,19 @@ export class Simulator {
         this.collide = b.part;
       }
     }
+  }
+
+  // Run ahead to machine time t [s] as fast as possible (from the start when t is behind):
+  // the full material removal and thermal / wear history, the dynamics thinned out to a few
+  // steps per tooth per substep, no chips. A frame of up to 2 s of machine time per step.
+  seekTo(t) {
+    if (t < this.mtime - 1e-6) this.reset();
+    const speed = this.speed, budget = this.cfg.dynBudget;
+    this.seeking = true; this.speed = 1; this.cfg.dynBudget = 5e4;
+    let guard = 0;
+    while (!this.done && this.mtime < t - 1e-6 && guard++ < 100000) this.step(Math.min(2, t - this.mtime));
+    this.seeking = false; this.speed = speed; this.cfg.dynBudget = budget;
+    this.chips.reset();
   }
 
   nextSeg() {

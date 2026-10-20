@@ -691,8 +691,22 @@ export class View {
     g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
     g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
     this.pathLine = new T.LineSegments(g, new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55 }));
+    g.attributes.color.setUsage(T.DynamicDrawUsage);
+    this.pathBase = Float32Array.from(col); this.pathDone = 0;
     this.pathLine.visible = this.showPath;
     this.scene.add(this.pathLine);
+  }
+
+  // dim the part of the tool path already run (segments before seg), so the rest stands out
+  setPathProgress(seg) {
+    if (!this.pathLine || !this.pathBase) return;
+    const n = this.pathBase.length / 6, k = Math.max(0, Math.min(n, seg - 1));
+    if (k === this.pathDone) return;
+    const C = this.pathLine.geometry.attributes.color, A = C.array, B = this.pathBase;
+    const a = Math.min(k, this.pathDone), b = Math.max(k, this.pathDone);
+    for (let i = a * 6; i < b * 6; i++) A[i] = i < k * 6 ? B[i] * 0.3 : B[i];
+    C.updateRange.offset = a * 6; C.updateRange.count = (b - a) * 6; C.needsUpdate = true;
+    this.pathDone = k;
   }
 
   // ---------- camera ----------
