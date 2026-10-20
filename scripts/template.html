@@ -280,6 +280,8 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="slider"><label for="exag">たわみ表示倍率</label><output id="exagOut">×100</output><input type="range" id="exag" min="1" max="500" step="1" value="100"></div>
           <label class="check"><input type="checkbox" id="showChips" checked> 切粉を表示</label>
           <label class="check"><input type="checkbox" id="showPath" checked> 工具経路を表示</label>
+          <div class="row"><label for="pathColor">工具経路の色</label><select id="pathColor"><option value="kind">送り / 早送り</option><option value="force">最大切削抵抗</option><option value="state">びびり・注意</option></select></div>
+          <p class="hint" id="pathColorHint">加工レポートの行ごとの値で経路を色分けします (計算した行から)。</p>
         </fieldset>
       </div>
       <div class="tabpane" data-pane="prog" hidden>

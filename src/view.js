@@ -737,9 +737,27 @@ export class View {
     g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
     this.pathLine = new T.LineSegments(g, new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55 }));
     g.attributes.color.setUsage(T.DynamicDrawUsage);
-    this.pathBase = Float32Array.from(col); this.pathDone = 0;
+    this.pathBase = Float32Array.from(col); this.pathDone = 0; this.pathPts = path; this.pathDim = 0.3;
     this.pathLine.visible = this.showPath;
     this.scene.add(this.pathLine);
+  }
+
+  // Colour the feed moves by their program line: colourOf(line) → [r, g, b] (sRGB) or null for
+  // the plain feed colour; rapids stay red. null restores the plain colours.
+  colorPath(colourOf) {
+    if (!this.pathLine || !this.pathPts) return;
+    const P = this.pathPts, B = this.pathBase, A = this.pathLine.geometry.attributes.color.array;
+    // a coloured path is read as a whole: the run part is not dimmed
+    this.pathDim = colourOf ? 1 : 0.3;
+    for (let i = 1; i < P.length; i++) {
+      const b = P[i], c = (b.rapid ? [0.85, 0.35, 0.3] : (colourOf && colourOf(b.line)) || [0.25, 0.6, 0.95]).map(toLin), q = (i - 1) * 6;
+      for (let v = 0; v < 2; v++) for (let k = 0; k < 3; k++) {
+        B[q + v * 3 + k] = c[k];
+        A[q + v * 3 + k] = i - 1 < this.pathDone ? c[k] * this.pathDim : c[k];
+      }
+    }
+    const C = this.pathLine.geometry.attributes.color;
+    C.updateRange.offset = 0; C.updateRange.count = -1; C.needsUpdate = true;
   }
 
   // dim the part of the tool path already run (segments before seg), so the rest stands out
@@ -749,7 +767,8 @@ export class View {
     if (k === this.pathDone) return;
     const C = this.pathLine.geometry.attributes.color, A = C.array, B = this.pathBase;
     const a = Math.min(k, this.pathDone), b = Math.max(k, this.pathDone);
-    for (let i = a * 6; i < b * 6; i++) A[i] = i < k * 6 ? B[i] * 0.3 : B[i];
+    const dim = this.pathDim ?? 0.3;
+    for (let i = a * 6; i < b * 6; i++) A[i] = i < k * 6 ? B[i] * dim : B[i];
     C.updateRange.offset = a * 6; C.updateRange.count = (b - a) * 6; C.needsUpdate = true;
     this.pathDone = k;
   }

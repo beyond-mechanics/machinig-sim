@@ -56,7 +56,7 @@ function loadProgram() {
   host.config();
   view.setStock(sim.stock, sim.mat);
   view.setTool(sim.activeTool); viewToolVersion = sim.toolVersion;
-  view.setPath(sim.path);
+  view.setPath(sim.path); pathColorKey = '';
   const w = $('warnings'); w.innerHTML = '';
   const msgs = [...sim.warnings];
   if (stockMode === 'stl' && !stlSpec) msgs.unshift('STL が未選択のため、プログラムの指定で素材を作りました');
@@ -551,6 +551,27 @@ $('nzAz').oninput = nozzleChanged; $('nzH').oninput = nozzleChanged;
 $('exag').oninput = e => { view.exag = +e.target.value; $('exagOut').textContent = `×${e.target.value}`; };
 $('showChips').onchange = e => { view.showChips = e.target.checked; };
 $('showPath').onchange = e => { view.showPath = e.target.checked; };
+// tool path coloured by the machining report: peak force on a blue → red ramp up to the
+// heaviest line, or the line's state (chatter red, needs a look amber, clean green)
+let pathColorKey = '';
+function updatePathColors(force = false) {
+  const mode = $('pathColor').value, rep = mode === 'kind' ? null : currentReport();
+  const key = mode === 'kind' ? 'kind' : `${mode}|${rep ? rep.lines.size : 0}|${reportShown}`;
+  if (!force && key === pathColorKey) return;
+  pathColorKey = key;
+  if (!rep) { view.colorPath(null); return; }
+  if (mode === 'force') {
+    let top = 0; for (const r of rep.lines.values()) if (r.cut > 0) top = Math.max(top, r.F);
+    const ramp = t => [0.2 + 0.75 * t, 0.55 + 0.35 * Math.sin(Math.PI * t) - 0.3 * t, 0.95 - 0.8 * t];
+    view.colorPath(l => { const r = rep.lines.get(l); return r && r.cut > 0 && top > 0 ? ramp(Math.min(1, r.F / top)) : r ? [0.45, 0.5, 0.58] : null; });
+    $('pathColorHint').textContent = `青 → 赤: 行の最大切削抵抗 (0〜${top.toFixed(0)} N)、灰: 空送り。加工レポートの値です。`;
+  } else {
+    const bad = new Map(rep.summary({ stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK }).issues.map(i => [i.line, i.why]));
+    view.colorPath(l => { const r = rep.lines.get(l); if (!r || !(r.cut > 0)) return r ? [0.45, 0.5, 0.58] : null; const w = bad.get(l); return !w ? [0.3, 0.8, 0.45] : w.some(x => BAD.has(x)) ? [0.95, 0.25, 0.2] : [0.98, 0.7, 0.15]; });
+    $('pathColorHint').textContent = '緑: 問題なし、黄: 注意 (振動注意・応力高め・高温・熱亀裂)、赤: びびり・応力超過、灰: 空送り。';
+  }
+}
+$('pathColor').onchange = () => { if ($('pathColor').value === 'kind') $('pathColorHint').textContent = '加工レポートの行ごとの値で経路を色分けします (計算した行から)。'; updatePathColors(true); };
 $('workFlex').onchange = e => { sim.cfg.workpieceFlex = e.target.checked; host.config(true); };
 $('cutNl').onchange = e => { sim.cfg.cuttingNonlinear = e.target.checked; host.config(true); };
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view.setView(b.dataset.view));
@@ -664,7 +685,7 @@ function updateTiles() {
   $('sWr').textContent = tName + (d.lifeMin < Infinity ? `この条件の残り寿命 ${d.lifeMin > 600 ? '10 h 超' : d.lifeMin.toFixed(1) + ' 分'}` : `寿命 VB ${VB_LIMIT * 1000} µm`);
   showDeviation(d.dev);
   showSpeedInfo();
-  updateReport();
+  updateReport(); updatePathColors();
   const cs = sim.chips.stats;
   // share of the chip volume that has left the workpiece (chips still in flight over it are not yet out)
   const evacPct = cs.producedVol > 0 ? Math.min(100, cs.evacVol / cs.producedVol * 100) : 0;
