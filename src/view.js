@@ -74,7 +74,9 @@ export class View {
     const wg = new T.BufferGeometry();
     wg.setAttribute('position', new T.BufferAttribute(new Float32Array(per * 2 * 3), 3).setUsage(T.DynamicDrawUsage));
     const wi = [];
-    for (let s = 0; s < per - 1; s++) { const a = s * 2, b = a + 1, c = a + 2, d = a + 3; wi.push(a, c, b, b, c, d); }
+    // the perimeter runs counter-clockwise seen from above: (a, b, c) faces outwards (the shadow's
+    // normal bias needs the normals out of the stock)
+    for (let s = 0; s < per - 1; s++) { const a = s * 2, b = a + 1, c = a + 2, d = a + 3; wi.push(a, b, c, b, d, c); }
     wg.setIndex(wi);
     this.wallGeo = wg;
     const base = new T.Color(...(mat.surf || mat.chip)).multiplyScalar(0.8).convertSRGBToLinear();
@@ -819,9 +821,10 @@ function sideMaterial(color) {
         float h1(float x) { return fract(sin(x * 91.17) * 43758.5); }
         float n1(float x) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(h1(i), h1(i + 1.0), f); }`)
       .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
-        float ph = vWP.z * 6.0 + 0.3 * n1((vWP.x + vWP.y) * 0.4);
+        float ph = (vWP.z * 6.0 + 0.3 * n1((vWP.x + vWP.y) * 0.4)) * 3.0;
+        // fade by the frequency actually drawn: finer than a few pixels it aliases into moire
         float fw = fwidth(ph), amp = smoothstep(0.5, 0.15, fw);
-        float mark = n1(ph * 3.0) * amp;
+        float mark = n1(ph) * amp;
         diffuseColor.rgb *= 0.88 + 0.12 * mark + 0.05 * n1((vWP.x + vWP.y) * 0.07 + vWP.z * 0.2);
         roughnessFactor += 0.12 * (mark - 0.5);`);
   };
