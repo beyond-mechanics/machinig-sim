@@ -1,7 +1,8 @@
 // G-code parser and path discretizer for 3-axis milling (Fanuc-style dialect).
 // Supported: G0 G1 G2 G3 (I/J/K or R, helical) in G17/G18/G19, G20 G21 G90 G91 G94 G95,
 // canned cycles G73 G81-G89 with G98/G99 and K/L repeats, G28/G53 (to the home height),
-// tool changes (T.. M6) with tool definitions read from comments, F S M3 M4 M5 M30.
+// tool changes (T.. M6) with tool definitions read from comments, F S M3 M4 M5 M30, subprograms
+// (O-number labels, M98 P… L… / P<times><number>, M99 return).
 // Work coordinate systems G54-G59 and G54.1 P1-P48: each move records its system (mv.wcs);
 // opts.wcs gives every system's zero in a common frame, so a change of system re-expresses the
 // current position (incremental moves stay right). G52 shifts the local zero of the system.
@@ -72,7 +73,13 @@ export function parseGcode(text, opts = {}) {
     moves.push(mv);
     st.x = to.x; st.y = to.y; st.z = to.z;
   };
+  // subprograms (Fanuc): O-number labels, M98 P… L… calls them, M99 returns
+  const labels = new Map();
+  lines.forEach((l, i) => { const m = l.replace(/\([^)]*\)/g, '').trim().toUpperCase().match(/^[O:]\s*0*(\d+)/); if (m && !labels.has(+m[1])) labels.set(+m[1], i); });
+  const calls = [];
+  let executed = 0;
   for (let ln = 0; ln < lines.length; ln++) {
+    if (++executed > 2e6) { warn(ln, 'サブプログラムの呼び出しが多すぎるため打ち切り'); break; }
     const raw = lines[ln];
     for (const cm of raw.matchAll(/\(([^)]*)\)/g)) {
       const body = cm[1];
@@ -88,7 +95,7 @@ export function parseGcode(text, opts = {}) {
     const words = [...line.matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)].map(m => [m[1], parseFloat(m[2]), m[2]]);
     if (!words.length) continue;
     const w = {};
-    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false;
+    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false, sub = null;
     for (const [k, v, s] of words) {
       if (k === 'G') {
         if ([0, 1, 2, 3].includes(v)) { st.motion = v; hasMotionWord = true; st.cycle = null; }
@@ -120,7 +127,8 @@ export function parseGcode(text, opts = {}) {
         if (v === 3 || v === 4) st.spindle = true;
         else if (v === 5) st.spindle = false;
         else if (v === 6) m6 = true;
-        else if (v === 98 || v === 99) warn(ln, 'サブプログラム呼び出し(M98/M99)は未対応');
+        else if (v === 98) sub = 'call';
+        else if (v === 99) sub = 'return';
         else if (v === 30 || v === 2) end = true;
       } else if (k === 'T') st.pendingT = v;
       else {
@@ -180,6 +188,19 @@ export function parseGcode(text, opts = {}) {
     }
     st.F = F0;
     if (end) break;
+    if (sub === 'call') {
+      // M98 P<program> L<times>, or the packed P<times><program 4 digits> of later controls
+      let P = w.P, L = w.L ?? 1;
+      if (P !== undefined && w.L === undefined && P >= 10000) { L = Math.floor(P / 10000); P %= 10000; }
+      const at = P === undefined ? undefined : labels.get(Math.round(P));
+      if (at === undefined) warn(ln, `サブプログラム O${P ?? '?'} が見つかりません (この呼び出しは無視)`);
+      else if (calls.length >= 8) warn(ln, 'サブプログラムの入れ子が深すぎます (8 段まで)');
+      else if (L >= 1) { calls.push({ ret: ln, left: Math.round(L) - 1, start: at }); ln = at; }
+    } else if (sub === 'return') {
+      const c = calls[calls.length - 1];
+      if (!c) break; // M99 in the main program: the end (its loop back to the start is not run)
+      if (c.left > 0) { c.left--; ln = c.start; } else { calls.pop(); ln = c.ret; }
+    }
   }
   if (noDecimal) warnings.push('小数点のない座標値を mm として扱いました (最小設定単位 0.001 mm の機械では値が1000倍になります)');
   const unset = [...meta.workOffsets].filter(n => n !== 'G54' && !W[n]);
