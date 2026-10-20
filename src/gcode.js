@@ -102,11 +102,17 @@ export function parseGcode(text, opts = {}) {
   };
   // change the transformation keeping the tool where it is
   const retransform = change => { const at = fwd(st); change(); xf.on = !!xf.rot || Object.keys(xf.mir).length > 0; Object.assign(st, inv(at)); };
+  // the zero (or the local shift) moved by d in the machine frame: the tool stays where it is,
+  // so its program position moves by −d through the transformation
+  const keepPut = d => {
+    if (!xf.on) { st.x -= d.x; st.y -= d.y; st.z -= d.z; return; }
+    const at = fwd(st); Object.assign(st, inv({ x: at.x - d.x, y: at.y - d.y, z: at.z - d.z }));
+  };
   const push = (ln, to, rapid, extra) => {
     const from = { x: st.x, y: st.y, z: st.z };
     if (to.x === from.x && to.y === from.y && to.z === from.z && !extra?.arc) return;
     const mv = { rapid, from: xf.on ? fwd(from) : from, to: xf.on ? fwd(to) : { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, wcs: st.wcs, local: st.local, ...extra };
-    if (meta.g10) mv.zero = zeroOf(st.wcs);
+    mv.zero = zeroOf(st.wcs);
     if (xf.on) {
       // a mirror in an odd number of the arc's axes turns its direction (and the compensation side)
       const flips = ax => ax.filter(k => xf.mir[k] !== undefined).length % 2 === 1;
@@ -246,7 +252,8 @@ export function parseGcode(text, opts = {}) {
     }
     if (xfCmd) {
       // G68 X Y R (centre, angle; G91: R added to the angle in effect) / G69, G51.1 X Y Z (mirror
-      // about these positions) / G50.1 X Y Z (cancel those axes; no axis: all). No motion here.
+      // about these positions) / G50.1 X Y Z (cancel those axes; no axis: all). Their X Y Z R are
+      // data; the rest of the block (G54…, F, M98, and the motion of a G69 block) goes on.
       const u0 = st.unit, val = k => (st.abs ? w[k] * u0 : st[k.toLowerCase()] + w[k] * u0);
       if (xfCmd === 'rot') {
         if (st.plane !== 17) warn(ln, '座標回転 G68 は G17 平面のみ対応 (この行は無視)');
@@ -256,9 +263,12 @@ export function parseGcode(text, opts = {}) {
         });
         meta.transform = true;
       } else if (xfCmd === 'unrot') retransform(() => { xf.rot = null; });
-      else if (xfCmd === 'mir') { retransform(() => { for (const k of 'XYZ') if (w[k] !== undefined) xf.mir[k.toLowerCase()] = val(k); }); meta.transform = true; }
+      else if (xfCmd === 'mir') {
+        if (xf.rot) warn(ln, 'G68 の中で指令した G51.1: ミラーを回転の外側 (機械側) として扱います (中心も機械側の座標)');
+        retransform(() => { for (const k of 'XYZ') if (w[k] !== undefined) xf.mir[k.toLowerCase()] = val(k); }); meta.transform = true;
+      }
       else retransform(() => { const ks = [...'XYZ'].filter(k => w[k] !== undefined); for (const k of ks.length ? ks : ['X', 'Y', 'Z']) delete xf.mir[k.toLowerCase()]; });
-      continue;
+      if (xfCmd !== 'unrot') { delete w.X; delete w.Y; delete w.Z; delete w.R; }
     }
     if (g10) {
       // G10 L2 P1–6 (G54–G59) / L20 P n (G54.1 P n) X Y Z: write a work offset; G91 adds to it.
@@ -277,7 +287,7 @@ export function parseGcode(text, opts = {}) {
         meta.g10 = true;
         // the tool stays where it is when its own system moves
         const after = zeroOf(st.wcs);
-        st.x += before.x - after.x; st.y += before.y - after.y; st.z += before.z - after.z;
+        keepPut({ x: after.x - before.x, y: after.y - before.y, z: after.z - before.z });
       }
       continue;
     }
@@ -287,7 +297,7 @@ export function parseGcode(text, opts = {}) {
       if (newWcs !== st.wcs) {
         // the tool stays where it is: express its position in the new system
         const a = zeroOf(st.wcs), b = zeroOf(newWcs);
-        st.x += a.x - b.x; st.y += a.y - b.y; st.z += a.z - b.z;
+        keepPut({ x: b.x - a.x, y: b.y - a.y, z: b.z - a.z });
         st.wcs = newWcs;
       }
       meta.workOffsets.add(newWcs);
@@ -295,7 +305,7 @@ export function parseGcode(text, opts = {}) {
     if (local) {
       // G52: local zero inside the current system (absolute shift; G52 X0 Y0 Z0 cancels)
       const u0 = st.unit, nl = { x: w.X !== undefined ? w.X * u0 : st.local.x, y: w.Y !== undefined ? w.Y * u0 : st.local.y, z: w.Z !== undefined ? w.Z * u0 : st.local.z };
-      st.x -= nl.x - st.local.x; st.y -= nl.y - st.local.y; st.z -= nl.z - st.local.z;
+      keepPut({ x: nl.x - st.local.x, y: nl.y - st.local.y, z: nl.z - st.local.z });
       st.local = nl;
       delete w.X; delete w.Y; delete w.Z;
       meta.localShift = true;

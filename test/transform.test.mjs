@@ -29,4 +29,17 @@ const r3 = p => [p.x, p.y, p.z].map(v => Math.round(v * 1000) / 1000 + 0);
   const g = parseGcode('G21 G90 G17\nS6000 M3\nG0 X10 Y5 Z5\nG68 X0 Y0 R30\nG91 G1 Z-1 F100');
   assert.deepEqual(r3(g.moves[1].from), [10, 5, 5]); assert.deepEqual(r3(g.moves[1].to), [10, 5, 4]);
 }
+// the rest of a transformation block still runs (G69 with motion, G55 and M98 with G68), and a
+// change of system or G52 under rotation keeps the tool where it is
+{
+  let g = parseGcode('G21 G90 G17\nS6000 M3\nG0 X0 Y0 Z5\nG68 X0 Y0 R90\nG69 G0 X50 Y50');
+  assert.deepEqual(r3(g.moves[g.moves.length - 1].to), [50, 50, 5]);
+  g = parseGcode('G21 G90 G17\nS6000 M3\nG0 X0 Y0 Z5\nG55 G68 X0 Y0 R30\nG0 X1', { wcs: { G55: { x: 100, y: 0, z: 0 } } });
+  assert.deepEqual(g.meta.workOffsets, ['G55']);
+  g = parseGcode('G21 G90 G17\nS6000 M3\nG0 X0 Y0 Z5\nG68 X0 Y0 R90 M98 P100\nM30\nO100\nG0 X10\nM99');
+  assert.deepEqual(r3(g.moves[1].to), [0, 10, 5]);
+  g = parseGcode('G21 G90 G17\nS6000 M3\nG68 X0 Y0 R90\nG0 X10 Y0 Z5\nG52 X5\nG91 G1 X1 F100');
+  const m = g.moves[g.moves.length - 1], at = p => r3({ x: p.x + m.local.x, y: p.y + m.local.y, z: p.z });
+  assert.deepEqual(at(m.from), [0, 10, 5]); assert.deepEqual(at(m.to), [0, 11, 5]);
+}
 console.log('transform tests passed');

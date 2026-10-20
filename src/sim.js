@@ -490,22 +490,27 @@ export class Simulator {
   deviationSummary(tol = this.cfg.tol ?? 0.05) {
     const s = this.stock, T = this.targetH;
     if (!s.devIdeal) return null;
-    const res = { ideal: { left: 0, gouge: 0, kLeft: -1, kGouge: -1 }, target: T ? { left: 0, gouge: 0, kLeft: -1, kGouge: -1, n: 0, inTol: 0 } : null };
+    const res = { speckles: 0, ideal: { left: 0, gouge: 0, kLeft: -1, kGouge: -1 }, target: T ? { left: 0, gouge: 0, kLeft: -1, kGouge: -1, n: 0, inTol: 0 } : null };
     const top = s.zTop - 1e-3;
     // a lone cell off by more than the tolerance with no neighbour off the same way is a
     // heightfield speckle, not a shape error: a node a hair inside the commanded cutter edge that
     // the (µm-deflected) tool just missed and that a later move, a retract for one, cut at another
     // height. The sliver is µm wide; on the grid it would read as a whole column.
-    const D = s.devIdeal, nx = s.nx, ny = s.ny;
+    // Only at the edge of the commanded cut (a neighbour the commanded cut left higher) is a cell
+    // dropped this way; a lone error in the middle of a floor is real and stays.
+    const D = s.devIdeal, nx = s.nx, ny = s.ny, IH = this.ideal.H;
     const lone = k => {
       const v = D[k];
       if (Math.abs(v) <= tol) return false;
+      let edge = false;
       const i = k % nx, j = (k - i) / nx;
       for (let b = Math.max(0, j - 1); b <= Math.min(ny - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(nx - 1, i + 1); a++) {
         const w = D[b * nx + a];
         if ((a !== i || b !== j) && Math.sign(w) === Math.sign(v) && Math.abs(w) > tol) return false;
+        if (IH[b * nx + a] - IH[k] > 0.5 * Math.abs(v)) edge = true;
       }
-      return true;
+      if (edge) res.speckles++;
+      return edge;
     };
     for (let k = 0; k < s.H.length; k++) {
       const machined = s.H[k] < top || Number.isFinite(s.wallD[k]);

@@ -83,3 +83,10 @@ console.log('G10 offsets ok');
   assert.equal(sim.warnings.length, 0, sim.warnings.join(' / '));
 }
 console.log('origin fit with G10 ok');
+
+// moves before the first G10 keep the offsets they were made with (not the final G10 values)
+{
+  const g = parseGcode('G21 G90\nG55 G0 X10 Y0 Z5\nG10 L2 P1 X0 Y0 Z0\nG10 L2 P2 X50 Y0 Z0\nG0 X10', { wcs: { G54: { x: 0, y: 0, z: 0 }, G55: { x: 100, y: 0, z: 0 } } });
+  assert.equal(g.moves[0].zero.x, 100); assert.equal(g.moves[g.moves.length - 1].zero.x, 50);
+}
+console.log('G10 timing ok');
