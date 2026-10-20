@@ -144,6 +144,8 @@ $('sample').onchange = e => {
   const sm = SAMPLES[e.target.value];
   $('gcInfo').textContent = sm.name;
   $('code').value = sm.code;
+  // a sample written for a material selects it
+  if (sm.material && sm.material !== sim.cfg.material) { $('material').value = sm.material; $('material').onchange({ target: $('material') }); }
   // a sample brings its own work offsets (or none)
   for (const k of Object.keys(wcsDelta)) delete wcsDelta[k];
   Object.assign(wcsDelta, JSON.parse(JSON.stringify(sm.wcsDelta || {})));

@@ -330,6 +330,29 @@ M30
       return { tris, count: tris.length / 9, min: [0, 0, -5], max: [60, 60, 0], name: '角ボス (組み込み)' };
     },
   },
+  troch: {
+    name: '鋼のトロコイド加工と通常の溝 (S50C)',
+    material: 'S50C',
+    // a full-width slot and a trochoidal slot side by side: the trochoid cuts 3x deeper with a
+    // short contact per revolution (cooler edge, chip thinning lets the feed per tooth rise)
+    code: (() => {
+      const L = ['(STOCK 100 70 25)', '(TOOL T1 D10 N3 FLAT L25 SO35)',
+        '(上: 通常の溝 φ10 全幅・ap 3 mm・4770 min-1・fz 0.04)',
+        '(下: トロコイド 幅 14 mm・ap 9 mm・ステップ 0.8 mm・3000 min-1・fz 0.07)',
+        '(被削材は S50C。溝はびびり、トロコイドは 3 倍の深さでも低速のプロセスダンピングで安定)',
+        '(加工レポート・時間領域の安定限界・経路の色分けで比べてください)',
+        'G21 G90 G17', 'T1 M6', 'S4770 M3',
+        'G0 X-8 Y50 Z5', 'G1 Z-3 F300', 'G1 X108 F572', 'G0 Z5',
+        'S3000', 'G0 X-8 Y20 Z5', 'G1 Z-9 F300', 'F630'];
+      const r = 2;
+      for (let x = -6; x <= 106; x += 0.8) for (let a = 0; a < 360; a += 20) {
+        const t = a * Math.PI / 180, px = x + 0.8 * a / 360 + r * Math.sin(t), py = 20 - r * Math.cos(t);
+        L.push(`G1 X${px.toFixed(3)} Y${py.toFixed(3)}`);
+      }
+      L.push('G0 Z5', 'M30');
+      return L.join('\n');
+    })(),
+  },
   twin: {
     name: 'ワーク座標系: 2個取り (G54 と G55)',
     // G55 sits 60 mm to the right of G54 (as a setup sheet would give it)
