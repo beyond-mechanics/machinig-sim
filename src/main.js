@@ -17,7 +17,7 @@ import { VB_LIMIT, T0, SWING_CRACK } from './thermal.js';
 import { LineReport } from './report.js';
 import { JC, predictCoefs } from './oxley.js';
 import { identify, parseTests, unitForces, COEF_KEYS } from './identify.js';
-import { optimizeFeeds, rewriteFeeds, defaultTarget } from './feedopt.js';
+import { optimizeFeeds, rewriteFeeds, defaultTarget, optimizeSpindle, rewriteSpindle } from './feedopt.js';
 import { adviceFor } from './advice.js';
 import { startConditions, arcOf } from './conditions.js';
 import { timeDomainLimit } from './stabtd.js';
@@ -981,6 +981,27 @@ $('foRun').onclick = () => {
   $('foOut').innerHTML = `<p class="hint">目標 ${target.toFixed(0)} N で、送りを上げる行 ${up}・下げる行 ${down}。加工時間の見込み ${opt.time0.toFixed(1)} s → <b>${opt.time1.toFixed(1)} s</b> (${dt <= 0 ? '' : '+'}${(dt / Math.max(opt.time0, 1e-9) * 100).toFixed(0)} %)。読み込んで計算し直すと、実際の切削抵抗と時間を確かめられます。</p>` +
     (changed.length ? `<div class="rtable-wrap"><table class="rtable" aria-label="送りを変える行"><thead><tr><th>行</th><th>Gコード</th><th class="n">送り</th><th class="n">最大切削抵抗 N</th><th>備考</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="hint">変える行はありません。</p>');
   $('foLoad').disabled = $('foSave').disabled = !changed.length;
+};
+$('soRun').onclick = () => {
+  const rep = currentReport();
+  foText = null; $('foLoad').disabled = $('foSave').disabled = true;
+  if (!rep || !rep.lines.size || !sim.done) { $('foOut').innerHTML = '<p class="hint">プログラムを最後まで計算してから最適化してください。</p>'; return; }
+  const ov = sim.cfg.spindleOverride ?? 1, lines = [];
+  for (const r of rep.lines.values()) {
+    if (!(r.cut > 0) || !(r.ap > 0.01) || !(r.pex > r.pst)) continue;
+    const pt = sim.path.find(p => p.line === r.line && !p.rapid); if (!pt) continue;
+    const lob = sim.lobes(r.pst, r.pex);
+    lines.push({ line: r.line, ap: r.ap, S: pt.S * ov, lim: S => alimAt(lob, S) });
+  }
+  if (!lines.length) { $('foOut').innerHTML = '<p class="hint">切削した行がありません。</p>'; return; }
+  const o = optimizeSpindle(lines, { qMin: 0.7, qMax: 1.3 });
+  const S0 = lines[0].S, worstLine = q => lines.reduce((a, l) => { const v = l.ap / l.lim(q * l.S); return v > a.v ? { v, l } : a; }, { v: 0, l: null });
+  const w0 = worstLine(1), w1 = worstLine(o.q);
+  const ratio = v => (v < Infinity ? v.toFixed(2) : '—');
+  if (Math.abs(o.q - 1) < 0.005) { $('foOut').innerHTML = `<p class="hint">今の回転数が一番安定です (最も厳しい行 ${w0.l?.line} 行: 切込み ÷ 限界 ${ratio(w0.v)})。</p>`; return; }
+  foText = rewriteSpindle(codeLines.join('\n'), o.q);
+  $('foOut').innerHTML = `<p class="hint">回転数を <b>×${o.q.toFixed(3)}</b> (例: S${Math.round(S0)} → S${Math.round(S0 * o.q)}) に、送りも同じ比で。最も厳しい行の「切込み ÷ 安定限界」: ${ratio(w0.v)} (${w0.l?.line} 行) → <b>${ratio(w1.v)}</b> (${w1.l?.line} 行)。${o.worst < 1 ? 'すべての行が線図の上で安定になります。' : '1 を超える行が残ります (切込みも見直してください)。'}加工時間は ${o.q > 1 ? '短く' : '長く'}なります (×${(1 / o.q).toFixed(2)})。読み込んで計算し直すと確かめられます。</p>`;
+  $('foLoad').disabled = $('foSave').disabled = false;
 };
 $('foLoad').onclick = () => {
   if (!foText) return;

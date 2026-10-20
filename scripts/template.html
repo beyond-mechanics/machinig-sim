@@ -426,13 +426,14 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
       </table></div>
       <div class="rfoot"><p class="hint" id="rHint">行をクリックするとプログラムタブのその行へ、▶ でその行の加工から再生します。</p><span><button id="rBase">この結果を比較の基準にする</button> <button id="rSheet">段取りシートを保存</button> <button id="rCsv">全行を CSV で保存</button></span></div>
       <div class="fopt" id="foBox">
-        <h3>送り最適化</h3>
-        <p class="hint">行ごとに、最大切削抵抗が目標になる送りを求めて F を書き換えます。軽い切削は速く、重すぎる切削は遅くなります。びびった行は送りを上げません。工具応力は許容の 8 割までに抑えます。目標を空けると、びびらずに削れた行の最大切削抵抗を目標にします (今のプログラムで実績のある負荷まで)。プログラムを最後まで計算してから使ってください (End キーで最後まで進みます)。</p>
+        <h3>送り・回転数の最適化</h3>
+        <p class="hint">行ごとに、最大切削抵抗が目標になる送りを求めて F を書き換えます。軽い切削は速く、重すぎる切削は遅くなります。びびった行は送りを上げません。工具応力は許容の 8 割までに抑えます。目標を空けると、びびらずに削れた行の最大切削抵抗を目標にします (今のプログラムで実績のある負荷まで)。回転数の最適化は、各行の係合の安定限界線図から、すべての行の「切込み ÷ 安定限界」の最大値が一番小さくなる回転数の倍率 (×0.7〜1.3) を選び、S と F を同じ比で書き換えます (1 刃送りはそのまま)。プログラムを最後まで計算してから使ってください (End キーで最後まで進みます)。</p>
         <div class="forow">
           <label>目標の切削抵抗 <span class="unit">N</span><input type="number" id="foTarget" min="1" step="10" placeholder="自動"></label>
           <label>送りの上限 <select id="foUp"><option value="1.25">×1.25</option><option value="1.5" selected>×1.5</option><option value="2">×2</option><option value="3">×3</option></select></label>
           <label>送りの下限 <select id="foDown"><option value="0.5" selected>×0.5</option><option value="0.7">×0.7</option><option value="1">下げない</option></select></label>
-          <button id="foRun">最適化する</button>
+          <button id="foRun">送りを最適化する</button>
+          <button id="soRun">回転数を最適化 (びびり回避)</button>
         </div>
         <div id="foOut" aria-live="polite"></div>
         <div class="forow"><button id="foLoad" disabled>最適化したプログラムを読み込む</button><button id="foSave" disabled>保存 (.nc)</button></div>

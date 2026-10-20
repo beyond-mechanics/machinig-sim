@@ -59,9 +59,36 @@ import { MATERIALS } from '../src/materials.js';
   assert.ok(Math.abs(s1.time - opt.time1) < 0.05 * s0.time, 'time as predicted');
   assert.ok(peak(b.report) < 1.15 * target, 'no line much above the target');
 }
-console.log('feedopt tests passed');
 // F words with a trailing decimal point (F150.) and a leading one (F.5) keep a valid number
 {
   const out = rewriteFeeds('G1 X10 F100.\nG1 X20', new Set([1, 2]), new Map([[1, 1.255], [2, 1.255]])).split('\n');
   assert.deepEqual(out, ['G1 X10 F125.5', 'G1 X20']);
 }
+// spindle speed: one factor for the program that moves the worst line into a pocket
+{
+  const { optimizeSpindle, rewriteSpindle } = await import('../src/feedopt.js');
+  // a lobe with a pocket at 9500 (limit 3 mm) and 0.8 mm elsewhere
+  const lim = S => (Math.abs(S - 9500) < 400 ? 3 : 0.8);
+  const r = optimizeSpindle([{ ap: 1.5, S: 8000, lim }, { ap: 0.5, S: 8000, lim }]);
+  assert.ok(r.worst0 > 1 && r.worst < 1 && Math.abs(r.q * 8000 - 9500) < 400, JSON.stringify(r));
+  assert.equal(rewriteSpindle('S8000 M3 (S is spindle)\nG1 X10 F800.', 1.2), 'S9600 M3 (S is spindle)\nG1 X10 F960');
+  assert.equal(rewriteSpindle('G95 S8000\nG1 X10 F0.1', 1.2), 'G95 S9600\nG1 X10 F0.1', 'per-revolution feed stays');
+}
+// round trip on the demo: the lobes of each line's engagement pick a speed, and the program run
+// again at that speed chatters (much) less
+{
+  const { optimizeSpindle, rewriteSpindle } = await import('../src/feedopt.js');
+  const { alimAt } = await import('../src/sld.js');
+  const run = code => { const s = new Simulator(); s.load(code); s.speed = 20; let n = 0; while (!s.done && n++ < 20000) s.step(1 / 60); return s; };
+  const a = run(SAMPLES.demo.code), lines = [];
+  for (const r of a.report.lines.values()) {
+    if (!(r.cut > 0) || !(r.ap > 0.01)) continue;
+    const pt = a.path.find(p => p.line === r.line && !p.rapid), lob = a.lobes(r.pst, r.pex);
+    lines.push({ ap: r.ap, S: pt.S, lim: S => alimAt(lob, S) });
+  }
+  const o = optimizeSpindle(lines, { qMin: 0.7, qMax: 1.3 });
+  const b = run(rewriteSpindle(SAMPLES.demo.code, o.q)), s0 = a.report.summary(), s1 = b.report.summary();
+  console.log(`spindle ×${o.q} (worst ap/limit ${o.worst0.toFixed(2)} → ${o.worst.toFixed(2)}): chatter ${(s0.chatterShare * 100).toFixed(0)} % → ${(s1.chatterShare * 100).toFixed(0)} %, time ${s0.time.toFixed(1)} → ${s1.time.toFixed(1)} s`);
+  assert.ok(o.worst < o.worst0 && s1.chatterShare < 0.5 * s0.chatterShare);
+}
+console.log('feedopt tests passed');

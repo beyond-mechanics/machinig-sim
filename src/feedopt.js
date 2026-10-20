@@ -93,3 +93,31 @@ export function rewriteFeeds(text, feedLines, factor) {
   });
   return out.join('\n');
 }
+
+// Spindle speed against chatter: one speed factor q for the whole program, chosen so that the
+// worst line, max over lines of ap / a_lim(q·S_line) for its engagement, is as small as possible
+// (a stable pocket shared by the lines that matter). lines: [{ap, S, lim(S) → a_lim}],
+// q in [qMin, qMax], speeds capped at sMax. Returns { q, worst0, worst } (worst < 1: all stable).
+export function optimizeSpindle(lines, { qMin = 0.75, qMax = 1.25, sMax = 30000, sMin = 2000, step = 0.005 } = {}) {
+  const worst = q => {
+    let w = 0;
+    for (const l of lines) { const S = q * l.S; if (S > sMax || S < sMin) return Infinity; const a = l.lim(S); w = Math.max(w, a > 0 ? l.ap / a : Infinity); }
+    return w;
+  };
+  const w0 = worst(1);
+  let best = 1, bw = w0;
+  for (let q = qMin; q <= qMax + 1e-9; q += step) { const w = worst(q); if (w < bw - 1e-9) { bw = w; best = q; } }
+  return { q: Math.round(best * 1000) / 1000, worst0: w0, worst: bw };
+}
+
+// S words scaled by q, and the F words by the same q so the feed per tooth stays (not under G95,
+// where F is already per revolution): returns text
+export function rewriteSpindle(text, q) {
+  let perRev = false;
+  return text.split('\n').map(line => {
+    const c = line.search(/[;(]/), code = c >= 0 ? line.slice(0, c) : line, rest = c >= 0 ? line.slice(c) : '';
+    const g = code.match(/G\s*0*9([45])(?!\d)/i);
+    if (g) perRev = g[1] === '5';
+    return code.replace(/([SF])\s*([-+]?(?:\d+\.?\d*|\.\d+))/gi, (m, w, v) => (w.toUpperCase() === 'S' ? `${w}${Math.round(+v * q)}` : perRev ? m : `${w}${fmt(+v * q)}`)) + rest;
+  }).join('\n');
+}
