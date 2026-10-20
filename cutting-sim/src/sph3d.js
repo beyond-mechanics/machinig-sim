@@ -205,9 +205,12 @@ export class Cutting3D {
       const sx = c.motion === 'mill' ? c.fz * 1e-3 : 0, sz = c.motion === 'drill' ? 0.5 * c.fr * 1e-3 : 0;
       inCavity = (x, y, z) => { const k = Math.floor((z - sz - tb0[2]) / ez); return k >= 0 && k < nb && env[k] > 0 && Math.hypot(x + sx - this.ax, y - this.ay) < env[k] + 0.5 * dx; };
     }
+    // Supports: the bottom three layers, except where the tool will pass (a side mill through the
+    // whole thickness, a tool that runs along the bottom), which must stay free to be cut.
+    const swept = this.sweptBy(tb0, dx);
     for (let i = 0; i < fill.length; i += 3) {
       if (inCavity(fill[i], fill[i + 1], fill[i + 2])) { cavity++; continue; }
-      pts.push(fill[i], fill[i + 1], fill[i + 2], fill[i + 2] < wb[2] + 3 * dx ? 1 : 0);
+      pts.push(fill[i], fill[i + 1], fill[i + 2], fill[i + 2] < wb[2] + 3 * dx && !swept(fill[i], fill[i + 1], fill[i + 2]) ? 1 : 0);
     }
     this.cavity = cavity;
     this.L = wb[3] - wb[0]; this.H = wb[5] - wb[2]; this.bz = wb[4] - wb[1]; this.wb = wb;
@@ -222,6 +225,53 @@ export class Cutting3D {
     this.touched = new Uint8Array(pts.length / 4);
     this.Lz = 1;
     return pts;
+  }
+  // Whether a point lies in the region the tool sweeps during the run (with a 3-spacing margin).
+  // Straight tool: its shadow on the (y, z) plane, from its own x range to that range + travel.
+  // Spinning tool: inside the radial envelope about the axis, along the feed path.
+  sweptBy(tb, dx) {
+    const c = this.cfg, t = c.toolTris, m = 3 * dx;
+    if (c.motion === 'linear') {
+      const ny = Math.ceil((tb[4] - tb[1]) / dx) + 1, nz = Math.ceil((tb[5] - tb[2]) / dx) + 1;
+      const lo = new Float64Array(ny * nz).fill(Infinity), hi = new Float64Array(ny * nz).fill(-Infinity);
+      for (let i = 0; i < t.length; i += 9) {
+        const L = Math.max(Math.hypot(t[i + 4] - t[i + 1], t[i + 5] - t[i + 2]), Math.hypot(t[i + 7] - t[i + 1], t[i + 8] - t[i + 2]), Math.hypot(t[i + 7] - t[i + 4], t[i + 8] - t[i + 5]));
+        const n = Math.min(400, Math.max(1, Math.ceil(L / (0.5 * dx))));
+        for (let a = 0; a <= n; a++) for (let b = 0; a + b <= n; b++) {
+          const u = a / n, v = b / n, w = 1 - u - v;
+          const px = w * t[i] + u * t[i + 3] + v * t[i + 6], py = w * t[i + 1] + u * t[i + 4] + v * t[i + 7], pz = w * t[i + 2] + u * t[i + 5] + v * t[i + 8];
+          const k = Math.round((py - tb[1]) / dx) + ny * Math.round((pz - tb[2]) / dx);
+          if (px < lo[k]) lo[k] = px; if (px > hi[k]) hi[k] = px;
+        }
+      }
+      const r = 3, travel = c.travel * 1e-3;
+      return (x, y, z) => {
+        const j0 = Math.round((y - tb[1]) / dx), k0 = Math.round((z - tb[2]) / dx);
+        for (let k = k0 - r; k <= k0 + r; k++) for (let j = j0 - r; j <= j0 + r; j++) {
+          if (j < 0 || j >= ny || k < 0 || k >= nz) continue;
+          const q = j + ny * k;
+          if (x > lo[q] - m && x < hi[q] + travel + m) return true;
+        }
+        return false;
+      };
+    }
+    const ez = 0.5 * dx, nb = Math.ceil((tb[5] - tb[2]) / ez) + 1, env = radialEnvelope(t, this.ax, this.ay, tb[2], ez, nb);
+    let emax = 0;
+    for (const e of env) emax = Math.max(emax, e);
+    const turns = c.angle / 360;
+    if (c.motion === 'drill') {
+      const drop = c.fr * 1e-3 * turns;
+      return (x, y, z) => z > tb[2] - drop - m && Math.hypot(x - this.ax, y - this.ay) < emax + m;
+    }
+    const feed = c.fz * 1e-3 * c.z * turns;
+    return (x, y, z) => {
+      const k = Math.floor((z - tb[2]) / ez);
+      let e = -1;
+      for (let q = k - 6; q <= k + 6; q++) if (q >= 0 && q < nb) e = Math.max(e, env[q]);
+      if (e < 0) return false;
+      const dxp = x - this.ax, px = dxp < 0 ? dxp : dxp > feed ? dxp - feed : 0;
+      return Math.hypot(px, y - this.ay) < e + m;
+    };
   }
   pose(time) {
     if (this.meshMode) {
@@ -899,7 +949,11 @@ export class Cutting3D {
       t: this.t, steps: this.steps, N: this.N, dx: this.dx * 1e6, ms: this.ms, done: this.done, kcRef: this.mat.kcRef });
     if (this.meshMode) {
       const amax = (a) => a.reduce((v, x) => (x != null && Math.abs(x) > Math.abs(v) ? x : v), 0);
-      const mz = avg(hs.mz || []);
+      // Means over the samples where the tool is cutting (|F| above a tenth of its peak): a tooth
+      // is in the work for only part of a turn, and a straight cut takes a while to load up.
+      const mag = hs.fc.map((v, i) => Math.hypot(v, hs.ft[i], hs.fr[i])), pk = Math.max(0, ...mag);
+      const on = mag.map((v) => pk > 0 && v >= 0.1 * pk), mean = (a) => { let s = 0, n = 0; for (let i = 0; i < a.length; i++) if (on[i]) { s += a[i]; n++; } return n ? s / n : 0; };
+      const avg = mean, mz = mean(hs.mz || []);
       return {
         ...frac, toolT: null, toolSteadyT: null, mode: 'mesh', fx: avg(hs.fc), fy: avg(hs.ft), fz: avg(hs.fr), fxMax: amax(hs.fc), fyMax: amax(hs.ft), fzMax: amax(hs.fr),
         torque: mz, torqueMax: amax(hs.mz || []), power: mz * this.om, rpm: this.om * 60 / (2 * PI), vf: this.vf * 6e4, Rt: this.Rt * 1e3, motion: c.motion,

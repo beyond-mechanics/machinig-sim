@@ -26,10 +26,13 @@ const planeTool = () => {
   return prism(poly, -0.2, 0.6, (px, pz, y) => [px - 0.05, y, pz - 0.1]);
 };
 
-// 2. Side milling: work 2.0 × 0.5 × 0.3 mm (x, y, z ∈ [−0.3, 0]); a φ2 two-flute end mill with 30°
+// 2. Side milling: work 1.4 × 0.25 × 0.15 mm (x ∈ [0.3, 1.7], z ∈ [−0.15, 0]); a φ2 two-flute end mill with 30°
 // helix, axis vertical at (1.0, −0.8): radial depth ae = 0.2 mm into the y = 0 face. Turning
 // clockwise seen from above (M03, right-hand cutter), feeding +x: up milling on this side.
-const millWork = () => box(0, 0, -0.3, 2.0, 0.5, 0);
+const millWork = () => box(0.3, 0, -0.15, 1.7, 0.25, 0);
+// The cutter is turned 70° ahead (clockwise) so that a tooth enters the work a few degrees after
+// the start instead of after a quarter turn.
+const PRE = -70 * Math.PI / 180;
 const millTool = () => {
   const R = 1.0, Rc = 0.62, beta = 30 * Math.PI / 180, z0 = -0.45, z1 = 0.15, nz = 24, nt = 180;
   // Cross-section r(θ) for a CW tool: each tooth tip leads at θ_k and its flank relief trails
@@ -43,7 +46,7 @@ const millTool = () => {
   const t = [], P = (i, k) => {
     const z = z0 + (z1 - z0) * k / nz, tw = -(z - z0) * Math.tan(beta) / R;   // CW tool, right-hand helix
     const th = 2 * Math.PI * i / nt, rr = r(th);
-    return [1.0 + rr * Math.cos(th + tw), -0.8 + rr * Math.sin(th + tw), z];
+    return [1.0 + rr * Math.cos(th + tw + PRE), -0.8 + rr * Math.sin(th + tw + PRE), z];
   };
   for (let k = 0; k < nz; k++) for (let i = 0; i < nt; i++) {
     const j = (i + 1) % nt;
@@ -88,6 +91,6 @@ const mk = (f) => () => orient(Float64Array.from(f()));
 // cfg: the motion and feeds each example is set up for (the tool sits where the first cut starts).
 export const EXAMPLES = {
   plane: { name: '平削り（すくい角 5°、h = 0.1 mm）', tool: mk(planeTool), work: mk(planeWork), cfg: { motion: 'linear', travel: 0.6, dxUm: 25 } },
-  mill: { name: 'エンドミル φ2・2枚刃・ねじれ 30°（ae = 0.2 mm）', tool: mk(millTool), work: mk(millWork), cfg: { motion: 'mill', z: 2, fz: 0.05, angle: 200, dxUm: 25 } },
-  drill: { name: 'ドリル φ1・先端角 118°', tool: mk(drillTool), work: mk(drillWork), cfg: { motion: 'drill', fr: 0.05, angle: 200, dxUm: 25 } },
+  mill: { name: 'エンドミル φ2・2枚刃・ねじれ 30°（ae 0.2 × ap 0.15 mm、fz 0.1）', tool: mk(millTool), work: mk(millWork), cfg: { motion: 'mill', z: 2, fz: 0.1, angle: 70, dxUm: 20 } },
+  drill: { name: 'ドリル φ1・先端角 118°', tool: mk(drillTool), work: mk(drillWork), cfg: { motion: 'drill', fr: 0.05, angle: 360, dxUm: 40 } },
 };
