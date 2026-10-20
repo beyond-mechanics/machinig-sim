@@ -201,6 +201,11 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row wide"><select id="material"></select></div>
           <p class="hint" id="matHint"></p>
           <button id="coefReset" hidden>切削係数を表の値に戻す</button>
+          <details id="scBox" class="oxbox">
+            <summary>この被削材と工具の推奨条件 (はじめの目安)</summary>
+            <div id="scOut" aria-live="polite"></div>
+            <button id="scApply">溝加工の推奨回転数にする</button>
+          </details>
           <details id="oxBox" class="oxbox">
             <summary>材料定数から切削係数を予測 (Oxley 理論)</summary>
             <p class="hint">被削材の流動応力 (Johnson–Cook 式 σ = (A + Bεⁿ)(1 + C ln ε̇)(1 − T*ᵐ)) と熱物性から、せん断角・切りくず厚さ・せん断面と工具すくい面の温度を解き、切削係数 Ktc / Krc / Kac を予測します。切削試験のない新しい被削材の初期値に使えます。工具のすくい角・ねじれ角と、いまの主軸回転での切削速度で計算します。</p>

@@ -35,6 +35,7 @@ node test/identify.test.mjs   # 切削試験の平均切削抵抗からの係数
 node test/feedopt.test.mjs    # 送り最適化 (行ごとの送りと F の書き換え)
 node test/advice.test.mjs     # 加工レポートの対策の目安
 node test/cad.test.mjs        # STEP の読み込み (OpenCascade、npm install が必要)
+node test/conditions.test.mjs # 推奨の切削条件 (はじめの目安)
 ```
 
 物理計算 (`src/gcode.js` `stock.js` `cutting.js` `sld.js` `tool.js` `thermal.js` `chips.js` `sim.js`) は DOM に依存しないので Node でそのまま動きます。表示は `view.js` `charts.js` `main.js` です。

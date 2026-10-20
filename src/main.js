@@ -19,6 +19,7 @@ import { JC, predictCoefs } from './oxley.js';
 import { identify, parseTests, unitForces, COEF_KEYS } from './identify.js';
 import { optimizeFeeds, rewriteFeeds, defaultTarget } from './feedopt.js';
 import { adviceFor } from './advice.js';
+import { startConditions, arcOf } from './conditions.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
 const $ = id => document.getElementById(id);
@@ -73,6 +74,7 @@ function loadProgram() {
   syncModalInputs();
   updateMatHint();
   showJc();
+  showStart();
   document.querySelector('[data-color="devTarget"]').disabled = !targetSpec;
   if (!targetSpec && view.colorMode === 'devTarget') setColorMode('devIdeal');
 }
@@ -304,7 +306,7 @@ $('btnPocket').onclick = () => {
   setSpindle(r.S);
   $('pocketHint').textContent = `${cur} → ${r.S} min⁻¹(この切込み条件での安定限界 ${r.alim.toFixed(2)} mm)。`;
 };
-$('material').onchange = e => { sim.cfg.material = e.target.value; host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); showJc(); };
+$('material').onchange = e => { sim.cfg.material = e.target.value; host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); showJc(); showStart(); };
 function updateMatHint() {
   const m = sim.mat;
   $('matHint').textContent = `Ktc ${Math.round(m.Ktc)} / Krc ${Math.round(m.Krc)} N/mm²${m.coefSource ? ` (${m.coefSource})` : ''} · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.activeTool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.activeTool.D))} min⁻¹)`;
@@ -355,6 +357,26 @@ $('oxApply').onclick = () => {
   sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [oxLast.key]: { Ktc: r(p.Ktc), Krc: r(p.Krc), Kac: r(p.Kac), mc: +p.mc.toFixed(3), source: 'Oxley 予測' } };
   host.config(true); updateMatHint(); showJc();
 };
+// ---- starting conditions for the material and the tool ----
+function showStart() {
+  if (!$('scBox').open) return;
+  const t = sim.activeTool, mat = sim.mat, rows = [];
+  for (const [label, ae] of [['溝 (全幅)', t.D], ['側面 ae 0.3D', 0.3 * t.D], ['高速 ae 0.1D', 0.1 * t.D]]) {
+    const c = startConditions(mat, t, ae), lob = sim.lobes(c.arc[0], c.arc[1]);
+    const a = alimAt(lob, c.S);
+    // a stable pocket close by, if it allows clearly more
+    let bs = c.S, ba = a;
+    for (let s2 = c.S * 0.75; s2 <= Math.min(30000, c.S * 1.25); s2 += 25) { const v = alimAt(lob, s2); if (v > ba && v < Infinity) { ba = v; bs = s2; } }
+    const pocket = ba > 1.3 * a ? ` (${Math.round(bs / 10) * 10} min⁻¹ なら ${ba.toFixed(2)} mm)` : '';
+    rows.push(`<tr><td>${label}</td><td class="n">${c.S.toLocaleString()}</td><td class="n">${c.fz.toFixed(3)}</td><td class="n">${c.F.toLocaleString()}</td><td class="n">${a < Infinity ? a.toFixed(2) : '—'}${pocket}</td></tr>`);
+  }
+  const c0 = startConditions(mat, t);
+  $('scOut').innerHTML = `<table class="oxtable"><thead><tr><th></th><th>S min⁻¹</th><th>fz mm/刃</th><th>F mm/min</th><th>びびらない ap mm</th></tr></thead><tbody>${rows.join('')}</tbody></table>
+    <p class="hint">切削速度 ${Math.round(c0.Vc)} m/min (推奨 ${mat.vc} m/min${Math.abs(c0.Vc - mat.vc) > 1 ? '、主軸の範囲で制限' : ''})、φ${t.D} ${t.N} 枚刃。fz は超硬エンドミルの溝加工の目安で、径方向切込みが小さいときは最大切りくず厚さが同じになるよう上げています (切りくずの薄肉化)。ap はいまの動特性の安定限界線図から (低速ではプロセスダンピングで実際はこれより深く削れることが多い)。</p>`;
+}
+$('scBox').ontoggle = showStart;
+$('scApply').onclick = () => { const c = startConditions(sim.mat, sim.activeTool); setSpindle(c.S); $('pocketHint').textContent = `推奨条件: ${c.S} min⁻¹ (F ${c.F} mm/min が溝加工の目安。送りはプログラムの F を使います)。`; };
+
 // ---- coefficients identified from cutting tests ----
 let idLast = null;
 const idTool = () => { const t = sim.activeTool; return { D: t.D, N: t.N, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen, runout: t.runout ?? 0 }; };
