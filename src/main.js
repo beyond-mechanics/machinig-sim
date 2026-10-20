@@ -716,6 +716,7 @@ function lineStart(n) {
 const BAD = new Set(['びびり', '応力超過']);
 function currentReport() { return host.threaded ? (sim.reportPack ? LineReport.unpack(sim.reportPack) : null) : sim.report; }
 let reportShown = '';
+const partsPerTool = VB => { const n = Math.floor(VB_LIMIT / VB); return n > 9999 ? '1 万' : n.toLocaleString(); };
 function updateReport() {
   const rep = currentReport();
   if (!rep || !rep.lines.size) {
@@ -735,7 +736,9 @@ function updateReport() {
     ['最大振動', r.peakVib ? `${r.peakVib.vib.toFixed(1)} µm${at(r.peakVib)}` : '—'],
     ['最高刃先温度', r.peakTemp?.temp > 25 ? `${r.peakTemp.temp.toFixed(0)} °C${at(r.peakTemp)}` : '—'],
     ['最大工具応力', r.peakStress ? `${r.peakStress.stress.toFixed(0)} MPa${at(r.peakStress)}` : '—'],
-    ...r.tools.map(([T, VB]) => [`摩耗 ${T === '-' ? '工具' : 'T' + T}`, `VB ${(VB * 1000).toFixed(1)} µm`]),
+    // wear per run, and how many parts the tool lasts at this rate (flank wear grows about
+    // linearly with the contact time in the wear law, so the parts scale with VB_LIMIT / VB)
+    ...r.tools.map(([T, VB]) => [`摩耗 ${T === '-' ? '工具' : 'T' + T}`, `VB ${(VB * 1000).toFixed(1)} µm${sim.done && VB > 1e-6 ? ` · 約 ${partsPerTool(VB)} 個/本` : ''}`]),
   ];
   const dl = $('rSum'); dl.innerHTML = '';
   for (const [k, v] of items) { const d = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dd.title = v; d.append(dt, dd); dl.appendChild(d); }
