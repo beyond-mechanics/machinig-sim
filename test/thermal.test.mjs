@@ -122,4 +122,16 @@ M30`);
   console.log(`worn tool (VB 0.3 mm): wall left ${(d * 1000).toFixed(0)} µm thicker (VB·tan 10° = ${(want * 1000).toFixed(0)} µm)`);
   assert.ok(Math.abs(d - want) < 0.015);
 }
+// A ball nose in a shallow cut cuts near its axis: the speed for temperature and wear is the
+// chip-weighted radius of the engaged edge, under √(2·R·ap) at the top of the cut
+{
+  const e = new CuttingEngine(), R = 5, ap = 0.2;
+  e.configure({ N: 2, R, helixDeg: 30, type: 'ball', fluteLen: 20, nonlinear: false }, { k: 1e6, fn: 2000, zeta: 0.1 }, MATERIALS.S50C, 10000);
+  for (let b = 0; b < BINS; b++) e.Hb[b] = (b + 0.5) / BINS < 0.5 ? 0 : -100;
+  e.setEngagement([1, 0], 0.05, -ap, ap);
+  e.run(e.stepsPerTooth * 2 * 20);
+  const st = e.takeStats(), rEff = st.sumRb / st.sumHb, rTop = Math.sqrt(R * R - (R - ap) ** 2);
+  console.log(`ball R5 at ap ${ap}: effective radius ${rEff.toFixed(2)} mm (top of cut ${rTop.toFixed(2)} mm)`);
+  assert.ok(rEff > 0.3 * rTop && rEff <= rTop * 1.01);
+}
 console.log('thermal tests passed');

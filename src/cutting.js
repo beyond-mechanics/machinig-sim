@@ -209,7 +209,7 @@ export class CuttingEngine {
           const fr = Math.hypot(Ft, Fr);
           Fsum += fr; Fr2z += fr * (sliceZ[k] - this.tipZ);
           engaged = 1; ph = phi; zsum = sliceZ[k];
-          st.sumHb += h * bk; st.sumB += bk;
+          st.sumHb += h * bk; st.sumB += bk; st.sumRb += sliceR[k] * h * bk;
           this.toothVol[i] += h * bk * sliceR[k] * dphi;
         }
         if (fza) {
@@ -231,7 +231,7 @@ export class CuttingEngine {
             T += Ft * ringR[j];
             Fsum += Ft; Fr2z += Ft * ringZ[j];
             engaged = 1; ph = phi; zsum = this.tipZ + ringZ[j];
-            st.sumHb += h * ds; st.sumB += ds;
+            st.sumHb += h * ds; st.sumB += ds; st.sumRb += ringR[j] * h * ds;
             this.toothVol[i] += h * ds * ringR[j] * dphi;
           }
         }
@@ -322,5 +322,5 @@ export class CuttingEngine {
 
 function newStats() {
   return { n: 0, sumF: 0, maxF: 0, sumFx: 0, sumFy: 0, sumFz: 0, maxFz: 0, sumT: 0, maxT: 0, sumX: 0, sumY: 0,
-    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0, sumHb: 0, sumB: 0, engTeeth: 0 };
+    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0, sumHb: 0, sumB: 0, sumRb: 0, engTeeth: 0 };
 }

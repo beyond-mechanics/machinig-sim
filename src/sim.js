@@ -634,7 +634,10 @@ export class Simulator {
     const contact = cutting ? st.engTeeth / (st.n * e.N) : 0;
     let wearRateNow = 0;
     if (cutting && st.sumB > 0) {
-      const Vc = (e.omega || 0) * this.activeTool.R * 1e-3; // m/s
+      // cutting speed where the chip is actually cut: the chip-weighted radius of the engaged
+      // edge (a ball nose cutting shallow cuts near its axis, far below its nominal speed)
+      const rEff = st.sumHb > 0 && st.sumRb > 0 ? st.sumRb / st.sumHb : this.activeTool.R;
+      const Vc = (e.omega || 0) * rEff * 1e-3; // m/s
       const T = cuttingTemperature(this.mat, st.sumHb / st.sumB, Vc, this.activeTool.rakeDeg ?? 10);
       // each edge is in the cut for `contact` of the revolution: the temperature cycle, and the
       // mean while cutting for the wear law (below the steady value when the contact is short)
