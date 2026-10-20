@@ -25,7 +25,7 @@ export class Simulator {
     this.engine = new CuttingEngine();
     this.chips = new ChipSystem();
     this.cfg = {
-      tool: { D: 10, N: 3, helixDeg: 30, rakeDeg: 10, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000, VB0: 0 },
+      tool: { D: 10, N: 3, helixDeg: 30, rakeDeg: 10, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000, VB0: 0, runout: 5 }, // runout [µm]
       modal: { auto: true, k: 0, fn: 0, zeta: 0.04 },
       // bearing/holder stiffness loss at speed (spindle.js); drop 0 = dynamics independent of speed
       spindleSoft: { ...SOFT_DEFAULT },
@@ -216,7 +216,7 @@ export class Simulator {
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
     const t = this.activeTool;
-    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, rAt: t.rAt, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear }, this.modalNow(S), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
+    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, rAt: t.rAt, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear, runout: (t.runout ?? 0) / 1000 }, this.modalNow(S), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
     this.lastS = S;
   }
 

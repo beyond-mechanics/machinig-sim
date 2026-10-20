@@ -326,6 +326,7 @@ for (const [id, key] of Object.entries(toolInputs)) $(id).onchange = e => {
   toolChanged();
 };
 // coating: the look of the flutes only (cutting coefficients and wear are the material's)
+$('tRun').onchange = e => { const v = +e.target.value; if (!(v >= 0 && v <= 100)) return; sim.cfg.tool.runout = v; host.config(true); };
 $('tCoat').onchange = e => { sim.cfg.tool.coating = e.target.value; host.config(true); view.setCoating(e.target.value); };
 $('tRake').onchange = e => { const v = +e.target.value; if (!(v >= -10 && v <= 25)) return; sim.cfg.tool.rakeDeg = v; host.config(); };
 // initial wear applies from the start of the program

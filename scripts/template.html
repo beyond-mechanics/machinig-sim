@@ -175,6 +175,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="tN">刃数</label><input type="number" id="tN" min="1" max="8" step="1" value="3"></div>
           <div class="row"><label for="tHelix">ねじれ角 <span class="unit">°</span></label><input type="number" id="tHelix" min="0" max="60" step="1" value="30"></div>
           <div class="row"><label for="tFlute">刃長 <span class="unit">mm</span></label><input type="number" id="tFlute" min="2" max="80" step="1" value="25"></div>
+          <div class="row"><label for="tRun">振れ (ランアウト) <span class="unit">µm</span></label><input type="number" id="tRun" min="0" max="100" step="1" value="5"></div>
           <div class="row"><label for="tCoat">コーティング</label><select id="tCoat"><option value="none">なし (超硬)</option><option value="AlTiN">AlTiN</option><option value="TiAlN">TiAlN</option><option value="TiN">TiN</option><option value="DLC">DLC</option></select></div>
           <div class="row"><label for="tRake">すくい角 <span class="unit">°</span></label><input type="number" id="tRake" min="-10" max="25" step="1" value="10"></div>
           <div class="row"><label for="tVB0">初期摩耗 VB <span class="unit">mm</span></label><input type="number" id="tVB0" min="0" max="0.5" step="0.05" value="0"></div>
@@ -312,6 +313,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li>切削温度は二次元切削のエネルギー収支(Merchant のせん断角、Boothroyd の熱配分、Jaeger の移動熱源)による平均値で、FEM による温度場ではありません。断面図の温度分布は各熱源の温度を使った模式図です。工具摩耗は Usui 式を被削材ごとの代表寿命で校正しています。</li>
           <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。ドリル (固定サイクルの穴あけを含む) は先端角のないフラット工具として底刃のスラストとトルクを計算し、チゼルエッジの押し込み力は含みません。切粉は 1 粒子が数個分の切粉を代表し (最大 5000 粒子)、流体は CFD ではなく噴流・壁面噴流・浅水流の工学的な近似を重ねた速度場です。ポケット内の渦や、工具が噴流をさえぎる効果は入れていません。</li>
           <li><b>回転数で変わる動特性</b>: 高速回転では主軸軸受の予圧が抜けホルダーが緩み、工具先端の固有振動数が下がります。振動と安定限界線図はその回転数の動特性で計算し、静止時の線図を破線で重ねます。安定ポケットは低い回転数側へずれます。回転中に測った FRF を回転数別に読み込むこともできます。</li>
+          <li><b>工具の振れ</b>: 工具が回転軸から e ずれて回ると、刃ごとに切りくず厚さが変わり、側面は最も外へ出る刃が主に削るので、刃跡の間隔が 1 刃送りから 1 回転送りに近づきます (面粗さが大きくなる)。焼きばめでは数 µm、コレットでは 10 µm 程度が目安です。</li>
           <li><b>寸法誤差</b>: 同じ素材を指令どおり (たわみ・振動なし) にも削り、加工結果との差を「指令との差」で示します。壁の位置は格子より細かく µm 単位で比べます。目標形状 (STL) を読み込むと「目標との差」で削り残し (青) と削り過ぎ (赤) を示し、原因のプログラム行を出します。目標の壁の位置そのものは格子 (0.3 mm) 単位でしか分からないので、プログラムが目標と食い違う壁際は ± 半格子で表示します。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
