@@ -108,6 +108,21 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 .chart h2 { font-size: 13px; margin: 0; font-weight: 700; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .chart h2 span { font: 11px var(--font-mono); color: var(--ink-mute); font-weight: 400; }
 .chart canvas { width: 100%; height: 190px; display: block; }
+.rsum { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 16px; margin: 4px 0 6px; }
+.rsum div { display: grid; gap: 1px; min-width: 0; }
+.rsum dt { font-size: 11px; color: var(--ink-mute); letter-spacing: 0.04em; }
+.rsum dd { margin: 0; font: 500 15px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rtable-wrap { overflow-x: auto; max-height: 320px; overflow-y: auto; border-top: 1px solid var(--rule); }
+.rtable { width: 100%; border-collapse: collapse; font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+.rtable th { position: sticky; top: 0; background: var(--panel); text-align: left; font: 600 11px var(--font-sans, inherit); color: var(--ink-mute); padding: 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.rtable td { padding: 5px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.rtable td.code { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.rtable .n { text-align: right; }
+.rtable tbody tr { cursor: pointer; }
+.rtable tbody tr:hover, .rtable tbody tr:focus-visible { background: var(--panel-2); outline: none; }
+.rtable .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; margin-right: 4px; font-size: 11px; border: 1px solid currentColor; }
+.rtable .tag.bad { color: var(--bad); } .rtable .tag.warn { color: var(--warn); }
+.rfoot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 #cvLobes { cursor: crosshair; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
@@ -345,6 +360,15 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="chart"><h2>安定限界線図 <span id="hLobe">クリックで主軸回転を変更</span></h2><canvas id="cvLobes"></canvas></div>
     <div class="chart wide"><h2>切削断面と温度分布 <span id="hSec"></span></h2><canvas id="cvSec" aria-label="二次元切削断面: 工具・せん断面・切りくずと温度分布。カーソルを当てるとその位置の温度を表示"></canvas></div>
     <div class="chart wide"><h2>側面の仕上げ面 <span id="hRough"></span></h2><canvas id="cvRough"></canvas></div>
+    <div class="chart wide report" id="reportBox">
+      <h2>加工レポート <span id="hReport">加工が始まると、プログラムの行ごとにまとめます</span></h2>
+      <dl class="rsum" id="rSum"></dl>
+      <div class="rtable-wrap"><table class="rtable" id="rTable" aria-label="注意が必要な行">
+        <thead><tr><th>行</th><th>Gコード</th><th>状態</th><th class="n">最大切削抵抗 N</th><th class="n">振動 µm</th><th class="n">刃先温度 °C</th><th class="n">工具応力 MPa</th><th class="n">切削時間 s</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <div class="rfoot"><p class="hint" id="rHint">行をクリックすると、プログラムタブのその行へ移動します。</p><button id="rCsv">全行を CSV で保存</button></div>
+    </div>
   </section>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

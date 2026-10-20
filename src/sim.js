@@ -6,6 +6,7 @@ import { parseGcode, discretize, segmentTime } from './gcode.js';
 import { Stock } from './stock.js';
 import { buildStock, stockExtents, cellFor, stockFromPath, originPreset, bestOrigin, ORIGIN_LABEL, rasterize } from './workpiece.js';
 import { applyCutterComp } from './cuttercomp.js';
+import { LineReport } from './report.js';
 import { CuttingEngine, BINS, END_BINS, END_RINGS } from './cutting.js';
 import { ChipSystem, chipEjection, chipShape, bulkRadius, nozzlePose, NOZZLE_DEFAULT } from './chips.js';
 import { toolModel, toolStress } from './tool.js';
@@ -116,6 +117,7 @@ export class Simulator {
     this.stock.devIdeal = new Float32Array(n);  // simulated − commanded [mm], + = material left
     this.stock.devTarget = new Float32Array(n); // simulated − target [mm], + = material left
     this.devSummary = null; this.devTick = 0;
+    this.report = new LineReport();
     // the whole map once: material the program never reaches still counts against the target
     this.updateDeviation({ i0: 0, j0: 0, i1: this.stock.nx - 1, j1: this.stock.ny - 1 });
     this.chips.reset();
@@ -399,6 +401,9 @@ export class Simulator {
       this.checkClearance({ x: p.x + dx, y: p.y + dy, z: p.z }, b.rapid);
       if (this.wall && e.wk) this.stock.markWall(p.x + dx, p.y + dy, R, e.wnx, e.wny, Math.max(0, e.runMeanW * 1e6));
       this.pos = p;
+      const cutNow = (ap > 0.01 || endCut) && !b.rapid;
+      this.report.time(b.line, dtm, cutNow);
+      if (cutNow) this.lastCutLine = b.line;
       if (this.segS >= segLen - 1e-9) this.nextSeg();
     }
     this.updateDeviation(this.stock.dirty);
@@ -612,6 +617,9 @@ export class Simulator {
       // chatter = vibration that is not synchronous with tooth passing (once-per-tooth scatter)
       state: !cutting ? 'idle' : (d.chatterIdx > 0.55 && d.once > 3) ? 'chatter' : (d.chatterIdx > 0.35 && d.once > 1.5) ? 'marginal' : 'stable',
     });
+    // the frame's cutting statistics belong to the line that cut (the frame may end on a retract)
+    if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.tool, stress: stress.vm }, d.state, fs.cutTime);
+    if (this.activeT !== undefined) this.report.toolWear(this.activeT, this.VB);
     if (this.VB > VB_LIMIT) this.alert('wear', `逃げ面摩耗 VB ${this.VB.toFixed(2)} mm: 工具寿命 (VB ${VB_LIMIT} mm) を超過`);
     if (cutting && this.temp.tool > 900) this.alert('heat', `刃先温度 ${this.temp.tool.toFixed(0)} °C: 拡散摩耗・刃先の塑性変形が急増する領域`);
     if (stress.vm > 1500) this.alert('stress', '工具応力が許容値(目安1500 MPa)を超過: 折損リスク');

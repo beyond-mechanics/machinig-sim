@@ -31,6 +31,7 @@ function tick() {
   setTimeout(tick, Math.max(0, TICK_MS - (performance.now() - t0)));
 }
 
+let reportTick = 0;
 function post() {
   const e = sim.engine, s = sim.stock, c = sim.chips, h = e.hist;
   const transfer = [];
@@ -45,6 +46,8 @@ function post() {
   self.postMessage({
     type: 'snap', gen,
     mtime: sim.mtime, line: sim.line, activeT: sim.activeT, done: sim.done, pos: sim.pos, ap: sim.ap, wall: sim.wall, S: sim.S,
+    // the per-line report about twice a second, and when the program has run through
+    report: (++reportTick % 30 === 0 || sim.done) && sim.report ? sim.report.pack() : null,
     display: sim.display, hits: sim.hits, alerts: [...sim.alerts], removed: s.removed, dynBudget: sim.cfg.dynBudget,
     engine: e.stepsPerTooth ? {
       x: e.x, y: e.y, w: e.w, wk: e.wk, wnx: e.wnx, wny: e.wny, runMeanW: e.runMeanW, omega: e.omega, S: e.S, N: e.N,

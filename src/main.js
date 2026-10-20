@@ -13,6 +13,7 @@ import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
 import { speedDependent } from './spindle.js';
 import { VB_LIMIT, T0 } from './thermal.js';
+import { LineReport } from './report.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
 const $ = id => document.getElementById(id);
@@ -507,6 +508,7 @@ function updateTiles() {
   $('sWr').textContent = tName + (d.lifeMin < Infinity ? `この条件の残り寿命 ${d.lifeMin > 600 ? '10 h 超' : d.lifeMin.toFixed(1) + ' 分'}` : `寿命 VB ${VB_LIMIT * 1000} µm`);
   showDeviation(d.dev);
   showSpeedInfo();
+  updateReport();
   const cs = sim.chips.stats;
   // share of the chip volume that has left the workpiece (chips still in flight over it are not yet out)
   const evacPct = cs.producedVol > 0 ? Math.min(100, cs.evacVol / cs.producedVol * 100) : 0;
@@ -537,6 +539,65 @@ function showDeviation(dev) {
   const head = dev.target ? `目標比 · 公差内 ${(r.inTol / Math.max(1, r.n) * 100).toFixed(1)}%` : '指令比';
   $('sDv').textContent = `${head} · 削り残し ${um(r.left)}${at(r.atLeft)} · 削り過ぎ ${um(-r.gouge)}${at(r.atGouge)}`;
 }
+// ---------- machining report ----------
+const BAD = new Set(['びびり', '応力超過']);
+function currentReport() { return host.threaded ? (sim.reportPack ? LineReport.unpack(sim.reportPack) : null) : sim.report; }
+let reportShown = '';
+function updateReport() {
+  const rep = currentReport();
+  if (!rep || !rep.lines.size) {
+    if (reportShown !== 'empty') { reportShown = 'empty'; $('rSum').innerHTML = ''; $('rTable').tBodies[0].innerHTML = ''; $('hReport').textContent = '加工が始まると、プログラムの行ごとにまとめます'; }
+    return;
+  }
+  const r = rep.summary({ stress: ALLOWABLE_STRESS, temp: 900 });
+  const key = `${r.time.toFixed(1)}|${r.issues.length}|${sim.done}`;
+  if (key === reportShown) return;
+  reportShown = key;
+  const lineOf = n => (codeLines[n - 1] || '').trim();
+  const at = rec => rec ? ` (${rec.line}行)` : '';
+  const items = [
+    ['加工時間', `${r.time.toFixed(1)} s`], ['うち切削', `${r.cut.toFixed(1)} s`],
+    ['びびりの時間', `${(r.chatterShare * 100).toFixed(0)} %`],
+    ['最大切削抵抗', r.peakF ? `${r.peakF.F.toFixed(0)} N${at(r.peakF)}` : '—'],
+    ['最大振動', r.peakVib ? `${r.peakVib.vib.toFixed(1)} µm${at(r.peakVib)}` : '—'],
+    ['最高刃先温度', r.peakTemp?.temp > 25 ? `${r.peakTemp.temp.toFixed(0)} °C${at(r.peakTemp)}` : '—'],
+    ['最大工具応力', r.peakStress ? `${r.peakStress.stress.toFixed(0)} MPa${at(r.peakStress)}` : '—'],
+    ...r.tools.map(([T, VB]) => [`摩耗 ${T === '-' ? '工具' : 'T' + T}`, `VB ${(VB * 1000).toFixed(1)} µm`]),
+  ];
+  const dl = $('rSum'); dl.innerHTML = '';
+  for (const [k, v] of items) { const d = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dd.title = v; d.append(dt, dd); dl.appendChild(d); }
+  const tb = $('rTable').tBodies[0]; tb.innerHTML = '';
+  for (const it of r.issues.slice(0, 30)) {
+    const tr = document.createElement('tr'); tr.tabIndex = 0;
+    const td = (v, cls) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = v; tr.appendChild(c); return c; };
+    td(it.line); td(lineOf(it.line), 'code');
+    const tags = td('');
+    for (const w of it.why) { const sp = document.createElement('span'); sp.className = `tag ${BAD.has(w) ? 'bad' : 'warn'}`; sp.textContent = w; tags.appendChild(sp); }
+    td(it.F.toFixed(0), 'n'); td(it.vib.toFixed(1), 'n'); td(it.temp > 25 ? it.temp.toFixed(0) : '—', 'n'); td(it.stress.toFixed(0), 'n'); td(it.cut.toFixed(2), 'n');
+    const go = () => gotoLine(it.line);
+    tr.onclick = go; tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+    tb.appendChild(tr);
+  }
+  $('hReport').textContent = `${sim.done ? '完了' : '加工中'} · 注意が必要な行 ${r.issues.length}`;
+  if (!r.issues.length) { const tr = document.createElement('tr'); const c = document.createElement('td'); c.colSpan = 8; c.textContent = sim.done ? '注意が必要な行はありません' : 'まだ注意が必要な行はありません'; tr.appendChild(c); tb.appendChild(tr); }
+}
+// select a program line in the editor (program tab)
+function gotoLine(n) {
+  document.querySelector('[data-tab="prog"]').click();
+  const ta = $('code'), lines = ta.value.split('\n');
+  let a = 0; for (let i = 0; i < n - 1 && i < lines.length; i++) a += lines[i].length + 1;
+  ta.focus(); ta.setSelectionRange(a, a + (lines[n - 1] || '').length);
+  ta.scrollTop = Math.max(0, (n - 4) * parseFloat(getComputedStyle(ta).lineHeight || '16'));
+}
+$('rCsv').onclick = async () => {
+  const rep = currentReport(); if (!rep) return;
+  const name = ($('gcInfo').dataset.file || 'program').replace(/\.[^.]+$/, '') + '_report.csv', text = rep.csv(codeLines);
+  if (downloads) { try { await downloads.save({ filename: name, data: text }); } catch { /* declined */ } return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 function setV(id, v, unit) { const el = $(id); el.firstChild.nodeValue = v; el.lastChild.textContent = unit; }
 
 let lastRough = null, lastSec = null, secHover = false;
