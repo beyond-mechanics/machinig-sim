@@ -255,21 +255,17 @@ export class Cutting3D {
       this.searchPairs(2 * this.hk + skin);
       this.xr = x.slice(); this.yr = y.slice(); this.zr = z.slice(); this.deadRef = this.nDead + this.nEvac;
     }
-    // Pairs with a moving particle come first (np), pairs of two held particles (supports or the
-    // frozen surface) after them (up to npAll): the momentum loop needs only the first block.
-    const { ci, cj, nc, fixed } = this, hk = this.hk, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
-    let np = 0, nq = 0;
-    if (!this.qi || this.qi.length < nc) { this.qi = new Int32Array(nc + 1024); }
-    const qi = this.qi;
-    for (let k = 0; k < nc; k++) {
-      const i = ci[k], j = cj[k];
-      if (dead[i] || dead[j]) continue;
-      if (fixed[i] && fixed[j]) { qi[nq++] = k; continue; }
+    // Pairs of two held particles (supports or the frozen surface) come first (up to k0) and do not
+    // change between searches, so they are evaluated once per search; pairs with a moving particle
+    // follow (k0 up to np) and are evaluated every step. A pair whose particles were frozen after
+    // the search stays with the moving ones (its forces fall on held particles and are dropped).
+    const { fixed } = this, hk = this.hk, r2max = 4 * hk * hk, inv = 1 / hk, ad = this.ad, eta = 0.01 * hk * hk;
+    const pair = (i, j, np) => {
       const rx = x[i] - x[j], ry = y[i] - y[j];
       let rz = z[i] - z[j];
       if (per) { if (rz > 0.5 * P) rz -= P; else if (rz < -0.5 * P) rz += P; }
       const r2 = rx * rx + ry * ry + rz * rz;
-      if (r2 >= r2max || r2 === 0) continue;
+      if (r2 >= r2max || r2 === 0) return false;
       if (np >= this.cap) this.growPairs();
       const r = Math.sqrt(r2), q = r * inv;
       let w, dw;
@@ -278,25 +274,26 @@ export class Cutting3D {
       this.pi[np] = i; this.pj[np] = j; this.prx[np] = rx; this.pry[np] = ry; this.prz[np] = rz;
       const g = dw / r; this.gx[np] = g * rx; this.gy[np] = g * ry; this.gz[np] = g * rz;
       this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
-      np++;
+      return true;
+    };
+    if (need) {
+      const { ci, cj, nc } = this;
+      if (!this.mi || this.mi.length < nc) this.mi = new Int32Array(nc + 1024);
+      const mi = this.mi;
+      let k0 = 0, nm = 0;
+      for (let k = 0; k < nc; k++) {
+        const i = ci[k], j = cj[k];
+        if (dead[i] || dead[j]) continue;
+        if (fixed[i] && fixed[j]) { if (pair(i, j, k0)) k0++; } else mi[nm++] = k;
+      }
+      this.k0 = k0; this.nm = nm;
     }
-    this.npMove = np;
-    for (let q = 0; q < nq; q++) {
-      const k = qi[q], i = ci[k], j = cj[k];
-      const rx = x[i] - x[j], ry = y[i] - y[j];
-      let rz = z[i] - z[j];
-      if (per) { if (rz > 0.5 * P) rz -= P; else if (rz < -0.5 * P) rz += P; }
-      const r2 = rx * rx + ry * ry + rz * rz;
-      if (r2 >= r2max || r2 === 0) continue;
-      if (np >= this.cap) this.growPairs();
-      const r = Math.sqrt(r2), qq = r * inv;
-      let w, dw;
-      if (qq < 1) { w = ad * (1 - 1.5 * qq * qq + 0.75 * qq * qq * qq); dw = ad * inv * (-3 * qq + 2.25 * qq * qq); }
-      else { const s = 2 - qq; w = ad * 0.25 * s * s * s; dw = -ad * inv * 0.75 * s * s; }
-      this.pi[np] = i; this.pj[np] = j; this.prx[np] = rx; this.pry[np] = ry; this.prz[np] = rz;
-      const g = dw / r; this.gx[np] = g * rx; this.gy[np] = g * ry; this.gz[np] = g * rz;
-      this.pw[np] = w; this.pf[np] = dw * r / (r2 + eta);
-      np++;
+    const { ci, cj, mi, nm } = this;
+    let np = this.k0;
+    for (let q = 0; q < nm; q++) {
+      const k = mi[q], i = ci[k], j = cj[k];
+      if (fixed[i] === 2 && fixed[j] === 2) continue;           // frozen after the search
+      if (pair(i, j, np)) np++;
     }
     this.np = np;
   }
@@ -370,7 +367,7 @@ export class Cutting3D {
 
     // 1. Velocity gradient L = −Σ V_j (v_i − v_j) ⊗ ∇W, correction matrix M and dρ/dt.
     LM.fill(0);
-    for (let k = 0, nm = this.npMove; k < nm; k++) {
+    for (let k = this.k0; k < np; k++) {
       const qi = 4 * pi[k], qj = 4 * pj[k], Vi = m / Q[qi + 3], Vj = m / Q[qj + 3];
       const dvx = Q[qi] - Q[qj], dvy = Q[qi + 1] - Q[qj + 1], dvz = Q[qi + 2] - Q[qj + 2];
       const rx = prx[k], ry = pry[k], rz = prz[k], g1 = gx[k], g2 = gy[k], g3 = gz[k];
@@ -390,7 +387,7 @@ export class Cutting3D {
     }
     // Pairs of two held particles: no relative velocity, so only the correction matrix M of the
     // supports (the frozen surface skips the constitutive update).
-    for (let k = this.npMove; k < np; k++) {
+    for (let k = 0; k < this.k0; k++) {
       const i = pi[k], j = pj[k];
       if (fixed[i] === 2 && fixed[j] === 2) continue;
       const Vi = m / Q[4 * i + 3], Vj = m / Q[4 * j + 3];
@@ -486,7 +483,7 @@ export class Cutting3D {
     const xs = 0.5 * m;
     AC.fill(0);
     const hk = this.hk, cs = this.cs, eta = 0.01 * hk * hk, alpha = cfg.avAlpha, betaV = cfg.avBeta, iWdx = 1 / this.Wdx;
-    for (let k = 0, nm = this.npMove; k < nm; k++) {
+    for (let k = this.k0; k < np; k++) {
       const i = pi[k], j = pj[k], si = 9 * i, sj = 9 * j, qi = 4 * i, qj = 4 * j;
       let txx = PK[si] + PK[sj], tyy = PK[si + 1] + PK[sj + 1], tzz = PK[si + 2] + PK[sj + 2];
       const txy = PK[si + 3] + PK[sj + 3], tyz = PK[si + 4] + PK[sj + 4], txz = PK[si + 5] + PK[sj + 5];

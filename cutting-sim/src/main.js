@@ -528,7 +528,7 @@ const CELLS = {
     ['切りくずのカール半径', (s) => (s.curl == null ? '—' : isFinite(s.curl) ? f3(s.curl) : '∞'), 'mm', (s) => (s.curl == null ? '切りくずが伸びると表示' : isFinite(s.curl) ? '円で近似した上向きカール' : 'ほぼまっすぐ')],
     ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `排出 ${s.evacuated} 粒子 · 割れた粒子 ${s.failed}`],
     ['残留応力（表面、切削方向）', (s) => (s.residual ? f0(s.rsSurf) : '—'), 'MPa',
-      (s) => (s.residual ? `圧縮の最大 ${f0(s.rsMin)} MPa（深さ ${f0(s.rsMinDepth)} µm）` : s.relax != null ? `除荷・冷却中 ${f0(s.relax * 100)} %` : '「残留応力」をオンにすると切削後に計算')],
+      (s) => (s.residual ? `切削長の4区間でのばらつき ±${s.rsSpread == null ? '—' : f0(s.rsSpread)} MPa。圧縮の最大 ${f0(s.rsMin)} MPa（深さ ${f0(s.rsMinDepth)} µm）` : s.relax != null ? `除荷・冷却中 ${f0(s.relax * 100)} %` : '「残留応力」をオンにすると切削後に計算')],
     ['実効すくい角', (s) => f1(s.toolRake), '°', () => '刃先から 0.3〜1.0 h の工具表面'],
   ],
   mill: [

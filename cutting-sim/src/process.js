@@ -43,7 +43,7 @@ export class Ortho {
   progress(sim) { return (sim.tool.ex - this.x0) / (this.c.cutLen * 1e-3); }
   accumulate(sim) { return this.progress(sim) > 0.5; }
   // Machined surface well behind the tool has unloaded: freeze it (keeps its residual state).
-  freezes(sim, x, y) { return x < sim.tool.ex - this.h - sim.tool.r && y < -0.5 * this.h; }
+  freezes(sim, x, y) { return x < sim.tool.ex - (this.c.freezeK ?? 1) * this.h - sim.tool.r && y < -0.5 * this.h; }
   axis(sim) { return (sim.tool.ex - this.x0) * 1e3; }       // chart abscissa: cut length [mm]
   forces(Fx, Fy) { return { a: -Fx, b: Fy }; }                 // Fc (cutting), Ft (thrust)
 }

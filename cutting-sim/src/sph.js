@@ -44,6 +44,8 @@ export const DEFAULTS = {
   residual: false, relaxSteps: 5000,
   // End mill: keep following the chip for this many degrees after the tooth leaves the work.
   track: 10, passes: 1,
+  // Orthogonal: the machined surface is frozen freezeK·h + r behind the tool (null: 1, 3 with residual).
+  freezeK: null,
 };
 
 const PI = Math.PI;
@@ -51,7 +53,9 @@ const PI = Math.PI;
 export class CuttingSim {
   constructor(cfg = {}) {
     const c = this.cfg = { ...DEFAULTS, ...cfg };
-    if (c.residual && c.mode === 'ortho') { c.thermalExp = true; c.depth = Math.max(c.depth || 0, 0.8, 5 * c.h); }
+    // Residual stress: the surface is frozen only 3h + r behind the tool (freezing at h + r, as for a
+    // plain cut, locks in the still loaded state: +280 MPa against about −15 for k = 3 to no freeze).
+    if (c.residual && c.mode === 'ortho') { c.thermalExp = true; c.depth = Math.max(c.depth || 0, 0.8, 5 * c.h); c.freezeK ??= 3; }
     // flowScale: multiplier on the whole flow stress (A and B), to calibrate against a measured force.
     // The material's own cal (Johnson-Cook A and B scaled to the handbook kc, see materials.js) times it.
     const base = MATERIALS[c.mat], fsc = (c.flowScale > 0 ? c.flowScale : 1) * (base.cal ?? 1);
@@ -455,15 +459,33 @@ export class CuttingSim {
   // steady part of the cut, in bins of two particle spacings.
   residualProfile() {
     const { N, x, y, sxx, syy, p, dead, fixed, h, dx } = this, xEnd = this.relax.xEnd, bw = 2 * dx, bins = [];
+    // Depth from the surface actually left (it springs back above the tool path −h by up to a
+    // spacing): the top particle of each column 2Δx wide.
+    const cw = 2 * dx, top = new Map(), col = (i) => Math.floor(x[i] / cw);
+    for (let i = 0; i < N; i++) {
+      if (dead[i] || fixed[i] === 1 || x[i] < 0.3 * xEnd - cw || x[i] > xEnd - 2 * h + cw || y[i] > -h + 3 * dx) continue;
+      const c = col(i); if (!top.has(c) || y[i] > top.get(c)) top.set(c, y[i]);
+    }
+    const depth = (i) => (top.has(col(i)) ? top.get(col(i)) + 0.5 * dx - y[i] : -1);
     for (let i = 0; i < N; i++) {
       if (dead[i] || fixed[i] === 1 || x[i] < 0.3 * xEnd || x[i] > xEnd - 2 * h) continue;
-      const d = -h - y[i];
+      const d = depth(i);
       if (d < 0) continue;
       const k = Math.floor(d / bw), b = bins[k] || (bins[k] = [0, 0, 0]);
       b[0] += sxx[i] - p[i]; b[1] += syy[i] - p[i]; b[2]++;
     }
     const out = [];
     for (let k = 0; k < bins.length; k++) if (bins[k] && bins[k][2]) out.push({ d: (k + 0.5) * bw * 1e6, sxx: bins[k][0] / bins[k][2] * 1e-6, syy: bins[k][1] / bins[k][2] * 1e-6 });
+    // The top bin again in four stretches of the cut: how far the surface value scatters along it.
+    const x0 = 0.3 * xEnd, L = xEnd - 2 * h - x0, seg = [[0, 0], [0, 0], [0, 0], [0, 0]];
+    for (let i = 0; i < N; i++) {
+      if (dead[i] || fixed[i] === 1 || x[i] < x0 || x[i] > x0 + L) continue;
+      const d = depth(i);
+      if (d < 0 || d >= bw) continue;
+      const q = seg[Math.min(3, Math.floor(4 * (x[i] - x0) / L))]; q[0] += sxx[i] - p[i]; q[1]++;
+    }
+    const sv = seg.filter((q) => q[1]).map((q) => q[0] / q[1] * 1e-6);
+    this.rsSpread = sv.length > 1 ? 0.5 * (Math.max(...sv) - Math.min(...sv)) : null;
     return out;
   }
 
@@ -607,7 +629,7 @@ export class CuttingSim {
       const surf = r[0].sxx;
       let pk = r[0];
       for (const b of r) if (b.sxx < pk.sxx) pk = b;
-      return { ...base, residual: r, rsSurf: surf, rsMin: pk.sxx, rsMinDepth: pk.d };
+      return { ...base, residual: r, rsSurf: surf, rsSpread: this.rsSpread, rsMin: pk.sxx, rsMinDepth: pk.d };
     }
     const hs = this.hist, n = hs.fc.length, cfg = this.cfg, b = cfg.width;
     const avg = (arr, from) => { let s = 0, c = 0; for (let i = from; i < arr.length; i++) { s += arr[i]; c++; } return c ? s / c : 0; };
