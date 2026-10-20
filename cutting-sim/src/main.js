@@ -679,8 +679,8 @@ function sweepTable() {
   body.textContent = '';
   for (const r of sw.rows) {
     const tr = document.createElement('tr'), s = r.s;
-    const cells = [String(r.v), ...(s ? [f1(s.fc / sw.cfg.width), f1(s.ft / sw.cfg.width), f0(s.kc), f1(s.phi), s.ratio.toFixed(2), f0(s.tmax), f0(s.toolSteadyT ?? s.toolT), s.wearFlank.toFixed(2)]
-      : [r.p == null ? '待ち' : `計算中 ${f0(r.p * 100)} %`, '', '', '', '', '', '', ''])];
+    const cells = [String(r.v), ...(s ? [f1(s.fc / sw.cfg.width), f1(s.ft / sw.cfg.width), f0(s.kc), f1(s.phi), s.ratio.toFixed(2), s.muMean != null ? s.muMean.toFixed(2) : '—', f0(s.tmax), f0(s.toolSteadyT ?? s.toolT), s.wearFlank.toFixed(2)]
+      : [r.p == null ? '待ち' : `計算中 ${f0(r.p * 100)} %`, '', '', '', '', '', '', '', ''])];
     for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
     body.appendChild(tr);
   }
@@ -716,8 +716,8 @@ $('swrun').addEventListener('click', () => {
 });
 $('swcsv').addEventListener('click', () => {
   const k = SWEEP[sw.key];
-  const lines = [`${sw.key} [${k.unit}],Fc [N/mm],Ft [N/mm],kc [N/mm2],phi [deg],hc/h,Tmax [C],tool Tmax [C],flank wear [um/min]`];
-  for (const r of sw.rows) if (r.s) { const s = r.s; lines.push([r.v, s.fc / sw.cfg.width, s.ft / sw.cfg.width, s.kc, s.phi, s.ratio, s.tmax, s.toolSteadyT ?? s.toolT, s.wearFlank].map((v) => (typeof v === 'number' ? +v.toPrecision(5) : v)).join(',')); }
+  const lines = [`${sw.key} [${k.unit}],Fc [N/mm],Ft [N/mm],kc [N/mm2],phi [deg],hc/h,mean mu,Tmax [C],tool Tmax [C],flank wear [um/min]`];
+  for (const r of sw.rows) if (r.s) { const s = r.s; lines.push([r.v, s.fc / sw.cfg.width, s.ft / sw.cfg.width, s.kc, s.phi, s.ratio, s.muMean, s.tmax, s.toolSteadyT ?? s.toolT, s.wearFlank].map((v) => (typeof v === 'number' ? +v.toPrecision(5) : v)).join(',')); }
   const text = `# cutting-sim sweep, ${sw.cfg.mat}, ${JSON.stringify({ vc: sw.cfg.vc, h: sw.cfg.h, rake: sw.cfg.rake, edgeRadius: sw.cfg.edgeRadius, mu: sw.cfg.mu, nh: sw.cfg.nh })}\n` + lines.join('\n') + '\n';
   const name = `sweep_${sw.cfg.mat}_${sw.key}.csv`;
   if (downloads) downloads.save({ filename: name, data: text }).then(() => { $('swhint').textContent = 'CSV を保存しました。'; }, (e) => { $('swhint').textContent = e && e.code === 'declined' ? '保存を取りやめました。' : 'この表示では保存できません。'; });
