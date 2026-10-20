@@ -29,6 +29,9 @@ export const DEFAULTS = {
   D: 6, z: 3, fz: 0.1, ae: 0.3, dir: 'up',
   // Tool: material, interface heat-transfer coefficient [W/(m²·K)].
   toolMat: 'WC', hc: 1e8,
+  // Tool preheat (orthogonal cutting, worker.js): cut again this many times, each starting from the
+  // steady tool temperature of the cut before; toolT is that field (ToolHeat cells).
+  preheat: 0, toolT: null,
   // Artificial viscosity coefficients (Monaghan α, β); default 1, or the material's av.
   avAlpha: null, avBeta: null,
   // Tool shape: 'wedge' (rake, clearance, edge radius), 'chamfer' (negative land of width land [mm]
@@ -108,6 +111,7 @@ export class CuttingSim {
     proc.init(this);
     const Lb = Math.max(10 * h, 0.8e-3);
     this.heat = new ToolHeat(this.tool, TOOLS[c.toolMat], { cell: Math.max(dx, Lb / 90), Lb, T0: c.T0, hc: c.hc });
+    if (c.toolT && c.toolT.length === this.heat.T.length) this.heat.T.set(c.toolT);
 
     // Kernel constants (cubic spline, 2D).
     this.ad = 10 / (7 * PI * this.hk * this.hk);

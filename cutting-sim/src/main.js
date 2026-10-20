@@ -87,11 +87,11 @@ function readCfg() {
     D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'), passes: num('passes'),
     tool: shape === 'custom' && !custom.profile ? 'wedge' : shape, land: num('land'), landDeg: num('landDeg'),
     gw: num('gw'), gd: num('gd'), wallDeg: num('wallDeg'), wh: num('wh'), profile: shape === 'custom' ? custom.profile : null,
-    fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'), residual: mode === 'ortho' && $('residual').checked,
+    fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'), residual: mode === 'ortho' && $('residual').checked, preheat: mode === 'ortho' && $('preheat').checked ? 2 : 0,
   };
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'fric', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
-  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual']) $(id).addEventListener('change', reset);
+  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual', 'preheat']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
 const custom = { text: null, name: '', rot: 0, flip: false, profile: null, wornMin: 0 };
@@ -188,6 +188,8 @@ function updateRunButton() {
   const pill = $('state');
   pill.dataset.s = status;
   pill.textContent = { idle: '待機', running: '計算中', paused: '一時停止', done: '完了' }[status];
+  const w = frame && frame.warm;
+  if (w && w[1] > 0 && status !== 'done' && status !== 'idle') pill.textContent += w[0] < w[1] ? `（工具を温め中 ${w[0] + 1}/${w[1]}）` : '（温めた工具で本番）';
 }
 
 // Field and zoom toggles.

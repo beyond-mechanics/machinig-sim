@@ -228,3 +228,13 @@ test('end mill geometry: the previous tooth path is a trochoid, so the chip is f
     assert.ok(Math.abs(worst.d) < 5e-6, `${dir}: ${(worst.d * 1e6).toFixed(1)} µm off at ${worst.k * 2 + 90}°`);
   }
 });
+
+test('preheat: cutting again from the steady tool temperature heats the tool and the rake contact, kc stays', () => {
+  const cfg = { mat: 'S45C', vc: 300, nh: 6 };
+  const a = run(cfg), b = run({ ...cfg, toolT: a.heat.steadyT });
+  const ma = a.summary(), mb = b.summary();
+  // A cold tool draws heat out of the chip: from its own steady temperature the tool runs 80–120 °C hotter.
+  assert.ok(mb.toolSteadyT > ma.toolSteadyT + 40, `tool ${ma.toolSteadyT.toFixed(0)} → ${mb.toolSteadyT.toFixed(0)} °C`);
+  assert.ok(mb.tContact > ma.tContact + 30, `contact ${ma.tContact.toFixed(0)} → ${mb.tContact.toFixed(0)} °C`);
+  assert.ok(Math.abs(mb.kc / ma.kc - 1) < 0.06, `kc ${ma.kc.toFixed(0)} → ${mb.kc.toFixed(0)}`);
+});

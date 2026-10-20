@@ -5,10 +5,11 @@ import { toolOutline } from './tool.js';
 import { Cutting3D } from './sph3d.js';
 
 let sim = null, running = false, t0 = 0, wall = 0, runN = 0;   // runN: the latest run request, echoed in frames
+let warm = 0;   // preheat cuts done (orthogonal cutting)
 
 onmessage = (e) => {
   const d = e.data;
-  if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; send(); }
+  if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; warm = 0; send(); }
   else if (d.type === 'run') { runN = d.n || 0; if (sim && !sim.done && !running) { running = true; t0 = performance.now(); loop(); } }
   else if (d.type === 'pause') { if (running) wall += performance.now() - t0; running = false; send(); }
   else if (d.type === 'sweep') { sweep = { cfg: d.cfg, key: d.key, values: d.values, i: 0, sim: null }; sweepLoop(); }
@@ -39,6 +40,11 @@ function loop() {
   if (!running || !sim) return;
   const start = performance.now();
   while (performance.now() - start < 45 && !sim.done) sim.stepSample();
+  // Preheat: a cold tool draws heat out of the chip, so cut again from the steady tool temperature
+  // (two repeats bring the tool within about 10 °C of its own steady state).
+  if (sim.done && sim instanceof CuttingSim && !(sim.proc instanceof Mill) && warm < (sim.cfg.preheat | 0) && sim.heat.steadyT) {
+    warm++; sim = new CuttingSim({ ...sim.cfg, toolT: sim.heat.steadyT });
+  }
   if (sim.done) { running = false; wall += performance.now() - t0; }
   send();
   if (running) setTimeout(loop, 0);
@@ -69,7 +75,7 @@ function send() {
     toolGrid: { nu: h.nu, nw: h.nw, u0: h.u0 * 1e3, w0: h.w0 * 1e3, a: h.a * 1e3, T: tg, inside: h.inside, steady: !!h.steadyT },
     mill: s.proc instanceof Mill ? { cx: s.proc.cx * 1e3, cy: s.proc.cy * 1e3, R: s.proc.R * 1e3 } : null,
     profile: s.done ? h.profile() : null,
-    hist: s.hist, summary: s.summary(), running, runN, wall: now, dt: s.dt,
+    hist: s.hist, summary: s.summary(), running, runN, wall: now, dt: s.dt, warm: [warm, s.cfg.preheat | 0],
   }, [x.buffer, y.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, D.buffer, flag.buffer, tg.buffer]);
 }
 

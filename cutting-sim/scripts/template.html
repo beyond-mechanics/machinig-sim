@@ -218,6 +218,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row" data-only="mill helix" hidden><label for="track">刃が抜けた後の追跡<small>°</small></label><input id="track" type="number" min="0" max="40" step="2" value="10"></div>
         <div class="row" data-only="mill helix" hidden><label for="passes">続けて削る刃の数</label><input id="passes" type="number" min="1" max="4" step="1" value="1"></div>
         <label class="check"><input id="fracture" type="checkbox" checked>延性破壊（切りくずの分断）</label>
+        <label class="check" data-only="ortho"><input id="preheat" type="checkbox">工具を温めてから削る（前の切削の定常温度から 2 回削り直す。計算は 3 倍。工具温度が 80〜120 °C 上がり、実測に近づく）</label>
         <label class="check" data-only="ortho"><input id="residual" type="checkbox">残留応力（試験的。熱膨張あり、切削後に除荷・冷却。計算は 2 倍ほど）</label>
         <div class="row"><label for="efs">破壊ひずみの倍率</label><input id="efs" type="number" min="0.2" max="5" step="0.1" value="1"></div>
         <div class="row"><label for="fls">流れ応力の倍率</label><input id="fls" type="number" min="0.3" max="3" step="0.05" value="1"></div>
