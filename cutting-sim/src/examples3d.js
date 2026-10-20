@@ -59,8 +59,8 @@ const millTool = () => {
   return t;
 };
 
-// 3. Drilling: work 1.6 × 1.6 × 0.5 mm, top at z = 0; a φ1 two-lip drill point (118°) with its tip
-// 0.05 mm into the work at (0.8, 0.8), feeding −z.
+// 3. Drilling: work 1.6 × 1.6 × 0.5 mm, top at z = 0; a φ1 two-lip drill point (118°) sunk into the work at
+// (0.8, 0.8) so that the whole lip cuts (tip 0.35 mm deep, the outer corners 0.05 mm), feeding −z.
 const drillWork = () => box(0, 0, -0.5, 1.6, 1.6, 0);
 const drillTool = () => {
   const R = 0.5, half = 59 * Math.PI / 180, cone = R / Math.tan(half), nt = 120, nr = 10, top = 0.5;
@@ -68,7 +68,7 @@ const drillTool = () => {
   const lift = (th) => { const u = ((th % Math.PI) + Math.PI) % Math.PI; return 0.06 * u / Math.PI; };
   const P = (i, k) => {
     const th = 2 * Math.PI * i / nt, rr = R * k / nr;
-    const z = -0.05 + (rr / R) * cone + lift(th) * (rr / R);
+    const z = -0.35 + (rr / R) * cone + lift(th) * (rr / R);
     return [0.8 + rr * Math.cos(th), 0.8 + rr * Math.sin(th), z];
   };
   const t = [];

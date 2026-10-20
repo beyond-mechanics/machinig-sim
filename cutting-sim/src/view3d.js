@@ -205,7 +205,17 @@ export class View3D {
     const t = new THREE.DataTexture(d, w, 1, THREE.RGBAFormat);
     t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = nb ? THREE.NearestFilter : THREE.LinearFilter;
     t.needsUpdate = true;
-    this.smat.map = t; this.smat.needsUpdate = true; this.lutKey = key;
+    this.smat.map = t; this.lutKey = key;
+    // Bands: thin dark lines where the value crosses a band boundary (a screen-space width from
+    // the derivative of the texture coordinate), as on an FE contour plot.
+    this.smat.onBeforeCompile = (sh) => {
+      if (!nb) return;
+      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+        { float bu = vMapUv.x * ${nb.toFixed(1)}, d = abs(fract(bu + 0.5) - 0.5), fw = max(fwidth(bu), 1e-4);
+          if (bu > 0.5 && bu < ${(nb - 0.5).toFixed(1)}) diffuseColor.rgb *= mix(0.55, 1.0, smoothstep(0.4 * fw, 1.4 * fw, d)); }`);
+    };
+    this.smat.customProgramCacheKey = () => `bands${nb}`;
+    this.smat.needsUpdate = true;
   }
 
   update(f, vals, lo, hi, lut, section, nb = -1) {
