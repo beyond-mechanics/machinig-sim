@@ -239,7 +239,7 @@ export class View3D {
           g.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
           g.setAttribute('color', new THREE.BufferAttribute(r.col, 3));
           g.setIndex(new THREE.BufferAttribute(r.idx, 1));
-          g.computeVertexNormals(); g.computeBoundingSphere();
+          g.setAttribute('normal', new THREE.BufferAttribute(r.nrm, 3)); g.computeBoundingSphere();
           this.surfAt = now; this.surfKey = `${nb}|${section}`; surf = true;
         }
       } else surf = true;

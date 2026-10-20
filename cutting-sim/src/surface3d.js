@@ -47,7 +47,7 @@ export function surfaceNets(f, sel, vals, lo, hi, maxCells = 6e6) {
   }
   const iso = 0.45 * kernelSum(R, dx);
   // One vertex per crossed cube (indexed by its lower corner node).
-  const vid = new Int32Array(n).fill(-1), pos = [], uv = [], col = [];
+  const vid = new Int32Array(n).fill(-1), pos = [], uv = [], col = [], nrm = [];
   const corner = [0, 1, nx, nx + 1, nxy, nxy + 1, nxy + nx, nxy + nx + 1];
   const cx = [0, 1, 0, 1, 0, 1, 0, 1], cy = [0, 0, 1, 1, 0, 0, 1, 1], cz = [0, 0, 0, 0, 1, 1, 1, 1];
   const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
@@ -65,11 +65,16 @@ export function surfaceNets(f, sel, vals, lo, hi, maxCells = 6e6) {
     }
     const fx = sx / cnt, fy = sy / cnt, fz = sz / cnt;
     // Field value and shade at the vertex: trilinear in the cube.
-    let w = 0, wv = 0, wf = 0;
+    // Normal: down the gradient of the kernel sum (trilinear in the cube). Normals averaged over
+    // faces go wrong on chips only a few particles thick, where both sides share vertices.
+    let w = 0, wv = 0, wf = 0, gx = 0, gy = 0, gz = 0;
     for (let q = 0; q < 8; q++) {
-      const b = (cx[q] ? fx : 1 - fx) * (cy[q] ? fy : 1 - fy) * (cz[q] ? fz : 1 - fz), m = a + corner[q];
-      w += b * S[m]; wv += b * Sv[m]; wf += b * Sf[m];
+      const ax = cx[q] ? fx : 1 - fx, ay = cy[q] ? fy : 1 - fy, az = cz[q] ? fz : 1 - fz, b = ax * ay * az, m = a + corner[q], v = S[m];
+      w += b * v; wv += b * Sv[m]; wf += b * Sf[m];
+      gx += (cx[q] ? 1 : -1) * ay * az * v; gy += (cy[q] ? 1 : -1) * ax * az * v; gz += (cz[q] ? 1 : -1) * ax * ay * v;
     }
+    const gl = Math.hypot(gx, gy, gz) || 1;
+    nrm.push(-gx / gl, -gy / gl, -gz / gl);
     vid[a] = pos.length / 3;
     pos.push(x0 + (i + fx) * c, y0 + (j + fy) * c, z0 + (k + fz) * c);
     uv.push(w > 0 ? wv / w : 0, 0.5);
@@ -93,5 +98,5 @@ export function surfaceNets(f, sel, vals, lo, hi, maxCells = 6e6) {
     // z edge (a, a+nxy): cubes in the (x, y) plane.
     if (in0 !== (S[a + nxy] > iso)) quad(a - 1 - nx, a - nx, a, a - 1, !in0);
   }
-  return { pos: new Float32Array(pos), uv: new Float32Array(uv), col: new Float32Array(col), idx: new Uint32Array(idx) };
+  return { pos: new Float32Array(pos), nrm: new Float32Array(nrm), uv: new Float32Array(uv), col: new Float32Array(col), idx: new Uint32Array(idx) };
 }
