@@ -114,4 +114,12 @@ M30`);
   const m = MATERIALS.S50C, ref = cuttingTemperature(m, 0.05, m.vc / 60).tool;
   assert.equal(edgeCycle(ref, 5000, 1, 0.1).onMean, ref);
 }
+// A worn flank cuts on a smaller radius (VB·tan 10°): the wall is left oversize by that much
+{
+  const code = '(STOCK 60 40 20)\nG21 G90\nS8000 M3\nG0 X-6 Y-4.5 Z5\nG1 Z-5 F500\nG1 X66 F800\nG0 Z5\nM30';
+  const left = VB0 => { const sim = new Simulator(); sim.cfg.tool.VB0 = VB0; sim.cfg.material = 'S50C'; sim.load(code, { origin: { x: 0, y: 0, z: 0 } }); sim.speed = 5; while (!sim.done) sim.step(1 / 60); return sim.deviationSummary().ideal.left; };
+  const d = left(0.3) - left(0), want = 0.3 * Math.tan(10 * Math.PI / 180);
+  console.log(`worn tool (VB 0.3 mm): wall left ${(d * 1000).toFixed(0)} µm thicker (VB·tan 10° = ${(want * 1000).toFixed(0)} µm)`);
+  assert.ok(Math.abs(d - want) < 0.015);
+}
 console.log('thermal tests passed');

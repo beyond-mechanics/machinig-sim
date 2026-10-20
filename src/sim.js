@@ -419,7 +419,10 @@ export class Simulator {
       const errVal = Math.hypot(e.x, e.y) * 1e6;
       this.stock.curLine = this.ideal.curLine = this.line || 0;
       this.ideal.stamp(p.x, p.y, p.z, R, tool.type === 'profile' ? 'flat' : tool.type, 0, null, tool.lut || null);
-      frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z, R, tool.type === 'profile' ? 'flat' : tool.type, errVal, { ux: this.u[0], uy: this.u[1], f: (this.fz || 0) * tool.N }, tool.lut || null);
+      // a worn flank cuts on a smaller radius: radial wear = VB·tan(clearance angle), so walls
+      // creep out of size along a long program (a ball nose wears concentrically)
+      const rw = Math.min(0.5 * R, (this.VB || 0) * Math.tan((tool.clearanceDeg ?? this.cfg.tool.clearanceDeg ?? 10) * Math.PI / 180));
+      frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z + (tool.type === 'ball' ? rw : 0), R - rw, tool.type === 'profile' ? 'flat' : tool.type, errVal, { ux: this.u[0], uy: this.u[1], f: (this.fz || 0) * tool.N }, tool.lut || null);
       // the shank and holder move with the deflected tool
       this.checkClearance({ x: p.x + dx, y: p.y + dy, z: p.z }, b.rapid);
       if (this.wall && e.wk) this.stock.markWall(p.x + dx, p.y + dy, R, e.wnx, e.wny, Math.max(0, e.runMeanW * 1e6));
