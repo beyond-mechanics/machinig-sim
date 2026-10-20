@@ -5,7 +5,7 @@ let C = {};
 export function refreshTheme() {
   const cs = getComputedStyle(document.documentElement);
   const v = n => cs.getPropertyValue(n).trim();
-  C = { fg: v('--ink'), mute: v('--ink-mute'), grid: v('--rule'), panel: v('--panel'), a: v('--series-a'), b: v('--series-b'), c: v('--series-c'), accent: v('--accent'), bad: v('--bad'), ok: v('--ok'), mono: v('--font-mono') };
+  C = { fg: v('--ink'), mute: v('--ink-mute'), grid: v('--rule'), panel: v('--panel'), a: v('--series-a'), b: v('--series-b'), c: v('--series-c'), accent: v('--accent'), bad: v('--bad'), ok: v('--ok'), warn: v('--warn'), mono: v('--font-mono') };
 }
 
 function setup(cv) {
@@ -159,7 +159,8 @@ export function drawSpectrum(cv, eng, fn) {
 
 // returns the plotting box so clicks can be mapped back to rpm
 // rest: optional lobes of the tool at rest, drawn dashed behind the speed-dependent ones
-export function drawLobes(cv, lobes, op, rpmRange, rest = null) {
+// td: time-domain limits [{rpm, alim, open}] (stabtd.js), drawn as points joined by a line
+export function drawLobes(cv, lobes, op, rpmRange, rest = null, td = null) {
   const { g, w, h } = setup(cv);
   const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
   const [r0, r1] = rpmRange;
@@ -186,6 +187,12 @@ export function drawLobes(cv, lobes, op, rpmRange, rest = null) {
   }
   g.strokeStyle = C.fg; g.lineWidth = 1.4; g.beginPath();
   env.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke();
+  if (td?.length) {
+    const pts = td.filter(p => p.rpm >= r0 && p.rpm <= r1).sort((a, b) => a.rpm - b.rpm);
+    g.strokeStyle = C.warn; g.fillStyle = C.warn; g.lineWidth = 1.2; g.beginPath();
+    pts.forEach((p, i) => { const x = xs(p.rpm), y = ys(p.alim); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+    for (const p of pts) { g.beginPath(); g.arc(xs(p.rpm), ys(p.alim), p.open ? 4 : 3, 0, 6.3); p.open ? g.stroke() : g.fill(); }
+  }
   // operating point
   if (op.S > 0) {
     const x = xs(op.S), y = ys(op.ap);

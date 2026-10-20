@@ -392,6 +392,31 @@ $('tdLim').onclick = () => {
   }, 30);
 };
 
+// ---- the time-domain limit over the speed range, computed in a worker of its own ----
+/* global __STAB_WORKER_SRC__ */
+let stabWorker = null, tdCurve = null;
+const tdKey = () => { const d = sim.display; return JSON.stringify([sim.cfg.material, sim.cfg.coefs?.[sim.cfg.material] || null, sim.activeTool.D, sim.activeTool.N, sim.activeTool.helixDeg, (d.phiSt ?? 0).toFixed(2), (d.phiEx ?? Math.PI).toFixed(2), sim.cfg.modal, sim.cfg.cuttingNonlinear]); };
+$('tdCurve').onclick = () => {
+  if (typeof __STAB_WORKER_SRC__ !== 'string' || typeof Worker === 'undefined') { $('tdOut').textContent = 'このブラウザでは使えません (Web Worker が必要です)。'; return; }
+  if (!stabWorker) {
+    stabWorker = new Worker(URL.createObjectURL(new Blob([__STAB_WORKER_SRC__], { type: 'text/javascript' })));
+    stabWorker.onmessage = ({ data: r }) => {
+      if (!tdCurve || r.key !== tdCurve.key) return;
+      if (r.done) { updateCharts(); $('tdOut').textContent = `時間領域の限界 (橙の点、白抜きは 20 mm 以上): ${tdCurve.pts.length} 点。線図より上ならプロセスダンピングなどで安定な範囲です。`; $('tdCurve').disabled = false; return; }
+      tdCurve.pts.push({ rpm: r.S, alim: r.alim, open: r.open });
+      updateCharts(); // also when paused
+      $('tdOut').textContent = `時間領域で計算中… ${tdCurve.pts.length} / ${tdCurve.n} 点 (他の操作はそのまま続けられます)`;
+    };
+  }
+  const d = sim.display, arc = [d.phiSt ?? 0, d.phiEx ?? Math.PI], fz = d.fz > 0 ? d.fz : startConditions(sim.mat, sim.activeTool).fz;
+  const [r0, r1] = LOBE_RANGE, n = 18, points = [];
+  for (let i = 0; i < n; i++) { const S = Math.round(r0 * (r1 / r0) ** (i / (n - 1))); points.push({ S, modal: sim.modalNow(S) }); }
+  const t = sim.activeTool, key = tdKey();
+  tdCurve = { key, n, pts: [] };
+  $('tdCurve').disabled = true; $('tdOut').textContent = '時間領域で計算中…';
+  stabWorker.postMessage({ key, points, tool: { N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen }, mat: sim.mat, arc, fz, nonlinear: sim.cfg.cuttingNonlinear });
+};
+
 // ---- coefficients identified from cutting tests ----
 let idLast = null;
 const idTool = () => { const t = sim.activeTool; return { D: t.D, N: t.N, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen, runout: t.runout ?? 0 }; };
@@ -911,7 +936,7 @@ function updateCharts() {
   const lim = alimAt(lobes, S);
   // with speed-dependent dynamics, the diagram of the tool at rest stays as a dashed reference
   const rest = speedDependent(sim.cfg.modal, sim.cfg.spindleSoft) ? sim.lobes(d.phiSt ?? 0, d.phiEx ?? Math.PI, true) : null;
-  lobeBox = drawLobes($('cvLobes'), lobes, { S, ap, stable: ap <= lim }, LOBE_RANGE, rest);
+  lobeBox = drawLobes($('cvLobes'), lobes, { S, ap, stable: ap <= lim }, LOBE_RANGE, rest, tdCurve && tdCurve.key === tdKey() ? tdCurve.pts : null);
   // side-wall roughness: the rougher of the walls this cut generates
   let prof = null;
   if (d.cutting && e.wallSamples && d.fz > 0) {
