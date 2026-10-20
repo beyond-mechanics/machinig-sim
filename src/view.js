@@ -431,6 +431,13 @@ export class View {
     this.chipVariants = [];
     this.chipCap = Math.ceil(MAX_CHIPS / 3);
     this.chipMat = new T.MeshStandardMaterial({ metalness: 0.8, roughness: 0.32, side: T.DoubleSide });
+    // the two faces of a chip differ: the side that slid over the rake face is burnished (bright,
+    // smooth), the free side is the lamellar shear-band surface (matte, a little darker)
+    this.chipMat.onBeforeCompile = sh => {
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <color_fragment>', '#include <color_fragment>\n  if (gl_FrontFacing) diffuseColor.rgb *= 0.78;')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = gl_FrontFacing ? 0.62 : 0.2;');
+    };
     for (let v = 0; v < 3; v++) {
       const mesh = new T.InstancedMesh(new T.BufferGeometry(), this.chipMat, this.chipCap);
       mesh.castShadow = true;
@@ -482,6 +489,9 @@ export class View {
       if (mat.hot && T > 200) { const c = temperColour(T); this._c.setRGB(c[0], c[1], c[2]); }
       else this._c.setRGB(base[0], base[1], base[2]);
       this._c.convertSRGBToLinear();
+      // no two chips catch the light alike (thickness, oxide, oil), and a chip lying in coolant is
+      // wet and darker
+      this._c.multiplyScalar(CHIP_SHADE[i & 255] * (cs.state[i] >= 2 ? 1 - 0.22 * (this.wet?.value || 0) : 1));
       mesh.setColorAt(slot, this._c);
     }
     for (const m of vs) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
@@ -942,6 +952,9 @@ const COATINGS = {
 
 // Temper (oxide film) colour of steel heated to T [°C], sRGB: straw → bronze → purple → blue →
 // grey, then the dark oxide of a chip that glowed
+// per-chip brightness 0.82–1.08 (a fixed hash, so a chip keeps its shade)
+const CHIP_SHADE = Float32Array.from({ length: 256 }, (_, i) => 0.82 + 0.26 * (((i * 2654435761) >>> 0) % 1000) / 1000);
+
 function temperColour(T) {
   const st = [[200, [0.62, 0.62, 0.63]], [230, [0.85, 0.76, 0.52]], [255, [0.72, 0.52, 0.30]], [280, [0.50, 0.33, 0.52]], [300, [0.24, 0.30, 0.58]], [330, [0.38, 0.52, 0.70]], [420, [0.50, 0.52, 0.55]], [650, [0.24, 0.24, 0.26]]];
   if (T >= st[st.length - 1][0]) return st[st.length - 1][1];
