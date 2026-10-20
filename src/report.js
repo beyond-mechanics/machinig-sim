@@ -24,14 +24,15 @@ export class LineReport {
     // mean chip thickness over the cutting time (for feed optimisation)
     if (v.h > 0 && dt > 0) { r.hw += dt; r.h += (v.h - r.h) * dt / r.hw; }
   }
-  toolWear(T, VB) { this.tools.set(T ?? '-', VB); }
+  // flank wear of a tool: [VB now, VB when it first cut in this run] (a tool may start worn)
+  toolWear(T, VB, VB0 = 0) { const k = T ?? '-', t = this.tools.get(k); this.tools.set(k, [VB, t ? t[1] : VB0]); }
 
   // plain data for the main thread: [line, …FIELDS] rows and the wear per tool
   pack() { return { rows: [...this.lines.values()].map(r => [r.line, ...FIELDS.map(k => r[k])]), tools: [...this.tools] }; }
   static unpack(p) {
     const rep = new LineReport();
     for (const row of p?.rows || []) { const r = rep.rec(row[0]); FIELDS.forEach((k, i) => { r[k] = row[i + 1] ?? 0; }); }
-    for (const [T, VB] of p?.tools || []) rep.tools.set(T, VB);
+    for (const [T, VB] of p?.tools || []) rep.tools.set(T, Array.isArray(VB) ? VB : [VB, 0]);
     return rep;
   }
 

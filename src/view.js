@@ -758,6 +758,7 @@ export class View {
     }
     const C = this.pathLine.geometry.attributes.color;
     C.updateRange.offset = 0; C.updateRange.count = -1; C.needsUpdate = true;
+    this.pathFullDirty = true; // until uploaded, a progress update must not narrow the range
   }
 
   // dim the part of the tool path already run (segments before seg), so the rest stands out
@@ -769,7 +770,8 @@ export class View {
     const a = Math.min(k, this.pathDone), b = Math.max(k, this.pathDone);
     const dim = this.pathDim ?? 0.3;
     for (let i = a * 6; i < b * 6; i++) A[i] = i < k * 6 ? B[i] * dim : B[i];
-    C.updateRange.offset = a * 6; C.updateRange.count = (b - a) * 6; C.needsUpdate = true;
+    if (!this.pathFullDirty) { C.updateRange.offset = a * 6; C.updateRange.count = (b - a) * 6; }
+    C.needsUpdate = true;
     this.pathDone = k;
   }
 
@@ -854,6 +856,7 @@ export class View {
     this.camera.lookAt(o.target);
     if (this.pathLine) this.pathLine.visible = this.showPath;
     this.renderer.render(this.scene, this.camera);
+    this.pathFullDirty = false; // the whole path colour buffer went up with this frame
   }
 }
 

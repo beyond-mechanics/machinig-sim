@@ -60,3 +60,8 @@ import { MATERIALS } from '../src/materials.js';
   assert.ok(peak(b.report) < 1.15 * target, 'no line much above the target');
 }
 console.log('feedopt tests passed');
+// F words with a trailing decimal point (F150.) and a leading one (F.5) keep a valid number
+{
+  const out = rewriteFeeds('G1 X10 F100.\nG1 X20', new Set([1, 2]), new Map([[1, 1.255], [2, 1.255]])).split('\n');
+  assert.deepEqual(out, ['G1 X10 F125.5', 'G1 X20']);
+}

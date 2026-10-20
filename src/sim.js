@@ -121,6 +121,7 @@ export class Simulator {
   }
 
   reset() {
+    this.lastCutLine = null;
     const s = this.stockSize;
     this.stock = new Stock(s.w, s.l, s.h, this.stockCell || this.cfg.cell);
     if (this.baseH && this.baseH.length === this.stock.H.length) this.stock.H.set(this.baseH);
@@ -663,7 +664,7 @@ export class Simulator {
     });
     // the frame's cutting statistics belong to the line that cut (the frame may end on a retract)
     if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.cycle?.max ?? this.temp.tool, stress: stress.vm, swing: this.temp.cycle?.swing || 0, h: st.sumB > 0 ? st.sumHb / st.sumB : 0 }, d.state, fs.cutTime);
-    if (this.activeT !== undefined) this.report.toolWear(this.activeT, this.VB);
+    if (this.activeT !== undefined) this.report.toolWear(this.activeT, this.VB, this.activeTool?.VB0 ?? this.cfg.tool.VB0 ?? 0);
     if (this.VB > VB_LIMIT) this.alert('wear', `逃げ面摩耗 VB ${this.VB.toFixed(2)} mm: 工具寿命 (VB ${VB_LIMIT} mm) を超過`);
     if (cutting && this.temp.tool > 900) this.alert('heat', `刃先温度 ${this.temp.tool.toFixed(0)} °C: 拡散摩耗・刃先の塑性変形が急増する領域`);
     if (stress.vm > 1500) this.alert('stress', '工具応力が許容値(目安1500 MPa)を超過: 折損リスク');

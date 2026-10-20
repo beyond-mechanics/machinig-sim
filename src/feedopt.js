@@ -70,7 +70,7 @@ export function rewriteFeeds(text, feedLines, factor) {
   const src = text.split('\n'), out = [];
   let progF = null, outF = null;   // modal F as programmed and as written out
   src.forEach((line, i) => {
-    const n = i + 1, code = stripComments(line), m = code.match(/F\s*([-+]?\d*\.?\d+)/i);
+    const n = i + 1, code = stripComments(line), m = code.match(/F\s*([-+]?(?:\d+\.?\d*|\.\d+))/i); // F100, F100., F.5
     if (m) progF = +m[1];
     if (!feedLines.has(n) || progF === null) {
       if (m) outF = progF;

@@ -51,6 +51,8 @@ function loadProgram() {
   const setup = stockSetup();
   host.load($('code').value, setup);
   codeLines = $('code').value.split('\n');
+  // a feed optimisation belongs to the program it was made from
+  { foText = null; $('foLoad').disabled = $('foSave').disabled = true; $('foOut').innerHTML = ''; }
   baseS = firstSpindle(sim.path) || 12000;
   sim.cfg.spindleOverride = +$('ovS').value / baseS;
   host.config();
@@ -388,7 +390,7 @@ $('idRun').onclick = () => {
 $('idApply').onclick = () => {
   if (!idLast || idLast.key !== sim.cfg.material) return;
   const c = idLast.r.coefs, r1 = v => Math.round(v * 10) / 10;
-  sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [idLast.key]: { Ktc: Math.round(c.Ktc), Krc: Math.round(c.Krc), Kac: Math.round(c.Kac), Kte: r1(c.Kte), Kre: r1(c.Kre), Kae: r1(c.Kae), source: '試験から同定' } };
+  sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [idLast.key]: { Ktc: Math.round(c.Ktc), Krc: Math.round(c.Krc), Kac: Math.round(c.Kac), Kte: r1(c.Kte), Kre: r1(c.Kre), Kae: r1(c.Kae), mc: idMc(), source: '試験から同定' } };
   host.config(true); updateMatHint(); showJc();
 };
 $('coefReset').onclick = () => {
@@ -748,7 +750,7 @@ function lineStart(n) {
 const BAD = new Set(['びびり', '応力超過']);
 function currentReport() { return host.threaded ? (sim.reportPack ? LineReport.unpack(sim.reportPack) : null) : sim.report; }
 let reportShown = '';
-const partsPerTool = VB => { const n = Math.floor(VB_LIMIT / VB); return n > 9999 ? '1 万' : n.toLocaleString(); };
+const partsPerTool = (VB, VB0 = 0) => { const n = Math.floor((VB_LIMIT - VB0) / (VB - VB0)); return n > 9999 ? '1 万' : n.toLocaleString(); };
 function updateReport() {
   const rep = currentReport();
   if (!rep || !rep.lines.size) {
@@ -770,7 +772,7 @@ function updateReport() {
     ['最大工具応力', r.peakStress ? `${r.peakStress.stress.toFixed(0)} MPa${at(r.peakStress)}` : '—'],
     // wear per run, and how many parts the tool lasts at this rate (flank wear grows about
     // linearly with the contact time in the wear law, so the parts scale with VB_LIMIT / VB)
-    ...r.tools.map(([T, VB]) => [`摩耗 ${T === '-' ? '工具' : 'T' + T}`, `VB ${(VB * 1000).toFixed(1)} µm${sim.done && VB > 1e-6 ? ` · 約 ${partsPerTool(VB)} 個/本` : ''}`]),
+    ...r.tools.map(([T, [VB, VB0]]) => [`摩耗 ${T === '-' ? '工具' : 'T' + T}`, `VB ${(VB * 1000).toFixed(1)} µm${sim.done && VB - VB0 > 1e-6 ? ` · 約 ${partsPerTool(VB, VB0)} 個/本` : ''}`]),
   ];
   const dl = $('rSum'); dl.innerHTML = '';
   for (const [k, v] of items) { const d = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dd.title = v; d.append(dt, dd); dl.appendChild(d); }
@@ -823,7 +825,7 @@ $('foRun').onclick = () => {
   const opt = optimizeFeeds(rep, sim.mat, { Ftarget: target, maxUp: +$('foUp').value, maxDown: +$('foDown').value, stressLimit: 0.8 * ALLOWABLE_STRESS, nonlinear: sim.cfg.cuttingNonlinear });
   const feedLines = new Set(sim.path.filter(p => !p.rapid).map(p => p.line));
   const factor = new Map([...opt.lines].map(([l, o]) => [l, o.k]));
-  foText = rewriteFeeds($('code').value, feedLines, factor);
+  foText = rewriteFeeds(codeLines.join('\n'), feedLines, factor); // the program that was run, not later edits
   const changed = [...opt.lines].filter(([, o]) => o.k !== 1).sort((a, b) => a[0] - b[0]);
   const up = changed.filter(([, o]) => o.k > 1).length, down = changed.length - up;
   const dt = opt.time1 - opt.time0;
