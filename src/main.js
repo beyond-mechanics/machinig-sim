@@ -812,6 +812,8 @@ function lineStart(n) {
 const BAD = new Set(['びびり', '応力超過']);
 function currentReport() { return host.threaded ? (sim.reportPack ? LineReport.unpack(sim.reportPack) : null) : sim.report; }
 let reportShown = '';
+// a finished run kept as the reference the next runs are compared with
+let baseline = null, lastNums = null;
 const partsPerTool = (VB, VB0 = 0) => { const n = Math.floor((VB_LIMIT - VB0) / (VB - VB0)); return n > 9999 ? '1 万' : n.toLocaleString(); };
 function updateReport() {
   const rep = currentReport();
@@ -836,8 +838,22 @@ function updateReport() {
     // linearly with the contact time in the wear law, so the parts scale with VB_LIMIT / VB)
     ...r.tools.map(([T, [VB, VB0]]) => [`摩耗 ${T === '-' ? '工具' : 'T' + T}`, `VB ${(VB * 1000).toFixed(1)} µm${sim.done && VB - VB0 > 1e-6 ? ` · 約 ${partsPerTool(VB, VB0)} 個/本` : ''}`]),
   ];
+  // numbers to compare against a saved run (all better when lower)
+  const nums = { 加工時間: r.time, うち切削: r.cut, びびりの時間: r.chatterShare * 100, 最大切削抵抗: r.peakF?.F, 最大振動: r.peakVib?.vib, 最高刃先温度: r.peakTemp?.temp, 最大工具応力: r.peakStress?.stress };
+  for (const [T, [VB, VB0]] of r.tools) nums[`摩耗 ${T === '-' ? '工具' : 'T' + T}`] = (VB - VB0) * 1000;
+  lastNums = { nums, name: `${$('gcInfo').dataset.file || SAMPLES[$('sample').value]?.name || 'プログラム'} · ${Math.round(sim.display.S || +$('ovS').value)} min⁻¹`.slice(0, 48), mat: sim.mat.name };
   const dl = $('rSum'); dl.innerHTML = '';
-  for (const [k, v] of items) { const d = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dd.title = v; d.append(dt, dd); dl.appendChild(d); }
+  for (const [k, v] of items) {
+    const d = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dd.title = v; d.append(dt, dd);
+    const b = baseline?.nums[k], c = nums[k];
+    if (b != null && c != null && sim.done) {
+      const cmp = document.createElement('span'), rel = b > 1e-9 ? (c - b) / b : 0;
+      cmp.className = `cmp ${Math.abs(rel) < 0.02 ? '' : rel < 0 ? 'better' : 'worse'}`;
+      cmp.textContent = `基準 ${b.toFixed(b < 10 ? 1 : 0)} → ${rel === 0 ? '±0' : `${rel > 0 ? '+' : ''}${(rel * 100).toFixed(0)} %`}`;
+      dd.title += ` (基準: ${baseline.name})`; dd.appendChild(cmp);
+    }
+    dl.appendChild(d);
+  }
   const tb = $('rTable').tBodies[0]; tb.innerHTML = '';
   for (const it of r.issues.slice(0, 30)) {
     const tr = document.createElement('tr'); tr.tabIndex = 0;
@@ -868,6 +884,12 @@ function gotoLine(n) {
   ta.focus(); ta.setSelectionRange(a, a + (lines[n - 1] || '').length);
   ta.scrollTop = Math.max(0, (n - 4) * parseFloat(getComputedStyle(ta).lineHeight || '16'));
 }
+$('rBase').onclick = () => {
+  if (baseline) { baseline = null; $('rBase').textContent = 'この結果を比較の基準にする'; }
+  else if (lastNums && sim.done) { baseline = JSON.parse(JSON.stringify(lastNums)); $('rBase').textContent = `比較の基準を外す (${baseline.name})`; }
+  else { $('rHint').textContent = 'プログラムを最後まで計算してから基準にしてください。'; return; }
+  reportShown = ''; updateReport();
+};
 $('rCsv').onclick = async () => {
   const rep = currentReport(); if (!rep) return;
   const name = ($('gcInfo').dataset.file || 'program').replace(/\.[^.]+$/, '') + '_report.csv', text = rep.csv(codeLines);
