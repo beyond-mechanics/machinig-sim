@@ -1053,6 +1053,14 @@ $('rCsv').onclick = async () => {
   a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
+// ---------- first-visit guide (dismissed once per browser) ----------
+{
+  let seen = false;
+  try { seen = localStorage.getItem('machsim.guide') === '1'; } catch { /* storage blocked */ }
+  $('guide').hidden = seen;
+  $('guideClose').onclick = () => { $('guide').hidden = true; try { localStorage.setItem('machsim.guide', '1'); } catch { /* storage blocked */ } };
+}
+
 // ---------- feed optimisation ----------
 let foText = null, foQ = 1; // foQ: spindle factor of a spindle optimisation (applied to the speed slider too)
 $('foRun').onclick = () => {

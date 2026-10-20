@@ -103,6 +103,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 .prose ul { padding-left: 18px; }
 .prose code { font: 12px var(--font-mono); }
 
+.guide { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 10px 14px; border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel); font-size: 13px; line-height: 1.6; }
+.guide[hidden] { display: none; }
+.guide button { flex: none; font-size: 12px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
 .tile { background: var(--panel); padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
 .tile .k { font-size: 11px; letter-spacing: 0.06em; color: var(--ink-mute); }
@@ -398,6 +401,10 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     </aside>
   </div>
 
+  <section class="guide" id="guide" aria-label="はじめての方へ" hidden>
+    <div><b>はじめての方へ</b> — ① <b>▶ 再生</b> でデモが動きます (スペースキーでも)。② すぐ下の数字のタイルが今の切削抵抗・振動・温度・摩耗。③ さらに下の <b>加工レポート</b> に注意が必要な行と対策、<b>送り・回転数の最適化</b> があります。④ 自分の加工は「プログラム」タブで NC ファイルと素材 (STL / STEP) を開き、原点を 3D 画面のクリックで指定。⑤ モデルの説明は「モデル解説」タブ。</div>
+    <button id="guideClose" aria-label="閉じる">閉じる</button>
+  </section>
   <section class="tiles" aria-label="計測値">
     <div class="tile"><span class="k">切削抵抗 XY</span><span class="v" id="vF">0<small>N</small></span><span class="s" id="sF">最大 0 N · 軸方向 0 N</span></div>
     <div class="tile"><span class="k">主軸トルク / 動力</span><span class="v" id="vT">0.00<small>N·m</small></span><span class="s" id="sT">0.00 kW</span></div>
