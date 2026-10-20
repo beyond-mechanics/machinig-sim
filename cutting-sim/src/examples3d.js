@@ -59,13 +59,13 @@ const millTool = () => {
   return t;
 };
 
-// 3. Drilling: work 1.2 × 1.2 × 0.55 mm, top at z = 0; a φ1 straight-flute two-lip drill (118°) sunk into the work at
+// 3. Drilling: work 1.4 × 1.4 × 0.55 mm (side walls 0.2 mm, held as in a vise), top at z = 0; a φ1 two-lip twist drill (118°) sunk into the work at
 // (0.8, 0.8) so that the whole lip cuts (tip 0.32 mm deep, the outer corners 0.02 mm; the tip stays 0.16 mm
 // above the bottom, where a clamped plug would carry the thrust), feeding −z.
-const drillWork = () => box(0.2, 0.2, -0.55, 1.4, 1.4, 0);
+const drillWork = () => box(0.1, 0.1, -0.55, 1.5, 1.5, 0);
 const drillTool = () => {
   const R = 0.5, Rc = 0.4 * R, cot = 1 / Math.tan(59 * Math.PI / 180), tip = -0.32, top = 0.5, nt = 180, nr = 12;
-  // Straight-flute two-lip drill turning clockwise (M03): the cross-section is the end mill's,
+  // Two-lip twist drill (30° helix above the point) turning clockwise (M03): the cross-section is the end mill's,
   // a land at full radius behind each lip and a deep flute ahead of it, so the chip has room to
   // leave upwards. The point is a 118° cone over that section; behind each lip it is lifted
   // (lip relief, more than the feed per lip everywhere, also near the centre, or the flank rubs),
@@ -80,18 +80,25 @@ const drillTool = () => {
     const th = 2 * Math.PI * i / nt, u = U(th), s = k / nr, rr = s * sect(u);
     return [0.8 + rr * Math.cos(th), 0.8 + rr * Math.sin(th), tip + rr * cot + (0.15 * Math.min(1, 6 * s) + 0.2 * s) * u / Math.PI];
   };
-  const T = (i) => { const th = 2 * Math.PI * i / nt, rr = sect(U(th)); return [0.8 + rr * Math.cos(th), 0.8 + rr * Math.sin(th), top]; };
+  // Body ring k (0: the point's rim, nz: the top): the section turned by the helix, −(z − z₀)·tan β / R
+  // above the rim (right-hand helix on a clockwise tool, so the chip climbs the flute).
+  const nz = 16, z0 = tip + R * cot, tb = Math.tan(30 * Math.PI / 180) / R;
+  const B = (i, k) => {
+    if (k === 0) return P(i, nr);
+    const th = 2 * Math.PI * i / nt, zr = P(i, nr)[2], z = zr + (top - zr) * k / nz, tw = -Math.max(0, z - z0) * tb;
+    const rr = sect(U(th)); return [0.8 + rr * Math.cos(th + tw), 0.8 + rr * Math.sin(th + tw), z];
+  };
   const t = [];
   for (let k = 0; k < nr; k++) for (let i = 0; i < nt; i++) {
     const j = (i + 1) % nt;
     if (k === 0) t.push(...P(i, 0), ...P(i, 1), ...P(j, 1));
     else t.push(...P(i, k), ...P(i, k + 1), ...P(j, k + 1), ...P(i, k), ...P(j, k + 1), ...P(j, k));
   }
-  // Body: the fluted section from the point's rim up to `top`, closed by a flat cap.
+  // Body: the fluted, twisted section from the point's rim up to `top`, closed by a flat cap.
   for (let i = 0; i < nt; i++) {
-    const j = (i + 1) % nt, a = P(i, nr), b = P(j, nr), at = T(i), bt = T(j);
-    t.push(...a, ...at, ...bt, ...a, ...bt, ...b);
-    t.push(0.8, 0.8, top, ...bt, ...at);
+    const j = (i + 1) % nt;
+    for (let k = 0; k < nz; k++) { const a = B(i, k), b = B(j, k), at = B(i, k + 1), bt = B(j, k + 1); t.push(...a, ...at, ...bt, ...a, ...bt, ...b); }
+    t.push(0.8, 0.8, top, ...B(j, nz), ...B(i, nz));
   }
   return t;
 };
@@ -101,5 +108,5 @@ const mk = (f) => () => orient(Float64Array.from(f()));
 export const EXAMPLES = {
   plane: { name: '平削り（すくい角 5°、h = 0.1 mm）', tool: mk(planeTool), work: mk(planeWork), cfg: { motion: 'linear', travel: 0.6, dxUm: 25 } },
   mill: { name: 'エンドミル φ2・2枚刃・ねじれ 30°（ae 0.2 × ap 0.15 mm、fz 0.1）', tool: mk(millTool), work: mk(millWork), cfg: { motion: 'mill', z: 2, fz: 0.1, angle: 70, dxUm: 20, axis: [1.0, -0.8] } },
-  drill: { name: 'ドリル φ1・先端角 118°・2枚刃（ストレート溝）', tool: mk(drillTool), work: mk(drillWork), cfg: { motion: 'drill', fr: 0.2, angle: 120, dxUm: 30, axis: [0.8, 0.8] } },
+  drill: { name: 'ドリル φ1・先端角 118°・2枚刃・ねじれ 30°', tool: mk(drillTool), work: mk(drillWork), cfg: { motion: 'drill', fr: 0.2, angle: 120, dxUm: 30, axis: [0.8, 0.8], hold: 'sides' } },
 };

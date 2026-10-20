@@ -45,7 +45,7 @@ export const DEFAULTS3D = {
   // 'drill', spin −1 (M03, clockwise seen from above) or +1, particle spacing [µm], travel [mm]
   // (linear) or rotation [°] (mill, drill), feed per tooth fz and flutes z (mill), feed per turn
   // fr [mm] (drill), tool axis point [x, y] [m] (default: the middle of the tool's box).
-  toolTris: null, workTris: null, motion: 'mill', spin: -1, dxUm: 20, travel: 0.5, angle: 180, fr: 0.05, axis: null,
+  toolTris: null, workTris: null, hold: 'bottom', motion: 'mill', spin: -1, dxUm: 20, travel: 0.5, angle: 180, fr: 0.05, axis: null,
 };
 
 const PI = Math.PI, DEG = PI / 180;
@@ -205,12 +205,15 @@ export class Cutting3D {
       const sx = c.motion === 'mill' ? c.fz * 1e-3 : 0, sz = c.motion === 'drill' ? 0.5 * c.fr * 1e-3 : 0;
       inCavity = (x, y, z) => { const k = Math.floor((z - sz - tb0[2]) / ez); return k >= 0 && k < nb && env[k] > 0 && Math.hypot(x + sx - this.ax, y - this.ay) < env[k] + 0.5 * dx; };
     }
-    // Supports: the bottom three layers, except where the tool will pass (a side mill through the
+    // Supports: the bottom three layers (and the side faces), except where the tool will pass (a side mill through the
     // whole thickness, a tool that runs along the bottom), which must stay free to be cut.
     const swept = this.sweptBy(tb0, dx);
+    const sides = c.hold === 'sides';   // also the four side faces, as in a vise
     for (let i = 0; i < fill.length; i += 3) {
       if (inCavity(fill[i], fill[i + 1], fill[i + 2])) { cavity++; continue; }
-      pts.push(fill[i], fill[i + 1], fill[i + 2], fill[i + 2] < wb[2] + 3 * dx && !swept(fill[i], fill[i + 1], fill[i + 2]) ? 1 : 0);
+      const x = fill[i], y = fill[i + 1], z = fill[i + 2], m = 3 * dx;
+      const face = z < wb[2] + m || (sides && (x < wb[0] + m || x > wb[3] - m || y < wb[1] + m || y > wb[4] - m));
+      pts.push(x, y, z, face && !swept(x, y, z) ? 1 : 0);
     }
     this.cavity = cavity;
     this.L = wb[3] - wb[0]; this.H = wb[5] - wb[2]; this.bz = wb[4] - wb[1]; this.wb = wb;

@@ -89,7 +89,7 @@ function readCfg() {
     const toM = (t, o) => { if (!t) return null; const r = new Float64Array(t.length); for (let i = 0; i < t.length; i++) r[i] = t[i] * 1e-3 + o[i % 3]; return r; };
     return {
       mode, mat: matSel.value, vc: num('vc'), mu: num('mu'), friction: $('fric').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
-      motion: mot, spin: parseFloat($('sspin').value), z: num('sflutes'), fz: num('sfz'), fr: num('sfr'), travel: num('stravel'), angle: num('sangle'), dxUm: num('sdx'),
+      motion: mot, spin: parseFloat($('sspin').value), z: num('sflutes'), fz: num('sfz'), fr: num('sfr'), travel: num('stravel'), angle: num('sangle'), dxUm: num('sdx'), hold: $('shold').value,
       toolTris: toM(stl.tool && stl.tool.t, off), workTris: toM(stl.work && stl.work.t, [0, 0, 0]), maxN: STL_MAX, axis: stlAxis() && stlAxis().map((v) => v * 1e-3),
     };
   }
@@ -109,7 +109,7 @@ function readCfg() {
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'fric', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
   'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual', 'preheat',
-  'sspin', 'sflutes', 'sfz', 'sfr', 'stravel', 'sangle']) $(id).addEventListener('change', reset);
+  'sspin', 'sflutes', 'sfz', 'sfr', 'stravel', 'sangle', 'shold']) $(id).addEventListener('change', reset);
 
 // ---- STL mode: an imported tool and work (closed meshes, z up), or one of the built-in examples ----
 const stl = { tool: null, work: null, ok: false };   // tool / work: { t: triangles [mm], name, open, tri }
@@ -145,6 +145,7 @@ $('sex').addEventListener('change', () => {
   if (c.fz) $('sfz').value = c.fz;
   if (c.fr) $('sfr').value = c.fr;
   for (const id of ['sox', 'soy', 'soz']) $(id).value = 0;
+  $('shold').value = c.hold || 'bottom';
   $('sax').value = c.axis ? c.axis[0] : ''; $('say').value = c.axis ? c.axis[1] : '';
   showShapeRows(); stlInfo(); reset();
 });
