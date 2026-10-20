@@ -4,13 +4,13 @@
 // to the line being worked on at the end of the frame (at high playback speeds a frame spans
 // several lines).
 
-const FIELDS = ['t', 'cut', 'F', 'vib', 'defl', 'temp', 'stress', 'chatter', 'marginal', 'swing', 'h', 'hw'];
+const FIELDS = ['t', 'cut', 'F', 'vib', 'defl', 'temp', 'stress', 'chatter', 'marginal', 'swing', 'h', 'hw', 'pst', 'pex', 'ap'];
 
 export class LineReport {
   constructor() { this.lines = new Map(); this.tools = new Map(); }
   rec(line) {
     let r = this.lines.get(line);
-    if (!r) { r = { line, t: 0, cut: 0, F: 0, vib: 0, defl: 0, temp: 0, stress: 0, chatter: 0, marginal: 0, swing: 0, h: 0, hw: 0 }; this.lines.set(line, r); }
+    if (!r) { r = { line, t: 0, cut: 0, F: 0, vib: 0, defl: 0, temp: 0, stress: 0, chatter: 0, marginal: 0, swing: 0, h: 0, hw: 0, pst: 0, pex: Math.PI, ap: 0 }; this.lines.set(line, r); }
     return r;
   }
   // machine time on a line (cutting or not)
@@ -23,6 +23,8 @@ export class LineReport {
     if (state === 'chatter') r.chatter += dt; else if (state === 'marginal') r.marginal += dt;
     // mean chip thickness over the cutting time (for feed optimisation)
     if (v.h > 0 && dt > 0) { r.hw += dt; r.h += (v.h - r.h) * dt / r.hw; }
+    // engagement of the heaviest cut on the line (for the stability advice)
+    if (v.ap >= r.ap && v.pex > v.pst) { r.ap = v.ap; r.pst = v.pst; r.pex = v.pex; }
   }
   // flank wear of a tool: [VB now, VB when it first cut in this run] (a tool may start worn)
   toolWear(T, VB, VB0 = 0) { const k = T ?? '-', t = this.tools.get(k); this.tools.set(k, [VB, t ? t[1] : VB0]); }

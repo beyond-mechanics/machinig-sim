@@ -23,7 +23,12 @@ export function adviceFor(r, ctx) {
   const { mat, limits } = ctx;
   const has = w => r.why.includes(w);
   // chatter first: it is set by the depth of cut and the speed, and it drives the other peaks
-  if (has('びびり')) out.push('切込みを減らすか、安定限界線図の山 (安定ポケット) へ主軸回転を移す (加工条件タブの「安定ポケットに合わせる」)');
+  if (has('びびり')) {
+    // with the lobes of the line's engagement: the limit here and a better speed nearby
+    const st = ctx.stability?.(r, ctx.S);
+    if (st && r.ap > 0) out.push(`この係合 (ap ${r.ap.toFixed(2)} mm) の安定限界は ${ctx.S ? `S${Math.round(ctx.S)} で ` : ''}${st.alim.toFixed(2)} mm: 切込みを ${st.alim.toFixed(2)} mm 以下に${st.pocketS ? `、または S${st.pocketS} (限界 ${st.pocketA.toFixed(2)} mm) へ` : ''}`);
+    else out.push('切込みを減らすか、安定限界線図の山 (安定ポケット) へ主軸回転を移す (加工条件タブの「安定ポケットに合わせる」)');
+  }
   else if (has('振動注意')) out.push('安定限界に近い: 切込みを 1〜2 割減らすか、安定ポケットへ主軸回転を移す');
   if (has('応力超過') || has('応力高め')) {
     const target = 0.8 * limits.stress;

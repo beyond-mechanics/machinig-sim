@@ -669,7 +669,7 @@ export class Simulator {
       state: !cutting ? 'idle' : (d.chatterIdx > 0.55 && d.once > 3) ? 'chatter' : (d.chatterIdx > 0.35 && d.once > 1.5) ? 'marginal' : 'stable',
     });
     // the frame's cutting statistics belong to the line that cut (the frame may end on a retract)
-    if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.cycle?.max ?? this.temp.tool, stress: stress.vm, swing: this.temp.cycle?.swing || 0, h: st.sumB > 0 ? st.sumHb / st.sumB : 0 }, d.state, fs.cutTime);
+    if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.cycle?.max ?? this.temp.tool, stress: stress.vm, swing: this.temp.cycle?.swing || 0, h: st.sumB > 0 ? st.sumHb / st.sumB : 0, ap: this.ap || 0, pst: d.phiSt ?? 0, pex: d.phiEx ?? Math.PI }, d.state, fs.cutTime);
     if (this.activeT !== undefined) this.report.toolWear(this.activeT, this.VB, this.activeTool?.VB0 ?? this.cfg.tool.VB0 ?? 0);
     if (this.VB > VB_LIMIT) this.alert('wear', `逃げ面摩耗 VB ${this.VB.toFixed(2)} mm: 工具寿命 (VB ${VB_LIMIT} mm) を超過`);
     if (cutting && this.temp.tool > 900) this.alert('heat', `刃先温度 ${this.temp.tool.toFixed(0)} °C: 拡散摩耗・刃先の塑性変形が急増する領域`);

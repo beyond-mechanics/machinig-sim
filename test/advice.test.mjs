@@ -34,3 +34,9 @@ const mat = MATERIALS.SUS304;
   assert.equal(a.length, 1); assert.match(a[0], /安定ポケット/);
 }
 console.log('advice tests passed');
+// chatter with the line's lobes at hand: the limit and a better speed in numbers
+{
+  const r = { why: ['びびり'], stress: 300, h: 0.03, temp: 300, swing: 0, ap: 2, pst: 0, pex: Math.PI };
+  const a = adviceFor(r, { mat, S: 8000, F: 1000, D: 10, limits, stability: () => ({ alim: 0.7, pocketS: 9500, pocketA: 2.4 }) });
+  assert.match(a[0], /0\.70 mm/); assert.match(a[0], /S9500/);
+}

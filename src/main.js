@@ -822,6 +822,22 @@ function currentReport() { return host.threaded ? (sim.reportPack ? LineReport.u
 let reportShown = '';
 // a finished run kept as the reference the next runs are compared with
 let baseline = null, lastNums = null;
+// what the advice needs about a line: its speed and feed, and its stability lobes
+function adviceCtx(line) {
+  const pt = sim.path.find(p => p.line === line && !p.rapid);
+  return {
+    mat: sim.mat, nonlinear: sim.cfg.cuttingNonlinear, S: pt ? pt.S * (sim.cfg.spindleOverride ?? 1) : 0, F: pt ? pt.F * (sim.cfg.feedOverride ?? 1) : 0,
+    D: sim.activeTool.D, rakeDeg: sim.cfg.tool.rakeDeg ?? 10, limits: { stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK },
+    stability: (r, S) => {
+      if (!(S > 0) || !(r.pex > r.pst)) return null;
+      const lob = sim.lobes(r.pst, r.pex), alim = alimAt(lob, S);
+      if (!(alim < Infinity)) return null;
+      let pocketS = 0, pocketA = alim;
+      for (let s2 = Math.max(2000, S * 0.75); s2 <= Math.min(30000, S * 1.25); s2 += 50) { const a = alimAt(lob, s2); if (a > pocketA && a < Infinity) { pocketA = a; pocketS = s2; } }
+      return { alim, pocketS: pocketA > 1.3 * alim && pocketA > r.ap ? Math.round(pocketS / 10) * 10 : 0, pocketA };
+    },
+  };
+}
 const partsPerTool = (VB, VB0 = 0) => { const n = Math.floor((VB_LIMIT - VB0) / (VB - VB0)); return n > 9999 ? '1 万' : n.toLocaleString(); };
 function updateReport() {
   const rep = currentReport();
@@ -874,7 +890,7 @@ function updateReport() {
     for (const w of it.why) { const sp = document.createElement('span'); sp.className = `tag ${BAD.has(w) ? 'bad' : 'warn'}`; sp.textContent = w; tags.appendChild(sp); }
     td(it.F.toFixed(0), 'n'); td(it.vib.toFixed(1), 'n'); td(it.temp > 25 ? it.temp.toFixed(0) : '—', 'n'); td(it.stress.toFixed(0), 'n'); td(it.cut.toFixed(2), 'n');
     // what to change, with numbers where the models give them
-    const pt = sim.path.find(p => p.line === it.line && !p.rapid), adv = adviceFor(it, { mat: sim.mat, nonlinear: sim.cfg.cuttingNonlinear, S: pt ? pt.S * (sim.cfg.spindleOverride ?? 1) : 0, F: pt ? pt.F * (sim.cfg.feedOverride ?? 1) : 0, D: sim.activeTool.D, rakeDeg: sim.cfg.tool.rakeDeg ?? 10, limits: { stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK } });
+    const adv = adviceFor(it, adviceCtx(it.line));
     const ac = td('', 'advice');
     adv.forEach((a, i) => { if (i) ac.appendChild(document.createElement('br')); ac.appendChild(document.createTextNode(a)); });
     const go = () => gotoLine(it.line);
@@ -911,7 +927,7 @@ function setupSheet() {
   const usedT = [...new Set(sim.path.map(p => p.tool))];
   const wear = new Map(sum?.tools || []);
   const toolRows = usedT.map(T => { const t = sim.toolFor(T ?? null), w = wear.get(T ?? '-'); return `<tr><td>${T == null ? '(T 番号なし)' : 'T' + T}</td><td>φ${+t.D.toFixed(3)} ${t.type === 'ball' ? 'ボール' : t.type === 'bull' ? 'ラジアス' : 'フラット'} ${t.N} 枚刃</td><td>${+t.stickout.toFixed(1)}</td><td>${esc(t.holderName || '')}</td><td>${w ? `${(w[1] * 1000).toFixed(1)} → ${(w[0] * 1000).toFixed(1)} µm${w[0] - w[1] > 1e-6 ? ` (約 ${partsPerTool(w[0], w[1])} 個/本)` : ''}` : '—'}</td></tr>`; }).join('');
-  const issues = (sum?.issues || []).slice(0, 12).map(it => `<tr><td>${it.line}</td><td class="code">${esc((codeLines[it.line - 1] || '').trim())}</td><td>${esc(it.why.join('・'))}</td><td>${esc(adviceFor(it, { mat: sim.mat, nonlinear: sim.cfg.cuttingNonlinear, S: 0, F: 0, D: sim.activeTool.D, limits: { stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK } })[0] || '')}</td></tr>`).join('');
+  const issues = (sum?.issues || []).slice(0, 12).map(it => `<tr><td>${it.line}</td><td class="code">${esc((codeLines[it.line - 1] || '').trim())}</td><td>${esc(it.why.join('・'))}</td><td>${esc(adviceFor(it, adviceCtx(it.line)).join(' / '))}</td></tr>`).join('');
   view.render();
   let img = '';
   try { img = view.canvas.toDataURL('image/jpeg', 0.85); } catch { /* tainted or lost context */ }
