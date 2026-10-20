@@ -434,8 +434,11 @@ $('oxApply').onclick = () => {
 function showStart() {
   if (!$('scBox').open) return;
   const t = sim.activeTool, mat = sim.mat, rows = [];
-  for (const [label, ae] of [['溝 (全幅)', t.D], ['側面 ae 0.3D', 0.3 * t.D], ['高速 ae 0.1D', 0.1 * t.D]]) {
-    const c = startConditions(mat, t, ae), lob = sim.lobes(c.arc[0], c.arc[1]);
+  const cases = [['溝 (全幅)', t.D], ['側面 ae 0.3D', 0.3 * t.D], ['高速 ae 0.1D', 0.1 * t.D]];
+  // a ball nose finishing shallow: the speed from its effective diameter
+  if (t.type === 'ball') cases.push([`仕上げ ap ${(0.05 * t.D).toFixed(2)} (実効径)`, 0.1 * t.D, 0.05 * t.D]);
+  for (const [label, ae, apB] of cases) {
+    const c = startConditions(mat, t, ae, apB || 0), lob = sim.lobes(c.arc[0], c.arc[1]);
     const a = alimAt(lob, c.S);
     // a stable pocket close by, if it allows clearly more
     let bs = c.S, ba = a;
@@ -445,7 +448,7 @@ function showStart() {
   }
   const c0 = startConditions(mat, t);
   $('scOut').innerHTML = `<table class="oxtable"><thead><tr><th></th><th>S min⁻¹</th><th>fz mm/刃</th><th>F mm/min</th><th>びびらない ap mm</th></tr></thead><tbody>${rows.join('')}</tbody></table>
-    <p class="hint">切削速度 ${Math.round(c0.Vc)} m/min (推奨 ${mat.vc} m/min${Math.abs(c0.Vc - mat.vc) > 1 ? '、主軸の範囲で制限' : ''})、φ${t.D} ${t.N} 枚刃。fz は超硬エンドミルの溝加工の目安で、径方向切込みが小さいときは最大切りくず厚さが同じになるよう上げています (切りくずの薄肉化)。ap はいまの動特性の安定限界線図から (低速ではプロセスダンピングで実際はこれより深く削れることが多い)。</p>`;
+    <p class="hint">${t.type === 'ball' ? `ボールの仕上げは実効径 φ${startConditions(mat, t, 0.1 * t.D, 0.05 * t.D).Deff.toFixed(2)} (切込みの上端の刃の円) で回転数を決めています。` : ''}切削速度 ${Math.round(c0.Vc)} m/min (推奨 ${mat.vc} m/min${Math.abs(c0.Vc - mat.vc) > 1 ? '、主軸の範囲で制限' : ''})、φ${t.D} ${t.N} 枚刃。fz は超硬エンドミルの溝加工の目安で、径方向切込みが小さいときは最大切りくず厚さが同じになるよう上げています (切りくずの薄肉化)。ap はいまの動特性の安定限界線図から (低速ではプロセスダンピングで実際はこれより深く削れることが多い)。</p>`;
 }
 $('scBox').ontoggle = showStart;
 $('scApply').onclick = () => { const c = startConditions(sim.mat, sim.activeTool); setSpindle(c.S); $('pocketHint').textContent = `推奨条件: ${c.S} min⁻¹ (F ${c.F} mm/min が溝加工の目安。送りはプログラムの F を使います)。`; };

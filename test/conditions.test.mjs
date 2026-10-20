@@ -17,4 +17,11 @@ const a = startConditions(MATERIALS.A5052, { D: 3, N: 2 });
 assert.equal(a.S, 30000); assert.ok(a.Vc < MATERIALS.A5052.vc);
 for (const [k, m] of Object.entries(MATERIALS)) assert.ok(m.fzD > 0 && m.fzD < 0.02, k);
 console.log(`S50C φ10 3 枚: slot S ${s.S} fz ${s.fz.toFixed(3)} F ${s.F}; ae 1 mm fz ${l.fz.toFixed(3)} F ${l.F}`);
+// ball nose finishing: the effective diameter sets the speed
+{
+  const { effectiveD } = await import('../src/conditions.js');
+  assert.ok(Math.abs(effectiveD(10, 0.5) - 2 * Math.sqrt(25 - 4.5 ** 2)) < 1e-12 && effectiveD(10, 6) === 10);
+  const b = startConditions(MATERIALS.S50C, { D: 10, N: 2, type: 'ball' }, 1, 0.5);
+  assert.ok(b.Deff < 5 && b.S > 1.9 * s.S && Math.abs(b.Vc - 150) < 1);
+}
 console.log('conditions tests passed');
