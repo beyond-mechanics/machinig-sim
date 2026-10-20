@@ -16,6 +16,8 @@ import { VB_LIMIT, T0, SWING_CRACK } from './thermal.js';
 import { LineReport } from './report.js';
 import { JC, predictCoefs } from './oxley.js';
 import { identify, parseTests, unitForces, COEF_KEYS } from './identify.js';
+import { optimizeFeeds, rewriteFeeds, defaultTarget } from './feedopt.js';
+import { adviceFor } from './advice.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
 const $ = id => document.getElementById(id);
@@ -702,12 +704,16 @@ function updateReport() {
     const tags = td('');
     for (const w of it.why) { const sp = document.createElement('span'); sp.className = `tag ${BAD.has(w) ? 'bad' : 'warn'}`; sp.textContent = w; tags.appendChild(sp); }
     td(it.F.toFixed(0), 'n'); td(it.vib.toFixed(1), 'n'); td(it.temp > 25 ? it.temp.toFixed(0) : '—', 'n'); td(it.stress.toFixed(0), 'n'); td(it.cut.toFixed(2), 'n');
+    // what to change, with numbers where the models give them
+    const pt = sim.path.find(p => p.line === it.line && !p.rapid), adv = adviceFor(it, { mat: sim.mat, nonlinear: sim.cfg.cuttingNonlinear, S: pt ? pt.S * (sim.cfg.spindleOverride ?? 1) : 0, F: pt ? pt.F * (sim.cfg.feedOverride ?? 1) : 0, D: sim.activeTool.D, rakeDeg: sim.cfg.tool.rakeDeg ?? 10, limits: { stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK } });
+    const ac = td('', 'advice');
+    adv.forEach((a, i) => { if (i) ac.appendChild(document.createElement('br')); ac.appendChild(document.createTextNode(a)); });
     const go = () => gotoLine(it.line);
     tr.onclick = go; tr.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
     tb.appendChild(tr);
   }
   $('hReport').textContent = `${sim.done ? '完了' : '加工中'} · 注意が必要な行 ${r.issues.length}`;
-  if (!r.issues.length) { const tr = document.createElement('tr'); const c = document.createElement('td'); c.colSpan = 9; c.textContent = sim.done ? '注意が必要な行はありません' : 'まだ注意が必要な行はありません'; tr.appendChild(c); tb.appendChild(tr); }
+  if (!r.issues.length) { const tr = document.createElement('tr'); const c = document.createElement('td'); c.colSpan = 10; c.textContent = sim.done ? '注意が必要な行はありません' : 'まだ注意が必要な行はありません'; tr.appendChild(c); tb.appendChild(tr); }
 }
 // select a program line in the editor (program tab)
 function gotoLine(n) {
@@ -723,6 +729,42 @@ $('rCsv').onclick = async () => {
   if (downloads) { try { await downloads.save({ filename: name, data: text }); } catch { /* declined */ } return; }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+// ---------- feed optimisation ----------
+let foText = null;
+$('foRun').onclick = () => {
+  const rep = currentReport();
+  foText = null; $('foLoad').disabled = $('foSave').disabled = true;
+  if (!rep || !rep.lines.size || !sim.done) { $('foOut').innerHTML = '<p class="hint">プログラムを最後まで計算してから最適化してください (再生して最後まで、または進行バーで End キー)。</p>'; return; }
+  const target = +$('foTarget').value > 0 ? +$('foTarget').value : defaultTarget(rep);
+  const opt = optimizeFeeds(rep, sim.mat, { Ftarget: target, maxUp: +$('foUp').value, maxDown: +$('foDown').value, stressLimit: 0.8 * ALLOWABLE_STRESS, nonlinear: sim.cfg.cuttingNonlinear });
+  const feedLines = new Set(sim.path.filter(p => !p.rapid).map(p => p.line));
+  const factor = new Map([...opt.lines].map(([l, o]) => [l, o.k]));
+  foText = rewriteFeeds($('code').value, feedLines, factor);
+  const changed = [...opt.lines].filter(([, o]) => o.k !== 1).sort((a, b) => a[0] - b[0]);
+  const up = changed.filter(([, o]) => o.k > 1).length, down = changed.length - up;
+  const dt = opt.time1 - opt.time0;
+  const rows = changed.slice(0, 40).map(([l, o]) => `<tr><td>${l}</td><td class="code">${(codeLines[l - 1] || '').trim().replace(/[<&]/g, c => c === '<' ? '&lt;' : '&amp;')}</td><td class="n">×${o.k.toFixed(2)}</td><td class="n">${o.F0.toFixed(0)} → ${o.F1.toFixed(0)}</td><td>${o.why}</td></tr>`).join('');
+  $('foOut').innerHTML = `<p class="hint">目標 ${target.toFixed(0)} N で、送りを上げる行 ${up}・下げる行 ${down}。加工時間の見込み ${opt.time0.toFixed(1)} s → <b>${opt.time1.toFixed(1)} s</b> (${dt <= 0 ? '' : '+'}${(dt / Math.max(opt.time0, 1e-9) * 100).toFixed(0)} %)。読み込んで計算し直すと、実際の切削抵抗と時間を確かめられます。</p>` +
+    (changed.length ? `<div class="rtable-wrap"><table class="rtable" aria-label="送りを変える行"><thead><tr><th>行</th><th>Gコード</th><th class="n">送り</th><th class="n">最大切削抵抗 N</th><th>備考</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="hint">変える行はありません。</p>');
+  $('foLoad').disabled = $('foSave').disabled = !changed.length;
+};
+$('foLoad').onclick = () => {
+  if (!foText) return;
+  $('code').value = foText;
+  const f = $('gcInfo').dataset.file; if (f && !/_opt\./.test(f)) $('gcInfo').dataset.file = f.replace(/(\.[^.]+)?$/, m => '_opt' + (m || '.nc'));
+  loadProgram();
+  $('foOut').innerHTML = '<p class="hint">最適化したプログラムを読み込みました。再生すると、加工レポートで結果を確かめられます。</p>';
+  foText = null; $('foLoad').disabled = $('foSave').disabled = true;
+};
+$('foSave').onclick = async () => {
+  if (!foText) return;
+  const name = ($('gcInfo').dataset.file || 'program').replace(/(_opt)?\.[^.]+$/, '') + '_opt.nc';
+  if (downloads) { try { await downloads.save({ filename: name, data: foText }); } catch { /* declined */ } return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([foText], { type: 'text/plain' }));
   a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };

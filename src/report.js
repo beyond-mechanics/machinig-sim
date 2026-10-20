@@ -1,15 +1,16 @@
 // Machining report: what happened on each program line. Time and cutting time come from the
-// simulation substeps; peak force, vibration, deflection, tool-tip temperature, tool stress and
-// the time spent chattering come from each frame's statistics, credited to the line being
-// worked on at the end of the frame (at high playback speeds a frame spans several lines).
+// simulation substeps; peak force, vibration, deflection, tool-tip temperature, tool stress, the
+// time spent chattering and the mean chip thickness come from each frame's statistics, credited
+// to the line being worked on at the end of the frame (at high playback speeds a frame spans
+// several lines).
 
-const FIELDS = ['t', 'cut', 'F', 'vib', 'defl', 'temp', 'stress', 'chatter', 'marginal', 'swing'];
+const FIELDS = ['t', 'cut', 'F', 'vib', 'defl', 'temp', 'stress', 'chatter', 'marginal', 'swing', 'h', 'hw'];
 
 export class LineReport {
   constructor() { this.lines = new Map(); this.tools = new Map(); }
   rec(line) {
     let r = this.lines.get(line);
-    if (!r) { r = { line, t: 0, cut: 0, F: 0, vib: 0, defl: 0, temp: 0, stress: 0, chatter: 0, marginal: 0, swing: 0 }; this.lines.set(line, r); }
+    if (!r) { r = { line, t: 0, cut: 0, F: 0, vib: 0, defl: 0, temp: 0, stress: 0, chatter: 0, marginal: 0, swing: 0, h: 0, hw: 0 }; this.lines.set(line, r); }
     return r;
   }
   // machine time on a line (cutting or not)
@@ -20,6 +21,8 @@ export class LineReport {
     r.F = Math.max(r.F, v.F); r.vib = Math.max(r.vib, v.vib); r.defl = Math.max(r.defl, v.defl);
     r.temp = Math.max(r.temp, v.temp); r.stress = Math.max(r.stress, v.stress); r.swing = Math.max(r.swing, v.swing || 0);
     if (state === 'chatter') r.chatter += dt; else if (state === 'marginal') r.marginal += dt;
+    // mean chip thickness over the cutting time (for feed optimisation)
+    if (v.h > 0 && dt > 0) { r.hw += dt; r.h += (v.h - r.h) * dt / r.hw; }
   }
   toolWear(T, VB) { this.tools.set(T ?? '-', VB); }
 

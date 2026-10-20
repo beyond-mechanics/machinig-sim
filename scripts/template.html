@@ -127,12 +127,18 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 .rtable td { padding: 5px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 .rtable td.code { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .rtable .n { text-align: right; }
+.rtable td.advice { white-space: normal; min-width: 280px; max-width: 420px; font: 12px/1.45 var(--font-sans, inherit); color: var(--ink); }
 .rtable button.play { padding: 1px 7px; font-size: 11px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .rtable tbody tr { cursor: pointer; }
 .rtable tbody tr:hover, .rtable tbody tr:focus-visible { background: var(--panel-2); outline: none; }
 .rtable .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; margin-right: 4px; font-size: 11px; border: 1px solid currentColor; }
 .rtable .tag.bad { color: var(--bad); } .rtable .tag.warn { color: var(--warn); }
+.fopt { border-top: 1px solid var(--rule); margin-top: 10px; padding-top: 10px; display: grid; gap: 8px; }
+.fopt h3 { margin: 0; font-size: 13px; font-weight: 700; }
+.forow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; }
+.forow label { display: grid; gap: 2px; font-size: 12px; color: var(--ink-mute); }
+.forow input { width: 110px; }
 .rfoot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 #cvLobes { cursor: crosshair; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
@@ -356,6 +362,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li><b>断続切削</b>: フライスの刃は 1 回転のうち一部だけ切り、残りで冷えます。刃先温度のタイルには 1 回転での最高温度、その下に最低〜最高と変動幅、連続切削だった場合の温度を出します。変動が 400 °C を超えると熱亀裂 (くし状の割れ) が出やすくなる目安です。摩耗は接触中の平均温度で計算するので、高速で径方向切込みが小さい加工では刃先が低い温度で切り、摩耗が遅くなります。</li>
           <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。ドリル (固定サイクルの穴あけを含む) は先端角のないフラット工具として底刃のスラストとトルクを計算し、チゼルエッジの押し込み力は含みません。切粉は 1 粒子が数個分の切粉を代表し (最大 5000 粒子)、流体は CFD ではなく噴流・壁面噴流・浅水流の工学的な近似を重ねた速度場です。ポケット内の渦や、工具が噴流をさえぎる効果は入れていません。</li>
           <li><b>回転数で変わる動特性</b>: 高速回転では主軸軸受の予圧が抜けホルダーが緩み、工具先端の固有振動数が下がります。振動と安定限界線図はその回転数の動特性で計算し、静止時の線図を破線で重ねます。安定ポケットは低い回転数側へずれます。回転中に測った FRF を回転数別に読み込むこともできます。</li>
+          <li><b>送り最適化</b>: 加工レポートの下で、行ごとに最大切削抵抗が目標になるよう送りを求め、F を書き換えたプログラムを読み込み・保存できます。軽い切削は速く、重すぎる切削は遅くなり、びびった行は上げません。読み込んで計算し直すと結果を確かめられます。</li>
           <li><b>切削係数の同定</b>: 被削材の欄で、動力計で測った平均切削抵抗 (送りを変えた 2 種類以上の試験) から 6 つの切削係数を求められます。シミュレーター自身の切削モデルで計算するので、工具の形・ねじれ・振れを含めて整合した値になります。</li>
           <li><b>切削係数の予測</b>: 被削材の欄で、材料の流動応力の式 (Johnson–Cook) と熱物性から Oxley の切削理論で切削係数を予測できます。切削試験のない材料の初期値として使い、試験データがあればそちらを優先してください。鋼はよく合い、アルミは高め・チタンは低めに出る傾向があります。</li>
           <li><b>工具の振れ</b>: 工具が回転軸から e ずれて回ると、刃ごとに切りくず厚さが変わり、側面は最も外へ出る刃が主に削るので、刃跡の間隔が 1 刃送りから 1 回転送りに近づきます (面粗さが大きくなる)。焼きばめでは数 µm、コレットでは 10 µm 程度が目安です。</li>
@@ -394,10 +401,22 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
       <h2>加工レポート <span id="hReport">加工が始まると、プログラムの行ごとにまとめます</span></h2>
       <dl class="rsum" id="rSum"></dl>
       <div class="rtable-wrap"><table class="rtable" id="rTable" aria-label="注意が必要な行">
-        <thead><tr><th><span class="sr">再生</span></th><th>行</th><th>Gコード</th><th>状態</th><th class="n">最大切削抵抗 N</th><th class="n">振動 µm</th><th class="n">刃先温度 °C</th><th class="n">工具応力 MPa</th><th class="n">切削時間 s</th></tr></thead>
+        <thead><tr><th><span class="sr">再生</span></th><th>行</th><th>Gコード</th><th>状態</th><th class="n">最大切削抵抗 N</th><th class="n">振動 µm</th><th class="n">刃先温度 °C</th><th class="n">工具応力 MPa</th><th class="n">切削時間 s</th><th>対策の目安</th></tr></thead>
         <tbody></tbody>
       </table></div>
       <div class="rfoot"><p class="hint" id="rHint">行をクリックするとプログラムタブのその行へ、▶ でその行の加工から再生します。</p><button id="rCsv">全行を CSV で保存</button></div>
+      <div class="fopt" id="foBox">
+        <h3>送り最適化</h3>
+        <p class="hint">行ごとに、最大切削抵抗が目標になる送りを求めて F を書き換えます。軽い切削は速く、重すぎる切削は遅くなります。びびった行は送りを上げません。工具応力は許容の 8 割までに抑えます。目標を空けると、びびらずに削れた行の最大切削抵抗を目標にします (今のプログラムで実績のある負荷まで)。プログラムを最後まで計算してから使ってください (End キーで最後まで進みます)。</p>
+        <div class="forow">
+          <label>目標の切削抵抗 <span class="unit">N</span><input type="number" id="foTarget" min="1" step="10" placeholder="自動"></label>
+          <label>送りの上限 <select id="foUp"><option value="1.25">×1.25</option><option value="1.5" selected>×1.5</option><option value="2">×2</option><option value="3">×3</option></select></label>
+          <label>送りの下限 <select id="foDown"><option value="0.5" selected>×0.5</option><option value="0.7">×0.7</option><option value="1">下げない</option></select></label>
+          <button id="foRun">最適化する</button>
+        </div>
+        <div id="foOut" aria-live="polite"></div>
+        <div class="forow"><button id="foLoad" disabled>最適化したプログラムを読み込む</button><button id="foSave" disabled>保存 (.nc)</button></div>
+      </div>
     </div>
   </section>
 </div>

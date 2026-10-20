@@ -25,6 +25,8 @@ node test/report.test.mjs     # 加工レポート (行ごとの集計)
 node test/seek.test.mjs       # 再生位置の移動
 node test/oxley.test.mjs      # 材料定数 (Johnson–Cook) からの切削係数の予測
 node test/identify.test.mjs   # 切削試験の平均切削抵抗からの係数の同定
+node test/feedopt.test.mjs    # 送り最適化 (行ごとの送りと F の書き換え)
+node test/advice.test.mjs     # 加工レポートの対策の目安
 ```
 
 物理計算 (`src/gcode.js` `stock.js` `cutting.js` `sld.js` `tool.js` `thermal.js` `chips.js` `sim.js`) は DOM に依存しないので Node でそのまま動きます。表示は `view.js` `charts.js` `main.js` です。

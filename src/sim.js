@@ -530,7 +530,9 @@ export class Simulator {
     const speed = this.speed, budget = this.cfg.dynBudget;
     this.seeking = true; this.speed = 1; this.cfg.dynBudget = 5e4;
     let guard = 0;
-    while (!this.done && this.mtime < t - 1e-6 && guard++ < 100000) this.step(Math.min(2, t - this.mtime));
+    // steps of a quarter second of machine time: as fine as fast playback, so the machining report
+    // (frame statistics credited per line) comes out the same as when the program is played
+    while (!this.done && this.mtime < t - 1e-6 && guard++ < 100000) this.step(Math.min(0.25, t - this.mtime));
     this.seeking = false; this.speed = speed; this.cfg.dynBudget = budget;
     this.chips.reset();
   }
@@ -654,7 +656,7 @@ export class Simulator {
       state: !cutting ? 'idle' : (d.chatterIdx > 0.55 && d.once > 3) ? 'chatter' : (d.chatterIdx > 0.35 && d.once > 1.5) ? 'marginal' : 'stable',
     });
     // the frame's cutting statistics belong to the line that cut (the frame may end on a retract)
-    if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.cycle?.max ?? this.temp.tool, stress: stress.vm, swing: this.temp.cycle?.swing || 0 }, d.state, fs.cutTime);
+    if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.cycle?.max ?? this.temp.tool, stress: stress.vm, swing: this.temp.cycle?.swing || 0, h: st.sumB > 0 ? st.sumHb / st.sumB : 0 }, d.state, fs.cutTime);
     if (this.activeT !== undefined) this.report.toolWear(this.activeT, this.VB);
     if (this.VB > VB_LIMIT) this.alert('wear', `逃げ面摩耗 VB ${this.VB.toFixed(2)} mm: 工具寿命 (VB ${VB_LIMIT} mm) を超過`);
     if (cutting && this.temp.tool > 900) this.alert('heat', `刃先温度 ${this.temp.tool.toFixed(0)} °C: 拡散摩耗・刃先の塑性変形が急増する領域`);
