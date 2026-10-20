@@ -143,6 +143,8 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 .forow input { width: 110px; }
 .rfoot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 #cvLobes { cursor: crosshair; }
+.lobefoot { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 6px; }
+.lobefoot button { font-size: 12px; padding: 4px 8px; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
@@ -407,7 +409,8 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="chart"><h2>切削抵抗 <span id="hF"></span></h2><canvas id="cvForce"></canvas></div>
     <div class="chart"><h2>工具先端の軌跡 <span>● 1刃ごとの位置</span></h2><canvas id="cvOrbit"></canvas></div>
     <div class="chart"><h2>振動スペクトル <span id="hSpec"></span></h2><canvas id="cvSpec"></canvas></div>
-    <div class="chart"><h2>安定限界線図 <span id="hLobe">クリックで主軸回転を変更</span></h2><canvas id="cvLobes"></canvas></div>
+    <div class="chart"><h2>安定限界線図 <span id="hLobe">クリックで主軸回転を変更</span></h2><canvas id="cvLobes"></canvas>
+      <div class="lobefoot"><button id="tdLim">この回転数の限界を時間領域で確かめる</button><span class="hint" id="tdOut">線図は線形理論です。低速ではプロセスダンピングで実際はもっと深く削れることがあります。</span></div></div>
     <div class="chart wide"><h2>切削断面と温度分布 <span id="hSec"></span></h2><canvas id="cvSec" aria-label="二次元切削断面: 工具・せん断面・切りくずと温度分布。カーソルを当てるとその位置の温度を表示"></canvas></div>
     <div class="chart wide"><h2>側面の仕上げ面 <span id="hRough"></span></h2><canvas id="cvRough"></canvas></div>
     <div class="chart wide report" id="reportBox">

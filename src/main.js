@@ -20,6 +20,7 @@ import { identify, parseTests, unitForces, COEF_KEYS } from './identify.js';
 import { optimizeFeeds, rewriteFeeds, defaultTarget } from './feedopt.js';
 import { adviceFor } from './advice.js';
 import { startConditions, arcOf } from './conditions.js';
+import { timeDomainLimit } from './stabtd.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
 const $ = id => document.getElementById(id);
@@ -376,6 +377,20 @@ function showStart() {
 }
 $('scBox').ontoggle = showStart;
 $('scApply').onclick = () => { const c = startConditions(sim.mat, sim.activeTool); setSpindle(c.S); $('pocketHint').textContent = `推奨条件: ${c.S} min⁻¹ (F ${c.F} mm/min が溝加工の目安。送りはプログラムの F を使います)。`; };
+
+// ---- stability limit at the current speed by time-domain simulation ----
+$('tdLim').onclick = () => {
+  const d = sim.display, S = d.S || +$('ovS').value, arc = [d.phiSt ?? 0, d.phiEx ?? Math.PI];
+  const fz = d.fz > 0 ? d.fz : startConditions(sim.mat, sim.activeTool).fz;
+  const lin = alimAt(sim.lobes(arc[0], arc[1]), S);
+  $('tdOut').textContent = `${Math.round(S)} min⁻¹ で計算中… (数秒)`; $('tdLim').disabled = true;
+  setTimeout(() => {
+    const r = timeDomainLimit(sim.activeTool, sim.modalNow(S), sim.mat, S, arc, fz, { nonlinear: sim.cfg.cuttingNonlinear });
+    const deg = a => (a * 180 / Math.PI).toFixed(0);
+    $('tdOut').textContent = `${Math.round(S)} min⁻¹・係合 ${deg(arc[0])}〜${deg(arc[1])}°・fz ${fz.toFixed(3)} mm: 時間領域の限界 ${r.bracket[1] === Infinity ? `${r.alim.toFixed(1)} mm 以上` : `約 ${r.alim.toFixed(2)} mm`} (線図 ${lin < Infinity ? lin.toFixed(2) : '—'} mm)。${sim.cfg.cuttingNonlinear ? 'プロセスダンピング・寸法効果込み。' : ''}`;
+    $('tdLim').disabled = false;
+  }, 30);
+};
 
 // ---- coefficients identified from cutting tests ----
 let idLast = null;
