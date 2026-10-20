@@ -14,7 +14,11 @@ import { stabilityLobes, alimAt } from './sld.js';
 import { MATERIALS } from './materials.js';
 import { wallAt, FN_CAP } from './wall.js';
 import { modeSet, staticK } from './frf.js';
+import { modesAt, speedDependent, tipFactor, SOFT_DEFAULT } from './spindle.js';
 import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT, T0 } from './thermal.js';
+
+// speed-dependent lobe diagram: an FRF every LOBE_NODE min⁻¹, the curve sampled every LOBE_STEP
+const LOBE_NODE = 1000, LOBE_STEP = 25;
 
 export class Simulator {
   constructor() {
@@ -23,6 +27,8 @@ export class Simulator {
     this.cfg = {
       tool: { D: 10, N: 3, helixDeg: 30, rakeDeg: 10, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000, VB0: 0 },
       modal: { auto: true, k: 0, fn: 0, zeta: 0.04 },
+      // bearing/holder stiffness loss at speed (spindle.js); drop 0 = dynamics independent of speed
+      spindleSoft: { ...SOFT_DEFAULT },
       material: 'A5052', coolant: 'air', nozzle: { ...NOZZLE_DEFAULT }, workpieceFlex: true, cuttingNonlinear: true,
       feedOverride: 1, spindleOverride: 1,
       dynBudget: 220000, // slice-force evaluations per frame (≈ 5 ms of JS)
@@ -173,31 +179,62 @@ export class Simulator {
     if (this.cfg.modal.auto) { this.cfg.modal.k = Math.round(this.tm.k); this.cfg.modal.fn = Math.round(this.tm.fn); }
     this.mat = MATERIALS[this.cfg.material];
     this.lastS = -1;
-    this.lobeKey = '';
+    this.lobeCaches = null;
   }
 
-  modalNow() {
+  // tool-tip modes at spindle speed S (default: the current speed); S = 0 is the tool at rest,
+  // as a hammer test measures it
+  modalNow(S = this.S || 0) {
     const m = this.cfg.modal;
-    return { k: m.k, fn: m.fn, zeta: m.zeta, modesX: m.modesX || null, modesY: m.modesY || null };
+    const ms = modesAt(m, S, this.chain(), this.cfg.spindleSoft);
+    return { k: m.k, fn: m.fn, zeta: m.zeta, modesX: ms.x, modesY: ms.y };
+  }
+  // compliance chain of the active tool for the speed model: its own bending and the spindle
+  chain() { return this.tm ? { kTool: this.tm.kTool, kSp: this.activeTool?.kSpindle ?? this.cfg.tool.kSpindle } : null; }
+  // tool-tip stiffness at speed relative to rest
+  speedFactor(S = this.S || 0) {
+    if (this.cfg.modal.speedFrfs?.length) return null; // measured at speed: no model factor
+    const c = this.chain();
+    return c ? tipFactor(S, c.kTool, c.kSp, this.cfg.spindleSoft) : 1;
   }
   // all modes of the tool tip in x and y
-  modes() { return modeSet(this.modalNow()); }
+  modes(S) { return modeSet(this.modalNow(S)); }
   toolStaticK() { const m = this.modes(); return Math.min(staticK(m.x), staticK(m.y)); }
 
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
     const t = this.activeTool;
-    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, rAt: t.rAt, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear }, this.modalNow(), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
+    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, rAt: t.rAt, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear }, this.modalNow(S), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
     this.lastS = S;
   }
 
-  lobes(phiSt, phiEx) {
-    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${this.cfg.modal.k}|${this.cfg.modal.fn}|${this.cfg.modal.zeta}|${JSON.stringify(this.cfg.modal.modesX)}|${JSON.stringify(this.cfg.modal.modesY)}|${this.cfg.material}|${this.activeTool.N}`;
-    if (key !== this.lobeKey) {
-      this.lobeKey = key;
-      this.lobeCache = stabilityLobes({ ...this.modalNow(), N: this.activeTool.N, Ktc: this.mat.Ktc, Krc: this.mat.Krc, phiSt, phiEx, lobes: 30, rpmMin: 2000, rpmMax: 40000 });
+  // Stability lobes for the current engagement. When the dynamics depend on the speed, each
+  // speed has its own lobe diagram: the limit at S is read from the diagram of the FRF at S
+  // (one composite curve). staticOnly: the diagram of the tool at rest, for comparison.
+  lobes(phiSt, phiEx, staticOnly = false) {
+    const m = this.cfg.modal, dep = !staticOnly && speedDependent(m, this.cfg.spindleSoft);
+    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${m.k}|${m.fn}|${m.zeta}|${JSON.stringify(m.modesX)}|${JSON.stringify(m.modesY)}|${JSON.stringify(m.speedFrfs)}|${this.cfg.material}|${this.activeTool.N}|${dep ? JSON.stringify(this.cfg.spindleSoft) + this.tm?.kTool : 'static'}`;
+    const cache = this.lobeCaches || (this.lobeCaches = new Map());
+    if (cache.has(key)) return cache.get(key);
+    if (cache.size > 8) cache.clear();
+    const base = { N: this.activeTool.N, Ktc: this.mat.Ktc, Krc: this.mat.Krc, phiSt, phiEx, lobes: 30, rpmMin: 2000, rpmMax: 40000 };
+    let out;
+    if (!dep) out = stabilityLobes({ ...this.modalNow(0), ...base });
+    else {
+      // one diagram per LOBE_NODE of speed (the FRF changes by well under 1 % across it),
+      // each read only around its own speed
+      const curve = [], lo = base.rpmMin * 0.8, hi = base.rpmMax * 1.1;
+      for (let S0 = lo; S0 < hi; S0 += LOBE_NODE) {
+        const lob = stabilityLobes({ ...this.modalNow(S0 + LOBE_NODE / 2), ...base, rpmMin: S0, rpmMax: S0 + LOBE_NODE });
+        for (let S = S0; S < Math.min(hi, S0 + LOBE_NODE); S += LOBE_STEP) {
+          const a = alimAt(lob, S);
+          curve.push({ rpm: S, alim: a === Infinity ? 1e3 : a });
+        }
+      }
+      out = [curve];
     }
-    return this.lobeCache;
+    cache.set(key, out);
+    return out;
   }
 
   // spindle speed with the highest stable depth within ±range of the current speed

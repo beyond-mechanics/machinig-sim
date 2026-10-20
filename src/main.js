@@ -11,6 +11,7 @@ import { parseStl } from './workpiece.js';
 import { HOLDERS, parseToolLibrary } from './assembly.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
+import { speedDependent } from './spindle.js';
 import { VB_LIMIT, T0 } from './thermal.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
@@ -308,19 +309,35 @@ function applyFrf(text, name) {
     const mx = fitModes(d.f, d.xx), my = d.yy ? fitModes(d.f, d.yy) : mx;
     if (!mx.length || !my.length) throw new Error('共振のピークが見つかりません');
     const m = sim.cfg.modal, dom = dominant([...mx, ...my]);
+    const Sm = $('frfS').value === '' ? null : +$('frfS').value;
+    if (Sm !== null && Sm >= 0) {
+      // measured at speed: one entry per spindle speed, interpolated in between
+      m.speedFrfs = [...(m.speedFrfs || []).filter(e => Math.abs(e.S - Sm) > 1), { S: Sm, modesX: mx, modesY: my, name }].sort((a, b) => a.S - b.S);
+    }
     Object.assign(m, { auto: false, modesX: mx, modesY: my, k: Math.round(Math.min(staticK(mx), staticK(my))), fn: Math.round(dom.fn), zeta: +dom.zeta.toFixed(3) });
     $('mAuto').checked = false;
     host.config(true); syncModalInputs();
     $('frfClear').disabled = false;
-    $('frfInfo').textContent = `${name} (${d.f.length} 点, ${d.unit}) から同定\nX: ${fmtModes(mx)}\nY: ${fmtModes(my)}`;
+    const list = m.speedFrfs?.length ? `\n回転数別: ${m.speedFrfs.map(e => `${e.S} min⁻¹ (${Math.round(dominant([...e.modesX, ...e.modesY]).fn)} Hz)`).join(' ・ ')}` : '';
+    $('frfInfo').textContent = `${name} (${d.f.length} 点, ${d.unit}${Sm !== null ? `, ${Sm} min⁻¹` : ', 静止'}) から同定\nX: ${fmtModes(mx)}\nY: ${fmtModes(my)}${list}`;
+    showSpeedInfo();
   } catch (err) { $('frfInfo').textContent = `読み込めませんでした: ${err.message}`; }
 }
 function clearFrf() {
-  if (!sim.cfg.modal.modesX) return;
-  sim.cfg.modal.modesX = sim.cfg.modal.modesY = null;
+  if (!sim.cfg.modal.modesX && !sim.cfg.modal.speedFrfs) return;
+  sim.cfg.modal.modesX = sim.cfg.modal.modesY = null; sim.cfg.modal.speedFrfs = null;
   $('frfClear').disabled = true; $('frfInfo').innerHTML = frfHint;
 }
 $('frfLoad').onclick = () => $('frfFile').click();
+$('spSoft').onchange = e => { const v = +e.target.value; if (!(v >= 0 && v <= 60)) return; sim.cfg.spindleSoft = { ...sim.cfg.spindleSoft, drop: v / 100 }; host.config(true); showSpeedInfo(); };
+// what the speed model does to the tool tip at the current speed
+function showSpeedInfo() {
+  const S = Math.round(sim.S || +$('ovS').value || 0), m = sim.cfg.modal;
+  if (m.speedFrfs?.length) { $('spInfo').textContent = `回転数別の実測 FRF (${m.speedFrfs.length} 件) を使用中。剛性低下のモデルは使いません。`; return; }
+  const f = sim.speedFactor(S), d = Math.round((sim.cfg.spindleSoft?.drop ?? 0) * 100);
+  const fn0 = sim.modalNow(0).modesX[0].fn, fnS = sim.modalNow(S).modesX[0].fn;
+  $('spInfo').textContent = d ? `${S} min⁻¹ で工具先端の剛性 ${((f - 1) * 100).toFixed(1)}%、固有振動数 ${Math.round(fn0)} → ${Math.round(fnS)} Hz (主軸側の剛性 −${d}% @30000 min⁻¹ のモデル)。` : '回転による変化は計算していません (0%)。';
+}
 $('frfFile').onchange = async e => { const f = e.target.files[0]; if (f) applyFrf(await f.text(), f.name); e.target.value = ''; };
 $('frfExample').onclick = () => applyFrf(exampleCsv(), '例: ホルダ+工具の2モード');
 $('frfClear').onclick = () => { clearFrf(); sim.cfg.modal.auto = true; $('mAuto').checked = true; host.config(true); syncModalInputs(); };
@@ -424,7 +441,9 @@ function updateTiles() {
   $('lineInfo').textContent = sim.line ? `${tl}${sim.line}行  ${codeLines[sim.line - 1]?.trim() ?? ''}` : 'プログラム先頭';
   setV('vF', d.F.toFixed(0), 'N'); $('sF').textContent = `最大 ${d.Fmax.toFixed(0)} N · 軸方向 ${d.Fz.toFixed(0)} N`;
   setV('vT', d.torque.toFixed(2), 'N·m'); $('sT').textContent = `${d.power.toFixed(2)} kW · ${Math.round(d.S)} min⁻¹`;
-  setV('vD', d.defl.toFixed(1), 'µm'); $('sD').textContent = sim.cfg.modal.modesX ? `実測FRF · X ${sim.cfg.modal.modesX.length} / Y ${sim.cfg.modal.modesY.length} モード` : `k = ${(sim.cfg.modal.k / 1000).toFixed(1)} N/µm · fn ${sim.cfg.modal.fn} Hz`;
+  // the tool tip as it is at the current speed
+  const mNow = sim.modalNow(sim.S || +$('ovS').value), xNow = mNow.modesX;
+  setV('vD', d.defl.toFixed(1), 'µm'); $('sD').textContent = sim.cfg.modal.modesX || sim.cfg.modal.speedFrfs ? `実測FRF · X ${xNow.length} / Y ${mNow.modesY.length} モード${sim.cfg.modal.speedFrfs ? ' (回転数別)' : ''}` : `k = ${(xNow[0].k / 1000).toFixed(1)} N/µm · fn ${Math.round(xNow[0].fn)} Hz${Math.abs(xNow[0].fn - sim.cfg.modal.fn) >= 1 ? ' (回転中)' : ''}`;
   setV('vW', d.wallDefl.toFixed(1), 'µm');
   $('sW').textContent = !sim.cfg.workpieceFlex ? '計算オフ' : d.wall ? `壁厚 ${d.wall.t.toFixed(1)} · 高さ ${d.wall.hWall.toFixed(0)} mm · k ${(d.wall.k / 1000).toFixed(1)} N/µm` : '剛体として扱い中';
   setV('vV', d.vib.toFixed(1), 'µm'); $('sV').textContent = `同期外成分 ${d.once.toFixed(1)} µm`;
@@ -444,6 +463,7 @@ function updateTiles() {
   const tName = sim.activeT != null ? `T${sim.activeT} · ` : '';
   $('sWr').textContent = tName + (d.lifeMin < Infinity ? `この条件の残り寿命 ${d.lifeMin > 600 ? '10 h 超' : d.lifeMin.toFixed(1) + ' 分'}` : `寿命 VB ${VB_LIMIT * 1000} µm`);
   showDeviation(d.dev);
+  showSpeedInfo();
   const cs = sim.chips.stats;
   // share of the chip volume that has left the workpiece (chips still in flight over it are not yet out)
   const evacPct = cs.producedVol > 0 ? Math.min(100, cs.evacVol / cs.producedVol * 100) : 0;
@@ -495,7 +515,9 @@ function updateCharts() {
   const S = d.S || +$('ovS').value;
   const ap = d.cutting ? d.ap : 0;
   const lim = alimAt(lobes, S);
-  lobeBox = drawLobes($('cvLobes'), lobes, { S, ap, stable: ap <= lim }, LOBE_RANGE);
+  // with speed-dependent dynamics, the diagram of the tool at rest stays as a dashed reference
+  const rest = speedDependent(sim.cfg.modal, sim.cfg.spindleSoft) ? sim.lobes(d.phiSt ?? 0, d.phiEx ?? Math.PI, true) : null;
+  lobeBox = drawLobes($('cvLobes'), lobes, { S, ap, stable: ap <= lim }, LOBE_RANGE, rest);
   // side-wall roughness: the rougher of the walls this cut generates
   let prof = null;
   if (d.cutting && e.wallSamples && d.fz > 0) {
@@ -515,7 +537,7 @@ function updateCharts() {
   drawSection($('cvSec'), sim.mtime > 0 ? sec : (lastSec = null));
   if (!secHover) $('hSec').textContent = sec ? `刃先 ${sec.Ttool.toFixed(0)} °C · せん断域 ${sec.Tsh.toFixed(0)} °C` : '';
   const immDeg = ((d.phiEx - d.phiSt) * 180 / Math.PI).toFixed(0);
-  $('hLobe').textContent = `接触角 ${immDeg}° · 限界 ${lim === Infinity ? '—' : lim.toFixed(2) + ' mm'}`;
+  $('hLobe').textContent = `接触角 ${immDeg}° · 限界 ${lim === Infinity ? '—' : lim.toFixed(2) + ' mm'}${rest ? ' · 破線は静止時の FRF' : ''}`;
 }
 
 setStockMode('prog'); $('orgSel').onchange();
