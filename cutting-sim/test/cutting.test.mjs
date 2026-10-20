@@ -254,3 +254,51 @@ test('imported workpiece: closed outlines fill even-odd (a circle is a hole), to
   assert.ok(pts.some(([x, y, f]) => f === 1 && y < -0.58e-3) && pts.some(([x, y, f]) => f === 1 && x > 1.58e-3));
   assert.ok(!pts.some(([x, y, f]) => f === 1 && y > -0.1e-3 && x > 0.05e-3 && x < 1.5e-3), 'no supports in the cut layer');
 });
+
+test('STL mesh: exact distance and normal of a box, fill count matches the volume, binary STL round trip', async () => {
+  const { MeshSDF, fillMesh, parseSTL, volume } = await import('../src/mesh.js');
+  const { EXAMPLES } = await import('../src/examples3d.js');
+  const w = EXAMPLES.plane.work();                                         // 1.0 × 0.4 × 0.4 mm box
+  assert.ok(Math.abs(volume(w) - 0.16) < 1e-9);
+  const sdf = new MeshSDF(w, 0.01);
+  sdf.exact(0.5, 0.2, 0.1);                                                // 0.1 above the top face
+  assert.ok(Math.abs(sdf.q[0] - 0.1) < 1e-9 && Math.abs(sdf.q[3] - 1) < 1e-9);
+  sdf.exact(0.5, 0.2, -0.3);                                               // inside, 0.1 above the bottom
+  assert.ok(Math.abs(sdf.q[0] + 0.1) < 1e-9);
+  const fill = fillMesh(w, 0.05);
+  assert.equal(fill.length / 3, Math.round(0.16 / 0.05 ** 3));
+  const n = w.length / 9, buf = new ArrayBuffer(84 + 50 * n), dv = new DataView(buf);
+  dv.setUint32(80, n, true);
+  for (let i = 0; i < n; i++) for (let k = 0; k < 9; k++) dv.setFloat32(84 + 50 * i + 12 + 4 * k, w[9 * i + k], true);
+  const back = parseSTL(buf, 1e-3);
+  assert.ok(Math.abs(volume(back) - 0.16e-9) < 1e-15);
+});
+
+test('STL mode: planing with the example tool forms a chip, the force settles, and the surface view closes', async () => {
+  const { Cutting3D } = await import('../src/sph3d.js');
+  const { EXAMPLES } = await import('../src/examples3d.js');
+  const { surfaceNets } = await import('../src/surface3d.js');
+  const m = (t) => t.map((v) => v * 1e-3), e = EXAMPLES.plane;
+  const s = new Cutting3D({ mode: 'mesh', mat: 'S45C', vc: 200, dxUm: 40, toolTris: m(e.tool()), workTris: m(e.work()), motion: 'linear', travel: 0.35 });
+  while (!s.done) s.stepSample();
+  const sm = s.summary(), h = s.hist.fc, n = h.length;
+  assert.ok(sm.fx < -30 && sm.fx > -250, `Fx ${sm.fx}`);                    // kc·b·h ≈ 2100·0.4·0.1 = 84 N
+  assert.ok(sm.fz > 0, `Fz ${sm.fz}`);                                      // the work pushes the tool up
+  assert.ok(Math.abs(sm.fy) < 0.2 * Math.abs(sm.fx), `Fy ${sm.fy}`);         // symmetric across the width
+  // The last third of the cut does not keep climbing (frozen material ahead of the tool would).
+  const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  assert.ok(Math.abs(avg(h.slice(Math.round(0.8 * n)))) < 1.25 * Math.abs(avg(h.slice(Math.round(0.55 * n), Math.round(0.75 * n)))), 'force keeps rising');
+  let up = 0;
+  for (let i = 0; i < s.N; i++) if (!s.dead[i] && s.z[i] > 0.04e-3) up++;   // chip above the top surface
+  assert.ok(up > 20, `chip particles ${up}`);
+  // Surface nets: every edge is shared by exactly two triangles.
+  const f = { x: Array.from(s.x, (v) => v * 1e3), y: Array.from(s.y, (v) => v * 1e3), z: Array.from(s.z, (v) => v * 1e3), flag: s.fixed, dx: s.dx * 1e3 };
+  const sel = []; for (let i = 0; i < s.N; i++) if (!s.dead[i]) sel.push(i);
+  const r = surfaceNets(f, sel, s.T, 20, 600), edges = new Map();
+  for (let i = 0; i < r.idx.length; i += 3) for (let k = 0; k < 3; k++) {
+    const a = r.idx[i + k], b = r.idx[i + (k + 1) % 3], key = a < b ? a * 1e7 + b : b * 1e7 + a;
+    edges.set(key, (edges.get(key) || 0) + 1);
+  }
+  let odd = 0; for (const c of edges.values()) if (c % 2) odd++;
+  assert.equal(odd, 0);
+});

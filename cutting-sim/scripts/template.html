@@ -67,6 +67,8 @@ select { font-family: var(--font-body); }
 .probe { font: 11.5px var(--font-mono); background: color-mix(in srgb, var(--panel) 92%, transparent); padding: 4px 8px; border-radius: 4px; max-width: 100%; overflow-wrap: anywhere; }
 
 aside.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; min-width: 0; padding: 14px; display: grid; gap: 16px; }
+.xyz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.xyz input { min-width: 0; }
 fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
 legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-mute); margin-bottom: 4px; padding: 0; }
 .row { display: grid; grid-template-columns: 1fr 104px; gap: 8px; align-items: center; }
@@ -78,6 +80,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .seg button:nth-child(even) { border-left: 1px solid var(--rule); }
 .seg button:nth-child(n+3) { border-top: 1px solid var(--rule); }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.seg button:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .hint { margin: 0; font-size: 12px; color: var(--ink-mute); }
 .static { font-size: 13px; text-align: right; }
 .meta { font: 11px/1.6 var(--font-mono); color: var(--ink-mute); }
@@ -167,6 +170,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <button data-mode="mill" aria-pressed="false">エンドミル</button>
         <button data-mode="3d" aria-pressed="false">3D 傾斜切削</button>
         <button data-mode="helix" aria-pressed="false">3D エンドミル</button>
+        <button data-mode="mesh" aria-pressed="false">STL 取り込み</button>
       </div>
       <fieldset>
         <legend>被削材</legend>
@@ -188,6 +192,24 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row"><label for="lambda">切れ刃傾き角 λ<small>°</small></label><input id="lambda" type="number" min="0" max="45" step="5" value="15"></div>
         <div class="row"><label for="sides">被削材の幅方向</label><select id="sides"><option value="periodic">広い板（周期境界）</option><option value="free">幅 b の板（側面自由）</option></select></div>
         <p class="hint">切れ刃を被削材の表面内で λ だけ傾けます。すくい角・逃げ角は切れ刃に垂直な断面での値です。「広い板」は切れ刃に沿って周期的につながった十分広い板で、側面の影響なしに切りくずの流出角を見られます。「幅 b の板」は側面が自由で、切りくずの横へのはみ出しも出ます。</p>
+      </fieldset>
+      <fieldset data-only="mesh" hidden>
+        <legend>工具とワーク（STL）</legend>
+        <div class="row wide"><select id="sex" aria-label="例"><option value="">例を選ぶ、または下で自分のファイルを読み込む</option></select></div>
+        <div class="row wide"><label for="stool">工具の STL</label><input id="stool" class="file" type="file" accept=".stl"></div>
+        <div class="row wide"><label for="swork">ワークの STL</label><input id="swork" class="file" type="file" accept=".stl"></div>
+        <div class="row"><label for="sunit">ファイルの単位</label><select id="sunit"><option value="mm">mm</option><option value="um">µm</option><option value="in">inch</option></select></div>
+        <div class="row"><label for="smotion">工具の動き</label><select id="smotion"><option value="linear">直進（平削り・形削り）</option><option value="mill">回転＋横送り（エンドミル）</option><option value="drill">回転＋下へ送り（ドリル）</option></select></div>
+        <div class="row" data-motion="mill drill"><label for="sspin">回転の向き</label><select id="sspin"><option value="-1">時計回り（上から見て。M03）</option><option value="1">反時計回り</option></select></div>
+        <div class="row" data-motion="mill"><label for="sflutes">刃数</label><input id="sflutes" type="number" min="1" max="8" step="1" value="2"></div>
+        <div class="row" data-motion="mill"><label for="sfz">1刃送り fz<small>mm/刃</small></label><input id="sfz" type="number" min="0.005" max="0.3" step="0.005" value="0.05"></div>
+        <div class="row" data-motion="drill"><label for="sfr">1回転送り f<small>mm/rev</small></label><input id="sfr" type="number" min="0.005" max="0.5" step="0.005" value="0.05"></div>
+        <div class="row" data-motion="linear"><label for="stravel">移動量<small>mm</small></label><input id="stravel" type="number" min="0.1" max="4" step="0.1" value="0.6"></div>
+        <div class="row" data-motion="mill drill"><label for="sangle">回転角<small>°</small></label><input id="sangle" type="number" min="30" max="1080" step="30" value="200"></div>
+        <div class="row"><label for="sdx">粒子の間隔<small>µm</small></label><input id="sdx" type="number" min="5" max="100" step="1" value="25"></div>
+        <div class="row wide"><label for="sox">工具をずらす x / y / z<small>mm</small></label><span class="xyz"><input id="sox" type="number" step="0.01" value="0" aria-label="x"><input id="soy" type="number" step="0.01" value="0" aria-label="y"><input id="soz" type="number" step="0.01" value="0" aria-label="z"></span></div>
+        <p class="hint">閉じた STL（バイナリかテキスト）を2つ読み込みます。座標はファイルのまま、z が上です。工具は「直進」で +x へ切削速度で進み、「回転」では工具の外形の中心を通る z 軸のまわりに、一番外側の半径で切削速度になる回転数で回ります。工具はワークに食い込ませた位置に置いてください（それまでに削れたはずの形は自動でくり抜きます）。ワークの下面 3 層を固定します。</p>
+        <p class="hint" id="sinfo">工具とワークを選んでください。</p>
       </fieldset>
       <fieldset data-only="mill helix" hidden>
         <legend>エンドミル（側面加工）</legend>
@@ -236,7 +258,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <label class="check" data-only="ortho"><input id="residual" type="checkbox">残留応力（試験的。熱膨張あり、切削後に除荷・冷却。計算は 2 倍ほど）</label>
         <div class="row"><label for="efs">破壊ひずみの倍率</label><input id="efs" type="number" min="0.2" max="5" step="0.1" value="1"></div>
         <div class="row"><label for="fls">流れ応力の倍率</label><input id="fls" type="number" min="0.3" max="3" step="0.05" value="1"></div>
-        <div class="row"><label for="res">解像度</label>
+        <div class="row" data-only="ortho mill 3d helix"><label for="res">解像度</label>
           <select id="res"><option value="3">ごく粗い（h/3）</option><option value="4">かなり粗い（h/4）</option><option value="5">とても粗い（h/5）</option><option value="6">粗い（h/6）</option><option value="8" selected>標準（h/8）</option><option value="12">細かい（h/12）</option><option value="16">とても細かい（h/16）</option></select></div>
         <div class="meta" id="meta">—</div>
         <label class="check"><input id="overlay" type="checkbox" checked>前回の結果を破線で重ねる（同じモードのとき）</label>
@@ -266,7 +288,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
       <h2 id="h-ts">工具表面の温度<span><i style="background: var(--s2)"></i>切削終了時点</span><span><i style="background: var(--s1)"></i>定常推定</span></h2>
       <canvas id="chart-ts" aria-label="工具表面の温度分布"></canvas>
     </div>
-    <div class="chart">
+    <div class="chart" data-only="ortho mill 3d helix">
       <h2>工具表面の摩耗速度<span><i style="background: var(--s3)"></i>Usui 式</span></h2>
       <canvas id="chart-w" aria-label="工具表面の摩耗速度分布"></canvas>
     </div>

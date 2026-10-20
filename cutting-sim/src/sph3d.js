@@ -20,12 +20,18 @@
 // Tool temperature and wear: the 2D grid of toolheat.js in the tool section (normal to the edge for
 // oblique cutting, normal to the cutter axis for the helix), fed with the contact heat averaged
 // along the edge, i.e. the mean section of the tool.
+// mode 'mesh': any tool and workpiece from STL files, in their common CAD frame (z up). The work
+// mesh is filled with particles (bottom layers held), the tool is a signed distance field of its
+// mesh (mesh.js). The tool moves along +x ('linear': planing, broaching, turning seen as a straight
+// cut), spins about its z axis with feed along +x ('mill') or along −z ('drill'). No tool heat
+// grid there: the tool takes its share of the friction heat as a sink (adiabatic interface).
 // Units: SI. Axes: x cutting direction, y up, z across the strip (helix: x feed, y towards the
-// cutter centre from the work, z along the cutter axis).
+// cutter centre from the work, z along the cutter axis; mesh: the files' x, y, z).
 import { MATERIALS, TOOLS, flowStress, frictionAt } from './materials.js';
 import { ToolHeat } from './toolheat.js';
 import { makeTool, localSdf, toolOutline } from './tool.js';
 import { Mill } from './process.js';
+import { MeshSDF, fillMesh, bounds, radialEnvelope } from './mesh.js';
 
 export const DEFAULTS3D = {
   mat: 'S45C', vc: 200, h: 0.1, b: 0.3, lambda: 15, rake: 5, clearance: 7, edgeRadius: 10, mu: null,
@@ -35,6 +41,11 @@ export const DEFAULTS3D = {
   // Helical end mill (mode 'helix'): diameter, flutes, feed per tooth, radial and axial depth [mm],
   // helix angle [°], up/down milling, degrees followed after the tooth leaves the work.
   D: 2, z: 3, fz: 0.1, ae: 0.2, ap: 0.3, helix: 30, dir: 'down', track: 5,
+  // STL import (mode 'mesh'): triangles [m] of the tool and the work, motion 'linear' | 'mill' |
+  // 'drill', spin −1 (M03, clockwise seen from above) or +1, particle spacing [µm], travel [mm]
+  // (linear) or rotation [°] (mill, drill), feed per tooth fz and flutes z (mill), feed per turn
+  // fr [mm] (drill), tool axis point [x, y] [m] (default: the middle of the tool's box).
+  toolTris: null, workTris: null, motion: 'mill', spin: -1, dxUm: 20, travel: 0.5, angle: 180, fr: 0.05, axis: null,
 };
 
 const PI = Math.PI, DEG = PI / 180;
@@ -50,9 +61,10 @@ export class Cutting3D {
     if (c.avAlpha == null) c.avAlpha = mat.av ?? 1;
     if (c.avBeta == null) c.avBeta = mat.av ?? 1;
     this.V = c.vc / 60;
-    const helix = this.helix = c.mode === 'helix';
+    const helix = this.helix = c.mode === 'helix', meshM = this.meshMode = c.mode === 'mesh';
     const mill = this.mill = helix ? new Mill(c) : null;
-    const h = this.h = helix ? mill.hRef : c.h * 1e-3, dx = this.dx = h / c.nh;
+    // Mesh mode: the spacing is given; h (the scale for evacuation and the tool grid) is 6 spacings.
+    const h = this.h = helix ? mill.hRef : meshM ? 6 * c.dxUm * 1e-6 : c.h * 1e-3, dx = this.dx = meshM ? c.dxUm * 1e-6 : h / c.nh;
     this.hk = 1.2 * dx;
     this.E = mat.E * 1e9; this.G = this.E / (2 * (1 + mat.nu)); this.K = this.E / (3 * (1 - 2 * mat.nu));
     this.ms = Math.min(1e4, Math.max(1, 0.04 * mat.A * 1e6 / (mat.rho * this.V * this.V)));
@@ -60,7 +72,7 @@ export class Cutting3D {
     this.cs = Math.sqrt((this.K + 4 * this.G / 3) / this.rho0);
     const tool = this.tool = makeTool({ rakeDeg: c.rake, clearanceDeg: c.clearance, edgeRadius: c.edgeRadius * 1e-6 });
     this.tv = new Float64Array(3);
-    const pts = helix ? this.buildHelix() : this.buildOblique();
+    const pts = helix ? this.buildHelix() : meshM ? this.buildMesh() : this.buildOblique();
     const N = this.N = pts.length / 4;
     const f = (n) => new Float64Array(n);
     this.x = f(N); this.y = f(N); this.z = f(N); this.vx = f(N); this.vy = f(N); this.vz = f(N);
@@ -170,12 +182,62 @@ export class Cutting3D {
     return 0;
   }
 
+  // Mesh mode: work from its STL filled at dx (supports: the bottom three layers), tool SDF, and the
+  // motion. Spinning tools turn at ω = V / R about the vertical line through axis (R: the tool's
+  // largest radius about it).
+  buildMesh() {
+    const c = this.cfg, dx = this.dx;
+    this.periodic = false; this.lam = 0; this.lead = 0; this.x0 = 0; this.oy = 0;
+    const wb = bounds(c.workTris), fill = fillMesh(c.workTris, dx, c.maxN || 150000);
+    if (!fill) throw new Error('粒子が多すぎます。');
+    this.msdf = new MeshSDF(c.toolTris, 0.5 * dx);
+    // A tool placed in the work starts in the cavity it would have cut so far: a straight tool its
+    // own shape; a spinning one the envelope it sweeps, one tooth's feed back (mill: fz along −x,
+    // drill: fr / 2 up for two lips), so that the first tooth already cuts a full chip.
+    this.mx = 0; this.mz = 0; this.ca = 1; this.sa = 0; this.ax = 0; this.ay = 0; this.om = 0; this.sg = 1; this.vf = 0;
+    const tb0 = this.msdf.bb;
+    this.ax = c.axis ? c.axis[0] : 0.5 * (tb0[0] + tb0[3]); this.ay = c.axis ? c.axis[1] : 0.5 * (tb0[1] + tb0[4]);
+    const pts = [];
+    let cavity = 0, inCavity;
+    if (c.motion === 'linear') inCavity = (x, y, z) => this.sdfMesh(x, y, z) < 0.5 * dx;
+    else {
+      const ez = 0.5 * dx, nb = Math.ceil((tb0[5] - tb0[2]) / ez) + 1, env = radialEnvelope(c.toolTris, this.ax, this.ay, tb0[2], ez, nb);
+      const sx = c.motion === 'mill' ? c.fz * 1e-3 : 0, sz = c.motion === 'drill' ? 0.5 * c.fr * 1e-3 : 0;
+      inCavity = (x, y, z) => { const k = Math.floor((z - sz - tb0[2]) / ez); return k >= 0 && k < nb && env[k] > 0 && Math.hypot(x + sx - this.ax, y - this.ay) < env[k] + 0.5 * dx; };
+    }
+    for (let i = 0; i < fill.length; i += 3) {
+      if (inCavity(fill[i], fill[i + 1], fill[i + 2])) { cavity++; continue; }
+      pts.push(fill[i], fill[i + 1], fill[i + 2], fill[i + 2] < wb[2] + 3 * dx ? 1 : 0);
+    }
+    this.cavity = cavity;
+    this.L = wb[3] - wb[0]; this.H = wb[5] - wb[2]; this.bz = wb[4] - wb[1]; this.wb = wb;
+    const ax = this.ax, ay = this.ay;
+    let R = 0;
+    const V = this.msdf.V;
+    for (let i = 0; i < V.length; i += 3) R = Math.max(R, Math.hypot(V[i] - ax, V[i + 1] - ay));
+    this.Rt = R;
+    const spin = c.motion !== 'linear';
+    this.om = spin ? this.V / R : 0; this.sg = c.spin < 0 ? -1 : 1;
+    this.vf = c.motion === 'mill' ? c.fz * 1e-3 * c.z * this.om / (2 * PI) : c.motion === 'drill' ? c.fr * 1e-3 * this.om / (2 * PI) : 0;
+    this.touched = new Uint8Array(pts.length / 4);
+    this.Lz = 1;
+    return pts;
+  }
   pose(time) {
+    if (this.meshMode) {
+      const c = this.cfg;
+      this.ang = this.sg * this.om * time;
+      this.mx = c.motion === 'linear' ? this.V * time : c.motion === 'mill' ? this.vf * time : 0;
+      this.mz = c.motion === 'drill' ? -this.vf * time : 0;
+      this.ca = Math.cos(this.ang); this.sa = Math.sin(this.ang);
+      return;
+    }
     if (!this.helix) { this.ox = this.x0 + this.tvx * time; return; }
     const m = this.mill;
     m.beta = m.bStart + m.om * (time - m.tk); m.cx = m.k * m.s * m.fz + m.drift(m.beta); m.cy = m.R - m.ae;
   }
   progress() {
+    if (this.meshMode) return this.cfg.motion === 'linear' ? this.mx / (this.cfg.travel * 1e-3) : Math.abs(this.ang) / (this.cfg.angle * DEG);
     if (this.helix) { const m = this.mill; return (m.k + (m.beta - m.bStart) / (m.bEnd - m.bStart)) / m.passes; }
     return (this.ox - this.x0) / (this.cfg.cutLen * 1e-3 + 2 * this.lead);
   }
@@ -194,6 +256,7 @@ export class Cutting3D {
   // Tool SDF at a world point: writes this.o = [d, nx, ny, nz, u, w, s] and returns d.
   sdf(px, py, pz) {
     if (this.helix) return this.sdfHelix(px, py, pz);
+    if (this.meshMode) return this.sdfMesh(px, py, pz);
     const rx = px - this.ox, ry = py - this.oy, rz = pz;
     const u = rx * this.nx_ + rz * this.nz_, s = rx * this.ex_ + rz * this.ez_;
     const o = this.tool.out, d = localSdf(this.tool, u, ry, o);
@@ -219,6 +282,18 @@ export class Cutting3D {
     return q[0];
   }
 
+  // Mesh tool: world point → tool frame (undo the feed, then the spin about the axis), sample the
+  // field, turn the normal back. Also sets this.tv, the tool surface velocity there.
+  sdfMesh(px, py, pz) {
+    const q = this.o || (this.o = new Float64Array(7)), s = this.sm || (this.sm = new Float64Array(4));
+    const X = px - this.mx - this.ax, Y = py - this.ay, ca = this.ca, sa = this.sa;
+    this.msdf.sample(this.ax + ca * X + sa * Y, this.ay - sa * X + ca * Y, pz - this.mz, 3 * this.dx, s);
+    q[0] = s[0]; q[1] = ca * s[1] - sa * s[2]; q[2] = sa * s[1] + ca * s[2]; q[3] = s[3];
+    const w = this.sg * this.om, tv = this.tv;
+    tv[0] = (this.cfg.motion === 'linear' ? this.V : this.cfg.motion === 'mill' ? this.vf : 0) - w * Y; tv[1] = w * X; tv[2] = this.cfg.motion === 'drill' ? -this.vf : 0;
+    return q[0];
+  }
+
   // Sort the particles by neighbour cell (counting sort) so that the pair loops walk memory
   // nearly in order; every per-particle array is permuted.
   reorder(key, nc) {
@@ -228,7 +303,7 @@ export class Cutting3D {
     const perm = new Int32Array(N);
     for (let i = 0; i < N; i++) perm[cnt[kk[i]]++] = i;
     const arrs = [this.x, this.y, this.z, this.vx, this.vy, this.vz, this.rho, this.p, this.T, this.ep, this.epd, this.seq, this.sr, this.z0, this.dmg,
-      ...this.s, this.fixed, this.contact, this.dead];
+      ...this.s, this.fixed, this.contact, this.dead, ...(this.touched ? [this.touched] : [])];
     for (const a of arrs) {
       const tmp = a.slice();
       for (let k = 0; k < N; k++) a[k] = tmp[perm[k]];
@@ -515,10 +590,13 @@ export class Cutting3D {
     const freezeA = helix ? (this.h + tool.r + 2 * dx) / ml.R : 0;
     let i0 = 0, i1 = 0, i2 = 0, work = 0, lt = 0, lr = 0, qt = 0;
     const heat = this.heat, Lz = this.Lz, acc = helix || this.progress() > 0.5, cMat = mat.c;
+    const meshM = this.meshMode, touched = this.touched, vSlow2 = (0.02 * V) ** 2, dFree = 8 * dx;
     for (let i = 0; i < N; i++) {
+      // Mesh: a frozen particle comes back to life when the tool (the next tooth) comes near.
+      if (meshM && fixed[i] === 2 && !this.dead[i] && this.sdf(x[i], y[i], z[i]) < 3 * dx) fixed[i] = 0;
       if (fixed[i] || this.dead[i]) { vx[i] = 0; vy[i] = 0; vz[i] = 0; this.contact[i] = 0; continue; }
       // Machined surface well behind the edge (normal distance) has unloaded: freeze it.
-      if (helix) {
+      if (meshM) { /* below, from the tool distance */ } else if (helix) {
         const X = x[i] - ml.cx, Y = y[i] - ml.cy;
         if (X * X + Y * Y > ml.R * ml.R && Math.atan2(Y, X) < ml.beta - z[i] * this.kh - freezeA) { fixed[i] = 2; vx[i] = 0; vy[i] = 0; vz[i] = 0; continue; }
       } else {
@@ -531,8 +609,14 @@ export class Cutting3D {
       x[i] += (vx[i] + AC[ai + 3]) * dt; y[i] += (vy[i] + AC[ai + 4]) * dt; z[i] += (vz[i] + AC[ai + 5]) * dt;
       if (per) { if (z[i] >= 0.5 * P) z[i] -= P; else if (z[i] < -0.5 * P) z[i] += P; }
       const dist = this.sdf(x[i], y[i], z[i]);
-      if (dist >= d0) { this.contact[i] = 0; continue; }
+      if (dist >= d0) {
+        this.contact[i] = 0;
+        // Mesh: material the tool has touched, now clear of it and at rest, is machined surface.
+        if (meshM && touched[i] && dist > dFree && vx[i] * vx[i] + vy[i] * vy[i] + vz[i] * vz[i] < vSlow2) { fixed[i] = 2; vx[i] = 0; vy[i] = 0; vz[i] = 0; }
+        continue;
+      }
       this.contact[i] = 1;
+      if (meshM) touched[i] = 1;
       const o = this.o, nx = o[1], ny = o[2], nz = o[3], pen = d0 - dist;
       x[i] += nx * pen; y[i] += ny * pen; z[i] += nz * pen;
       const tvx = tv[0], tvy = tv[1], tvz = tv[2];
@@ -551,7 +635,7 @@ export class Cutting3D {
         T[i] += fw * e / (this.mReal * cMat); eTool = (1 - fw) * e;
       }
       // Interface conduction into the tool grid, per unit edge length (face area dx² over Lz).
-      const qc = heat.contact(heat.cellOf(o[4], o[5]), T[i], area / Lz, eTool / Lz, jn / dt / Lz, vt, dt, acc) * Lz;
+      const qc = meshM ? 0 : heat.contact(heat.cellOf(o[4], o[5]), T[i], area / Lz, eTool / Lz, jn / dt / Lz, vt, dt, acc) * Lz;
       T[i] -= qc / (this.mReal * cMat);
       qt += qc + eTool;
       const dpx = jn * nx - jt * tx, dpy = jn * ny - jt * ty, dpz = jn * nz - jt * tz;
@@ -561,6 +645,9 @@ export class Cutting3D {
       if (helix) {                                              // tangential / radial at the particle
         const X = x[i] - ml.cx, Y = y[i] - ml.cy, ir = 1 / Math.hypot(X, Y);
         lt -= (-Y * dpx + X * dpy) * ir; lr -= (X * dpx + Y * dpy) * ir;
+      } else if (meshM) {                                       // torque on the tool about its axis
+        const X = x[i] - this.mx - this.ax, Y = y[i] - this.ay;
+        lt -= X * dpy - Y * dpx;
       }
     }
     const im = this.imp;
@@ -570,7 +657,7 @@ export class Cutting3D {
     this.heatTool += qt;
     this.t += dt; this.steps++;
     if (helix && this.nextTooth()) return;
-    if (this.progress() >= 1) { this.done = true; if (!helix) heat.steady(); }
+    if (this.progress() >= 1) { this.done = true; if (!helix && !meshM) heat.steady(); }
   }
 
   // Helix, several teeth in a row (as process.js Mill.nextPass): the chip of this tooth is dropped,
@@ -628,6 +715,7 @@ export class Cutting3D {
       const cx = e.sx / e.n, cy = e.sy / e.n, cz = e.sz / e.n;
       let d;
       if (this.helix) { const th = m.beta - cz * this.kh; d = Math.hypot(cx - m.cx - m.R * Math.cos(th), cy - m.cy - m.R * Math.sin(th)); }
+      else if (this.meshMode) d = this.sdf(cx, cy, cz) > Math.max(0.3e-3, 30 * this.dx) ? Infinity : 0;
       else d = Math.hypot((cx - this.ox) * this.nx_ + (this.periodic ? 0 : cz * this.nz_), cy - this.oy);
       if (d > rEvac) { for (const i of e.ids) dead[i] = 2; this.nEvac += e.n; }
     }
@@ -663,6 +751,7 @@ export class Cutting3D {
   // Also the chip thickness normal to the rake face in the middle of the strip.
   chipFlow() {
     if (this.helix) return this.chipFlowHelix();
+    if (this.meshMode) return { eta: null, hc: 0, n: 0 };
     const t = this.tool, h = this.h, V = this.V;
     let se = 0, su = 0, n = 0;
     const ds = [];
@@ -712,6 +801,7 @@ export class Cutting3D {
   sample() {
     if (this.impT <= 0) return;
     if (this.helix) { this.sampleHelix(); return; }
+    if (this.meshMode) { this.sampleMesh(); return; }
     const g = this.imp.map((v) => v / this.impT);
     this.imp.fill(0); this.impT = 0;
     // Cutting axes: c along the tool velocity, y up, r = y × c in the surface plane.
@@ -721,6 +811,18 @@ export class Cutting3D {
     for (let i = 0; i < this.N; i++) if (!this.dead[i] && this.T[i] > tmax) tmax = this.T[i];
     const hs = this.hist, fl = this.chipFlow();
     hs.axis.push((this.ox - this.x0) / Math.max(this.tvx / this.V, 1e-9) * 1e3); hs.fc.push(-f[0]); hs.ft.push(f[1]); hs.fr.push(f[2]); hs.tmax.push(tmax); hs.ttool.push(this.heat.maxT()); hs.flow.push(fl.eta);
+  }
+
+  // Mesh: force on the tool in the file's axes (x, y, z) and the spindle torque (resisting the
+  // spin, N·m), against the travel [mm] or the rotation [°].
+  sampleMesh() {
+    const im = this.imp, T = this.impT, hs = this.hist;
+    const f = [im[0] / T, im[1] / T, im[2] / T], mz = -this.sg * im[3] / T;
+    this.imp.fill(0); this.impT = 0;
+    let tmax = -Infinity;
+    for (let i = 0; i < this.N; i++) if (!this.dead[i] && this.T[i] > tmax) tmax = this.T[i];
+    hs.axis.push(this.cfg.motion === 'linear' ? this.mx * 1e3 : Math.abs(this.ang) / DEG);
+    hs.fc.push(f[0]); hs.ft.push(f[1]); hs.fr.push(f[2]); (hs.mz || (hs.mz = [])).push(mz); hs.tmax.push(tmax); hs.ttool.push(null); hs.flow.push(null);
   }
 
   // Helix: tangential Ft and radial Fr (towards the axis) summed at each contact point, axial Fa
@@ -795,6 +897,16 @@ export class Cutting3D {
     const ci = this.chipInfo, frac = { ...tl, pieces: ci ? ci.pieces : 0, failed: ci ? ci.failed : 0, evacuated: this.nEvac };
     if (this.helix) return this.summaryHelix({ ...frac, tmax, epMax, heatRatio: this.workIn > 0 ? heat / this.workIn : 0, progress: Math.min(1, this.progress()),
       t: this.t, steps: this.steps, N: this.N, dx: this.dx * 1e6, ms: this.ms, done: this.done, kcRef: this.mat.kcRef });
+    if (this.meshMode) {
+      const amax = (a) => a.reduce((v, x) => (x != null && Math.abs(x) > Math.abs(v) ? x : v), 0);
+      const mz = avg(hs.mz || []);
+      return {
+        ...frac, toolT: null, toolSteadyT: null, mode: 'mesh', fx: avg(hs.fc), fy: avg(hs.ft), fz: avg(hs.fr), fxMax: amax(hs.fc), fyMax: amax(hs.ft), fzMax: amax(hs.fr),
+        torque: mz, torqueMax: amax(hs.mz || []), power: mz * this.om, rpm: this.om * 60 / (2 * PI), vf: this.vf * 6e4, Rt: this.Rt * 1e3, motion: c.motion,
+        tmax, epMax, heatRatio: this.workIn > 0 ? heat / this.workIn : 0, progress: Math.min(1, this.progress()), travel: this.mx * 1e3, angle: Math.abs(this.ang) / DEG,
+        t: this.t, steps: this.steps, N: this.N, dx: this.dx * 1e6, ms: this.ms, done: this.done, kcRef: this.mat.kcRef, bricks: this.msdf.bricks.size,
+      };
+    }
     const fc = avg(hs.fc), ft = avg(hs.ft), fr = avg(hs.fr), fl = this.chipFlow();
     const area = (this.periodic ? this.bz * 1e3 * Math.cos(this.lam) : this.bz * 1e3) * c.h;   // mm², normal to V
     return {

@@ -1,8 +1,9 @@
 // 3D view of the particles and the tool (Three.js, orbit to rotate): the inclined wedge of oblique
-// cutting, or the helical tooth of an end mill (solver frame with z along the cutter axis, shown
-// upright: view = (x, z, −y)).
+// cutting, the helical tooth of an end mill, or an imported STL tool (solver frame with z along the
+// cutter axis or up, shown upright: view = (x, z, −y)).
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { surfaceNets } from './surface3d.js';
 
 // Round, softly shaded point sprite so particles read as small balls.
 function spriteTexture() {
@@ -34,6 +35,13 @@ export class View3D {
     this.root = new THREE.Group(); this.root.matrixAutoUpdate = false;
     this.root.add(this.points); this.scene.add(this.root);
     this.toolMesh = null; this.toolKey = '';
+    // Continuous surface (render 'bands' / 'smooth'): coloured through a 1D texture of the map, so
+    // that bands keep sharp edges across the triangles.
+    this.sgeo = new THREE.BufferGeometry();
+    this.smat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.15, roughness: 0.55, side: THREE.DoubleSide });
+    this.surf = new THREE.Mesh(this.sgeo, this.smat); this.surf.visible = false;
+    this.root.add(this.surf);
+    this.lutKey = ''; this.surfAt = 0;
     this.zoom = 'tip'; this.framed = false;
     new ResizeObserver(() => this.resize()).observe(el);
     const loop = () => { if (!this.el.hidden && this.controls.update()) this.render(); requestAnimationFrame(loop); };
@@ -66,7 +74,15 @@ export class View3D {
     this.zoom = zoom;
     const t = f.tool, h = f.h, [L, H, B] = f.box;
     let target, dist, dir;
-    if (t.helix) {
+    if (t.mesh) {
+      // Where the tool meets the work: its axis at the top of the work; the whole work for 'all'.
+      const wb = t.wb, span = Math.max(wb[3] - wb[0], wb[4] - wb[1], wb[5] - wb[2]);
+      target = zoom === 'tip' ? new THREE.Vector3(t.pose[3] + t.pose[0], t.pose[4], wb[5] + t.pose[1])
+        : new THREE.Vector3(0.5 * (wb[0] + wb[3]), 0.5 * (wb[1] + wb[4]), 0.5 * (wb[2] + wb[5]));
+      target.applyMatrix4(this.root.matrix);
+      dist = zoom === 'tip' ? Math.max(0.9 * span, 30 * h) : 2.2 * span;
+      dir = new THREE.Vector3(0.75, -0.9, 0.7).normalize().transformDirection(this.root.matrix);
+    } else if (t.helix) {
       // Tooth tip at mid height, seen from outside the cutter, slightly from above.
       const th = t.theta - 0.5 * t.ap * t.kh;
       target = zoom === 'tip' ? new THREE.Vector3(t.c[0] + t.R * Math.cos(th), t.c[1] + t.R * Math.sin(th), 0.5 * t.ap) : new THREE.Vector3(0, -0.5 * H, 0.5 * t.ap);
@@ -118,9 +134,32 @@ export class View3D {
     this.toolMesh.rotation.set(0, 0, t.theta);
   }
 
+  // Imported tool (mesh mode): the STL triangles in the tool's own frame, built once per run; the
+  // pivot sits on the spin axis and carries the feed and the turn.
+  setMesh(t) {
+    const key = `m|${t.id}`;
+    if (key !== this.toolKey && t.tris) {
+      if (this.toolMesh) { this.root.remove(this.toolMesh); this.toolMesh.traverse((o) => o.geometry && o.geometry.dispose()); }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(t.tris, 3));
+      g.translate(-t.pose[3], -t.pose[4], 0);
+      g.computeVertexNormals();
+      const mat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, metalness: 0.6, roughness: 0.32, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide });
+      const pivot = new THREE.Group(), body = new THREE.Mesh(g, mat);
+      body.renderOrder = 1; pivot.add(body);
+      this.toolMesh = pivot; this.root.add(pivot); this.toolKey = key;
+      this.framed = false;   // a new run: aim at it
+    }
+    if (!this.toolMesh || this.toolKey !== key) return;
+    const [mx, mz, ang, ax, ay] = t.pose;
+    this.toolMesh.position.set(ax + mx, ay, mz);
+    this.toolMesh.rotation.set(0, 0, ang);
+  }
+
   // Extruded wedge: the normal-section outline swept along the inclined edge.
   setTool(t) {
     if (t.helix) { this.setHelix(t); return; }
+    if (t.mesh) { this.setMesh(t); return; }
     const key = `${t.lam}|${t.outline.length}|${t.outline[0]}|${t.len}`;
     if (key !== this.toolKey) {
       if (this.toolMesh) { this.root.remove(this.toolMesh); this.toolMesh.traverse((o) => o.geometry && o.geometry.dispose()); }
@@ -138,13 +177,63 @@ export class View3D {
     this.toolMesh.position.set(t.pos[0], t.pos[1], t.pos[2]);
   }
 
+  // Nothing to show (a run that cannot start): drop the particles and the tool.
+  clear() {
+    this.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+    this.geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(0), 3));
+    if (this.toolMesh) { this.root.remove(this.toolMesh); this.toolMesh.traverse((o) => o.geometry && o.geometry.dispose()); this.toolMesh = null; this.toolKey = ''; }
+    this.framed = false;
+    this.render();
+  }
+
   // Particles coloured by a field; `section` keeps only a slice through the strip's middle
   // (end mill: the plane at mid height, as in the 2D section).
-  update(f, vals, lo, hi, lut, section) {
-    this.setFrame(!!f.tool.helix);
+  // Texture of the colour map: nb hard bands, or 256 smooth steps.
+  setLut(lut, nb) {
+    const key = `${nb}|${lut[0]}|${lut[255]}|${lut[128]}`;
+    if (key === this.lutKey) return;
+    const w = nb || 256, d = new Uint8Array(4 * w);
+    for (let b = 0; b < w; b++) { const c = lut[nb ? Math.round(b / (nb - 1) * 255) : b]; d.set([c[0], c[1], c[2], 255], 4 * b); }
+    if (this.smat.map) this.smat.map.dispose();
+    const t = new THREE.DataTexture(d, w, 1, THREE.RGBAFormat);
+    t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = nb ? THREE.NearestFilter : THREE.LinearFilter;
+    t.needsUpdate = true;
+    this.smat.map = t; this.smat.needsUpdate = true; this.lutKey = key;
+  }
+
+  update(f, vals, lo, hi, lut, section, nb = -1) {
+    const t = f.tool;
+    this.setFrame(!!(t.helix || t.mesh));
     const n = f.x.length, sel = [];
-    const halfT = 0.75 * f.dx, zc = f.tool.helix ? 0.5 * f.tool.ap : 0;
-    for (let i = 0; i < n; i++) if (!section || Math.abs(f.z[i] - zc) < halfT) sel.push(i);
+    // Section: the mid-height plane of the end mill, the vertical plane through the axis of an
+    // imported tool, the middle of the oblique strip.
+    const halfT = 0.75 * f.dx, zc = t.helix ? 0.5 * t.ap : 0, sc = t.mesh ? f.y : f.z, yc = t.mesh ? t.pose[4] : zc;
+    for (let i = 0; i < n; i++) if (!section || Math.abs(sc[i] - yc) < halfT) sel.push(i);
+    // Surface: rebuilt at most a few times a second while running (it costs more than the points).
+    let surf = false;
+    if (nb >= 0) {
+      const now = performance.now();
+      if (!f.running || now - this.surfAt > 400 || !this.surf.visible || this.surfKey !== `${nb}|${section}`) {
+        const r = surfaceNets(f, sel, vals, lo, hi);
+        if (r) {
+          this.setLut(lut, nb);
+          const g = this.sgeo;
+          g.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
+          g.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
+          g.setAttribute('color', new THREE.BufferAttribute(r.col, 3));
+          g.setIndex(new THREE.BufferAttribute(r.idx, 1));
+          g.computeVertexNormals(); g.computeBoundingSphere();
+          this.surfAt = now; this.surfKey = `${nb}|${section}`; surf = true;
+        }
+      } else surf = true;
+    }
+    this.surf.visible = surf; this.points.visible = !surf;
+    if (surf) {
+      this.setTool(f.tool);
+      if (!this.framed) this.frame(f);
+      this.render();
+      return;
+    }
     const m = sel.length, pos = new Float32Array(3 * m), col = new Float32Array(3 * m), inv = 255 / (hi - lo);
     for (let k = 0; k < m; k++) {
       const i = sel[k];

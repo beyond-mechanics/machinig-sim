@@ -5,6 +5,8 @@ import { chamferProfile, breakerProfile, importProfile, wornProfile, importWorkp
 import { makeTool, toolOutline } from './tool.js';
 import { View3D } from './view3d.js';
 import { renderField, legendGradient, bandsOf } from './fieldview.js';
+import { parseSTL, bounds, volume, weld } from './mesh.js';
+import { EXAMPLES } from './examples3d.js';
 
 const $ = (id) => document.getElementById(id);
 const workerUrl = URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' }));
@@ -40,7 +42,7 @@ let frame = null, field = 'T', zoom = 'tip', status = 'idle', cfg = null, mode =
 // Field picture: 'bands' (contour bands, as in FE post-processing), 'smooth', or 'particles'.
 let render = 'bands';
 try { render = localStorage.getItem('cutting-sim.render') || render; } catch (e) { /* storage blocked */ }
-const is3 = (m = mode) => m === '3d' || m === 'helix';   // 3D solver modes
+const is3 = (m = mode) => m === '3d' || m === 'helix' || m === 'mesh';   // 3D solver modes
 const view = $('view'), vctx = view.getContext('2d');
 
 // ---- Conditions form ----
@@ -71,6 +73,7 @@ for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('cl
   $('res').value = mode === 'ortho' ? '8' : mode === 'helix' ? '4' : '5';
   if (mode === '3d') $('len').value = '0.4';
   showShapeRows();
+  if (mode === 'mesh') stlInfo();
   reset();
 });
 
@@ -81,6 +84,15 @@ function readCfg() {
     mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), friction: $('fric').value, nh: num('res'),
     D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), floor: $('floor').checked, dir: $('dir').value, track: num('track'), passes: num('passes'), fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
   };
+  if (mode === 'mesh') {
+    const mot = $('smotion').value, off = [num('sox'), num('soy'), num('soz')].map((v) => (v || 0) * 1e-3);
+    const toM = (t, o) => { if (!t) return null; const r = new Float64Array(t.length); for (let i = 0; i < t.length; i++) r[i] = t[i] * 1e-3 + o[i % 3]; return r; };
+    return {
+      mode, mat: matSel.value, vc: num('vc'), mu: num('mu'), friction: $('fric').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
+      motion: mot, spin: parseFloat($('sspin').value), z: num('sflutes'), fz: num('sfz'), fr: num('sfr'), travel: num('stravel'), angle: num('sangle'), dxUm: num('sdx'),
+      toolTris: toM(stl.tool && stl.tool.t, off), workTris: toM(stl.work && stl.work.t, [0, 0, 0]), maxN: STL_MAX,
+    };
+  }
   if (mode === '3d') return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), b: num('b3'), lambda: num('lambda'), rake: num('rake'),
     clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), friction: $('fric').value, nh: num('res'), cutLen: num('len'), sides: $('sides').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
@@ -96,7 +108,88 @@ function readCfg() {
   };
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'fric', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
-  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual', 'preheat']) $(id).addEventListener('change', reset);
+  'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual', 'preheat',
+  'sspin', 'sflutes', 'sfz', 'sfr', 'stravel', 'sangle']) $(id).addEventListener('change', reset);
+
+// ---- STL mode: an imported tool and work (closed meshes, z up), or one of the built-in examples ----
+const stl = { tool: null, work: null, ok: false };   // tool / work: { t: triangles [mm], name, open, tri }
+const STL_MAX = 150000;   // particles
+const UNIT = { mm: 1, um: 1e-3, in: 25.4 };
+for (const [k, e] of Object.entries(EXAMPLES)) $('sex').appendChild(new Option(e.name, k));
+const meshPart = (t, name, file) => ({ t, name, file, open: weld(t).open, tri: t.length / 9 });
+async function loadStl(key, f) {
+  try { stl[key] = meshPart(parseSTL(await f.arrayBuffer(), UNIT[$('sunit').value]), f.name, f); }
+  catch (err) { stl[key] = { err: `${f.name}：${err.message}`, file: f }; }
+}
+for (const [id, key] of [['stool', 'tool'], ['swork', 'work']]) $(id).addEventListener('change', async () => {
+  const f = $(id).files[0];
+  if (!f) return;
+  $('sex').value = '';
+  await loadStl(key, f);
+  stlInfo(); reset();
+});
+$('sunit').addEventListener('change', async () => {
+  for (const k of ['tool', 'work']) if (stl[k] && stl[k].file) await loadStl(k, stl[k].file);
+  stlInfo(); reset();
+});
+$('sex').addEventListener('change', () => {
+  const e = EXAMPLES[$('sex').value];
+  if (!e) return;
+  stl.tool = meshPart(e.tool(), '例の工具'); stl.work = meshPart(e.work(), '例のワーク');
+  $('stool').value = ''; $('swork').value = ''; $('sunit').value = 'mm';
+  const c = e.cfg;
+  $('smotion').value = c.motion; $('sdx').value = c.dxUm;
+  if (c.travel) $('stravel').value = c.travel;
+  if (c.angle) $('sangle').value = c.angle;
+  if (c.z) $('sflutes').value = c.z;
+  if (c.fz) $('sfz').value = c.fz;
+  if (c.fr) $('sfr').value = c.fr;
+  for (const id of ['sox', 'soy', 'soz']) $(id).value = 0;
+  showShapeRows(); stlInfo(); reset();
+});
+$('smotion').addEventListener('change', () => { showShapeRows(); stlInfo(); reset(); });
+for (const id of ['sdx', 'sox', 'soy', 'soz']) $(id).addEventListener('change', () => { stlInfo(); reset(); });
+for (const id of ['vc', 'sflutes', 'sfz', 'sfr', 'stravel']) $(id).addEventListener('change', stlInfo);
+function stlCount() {
+  const dx = parseFloat($('sdx').value) * 1e-3;
+  return stl.work && stl.work.t ? Math.round(Math.abs(volume(stl.work.t)) / (dx * dx * dx)) : 0;
+}
+// What was read, the particle count, the spindle speed and feed it gives, and what looks wrong.
+function stlInfo() {
+  const el = $('sinfo'), msg = [], bad = [];
+  const mm = (b) => `${(b[3] - b[0]).toFixed(2)} × ${(b[4] - b[1]).toFixed(2)} × ${(b[5] - b[2]).toFixed(2)} mm`;
+  const off = ['sox', 'soy', 'soz'].map((id) => parseFloat($(id).value) || 0);
+  for (const [k, lab] of [['tool', '工具'], ['work', 'ワーク']]) {
+    const m = stl[k];
+    if (!m) { msg.push(`${lab}：未選択`); continue; }
+    if (m.err) { bad.push(m.err); continue; }
+    const b = bounds(m.t);
+    if (k === 'tool') for (let i = 0; i < 3; i++) { b[i] += off[i]; b[i + 3] += off[i]; }
+    m.b = b;
+    msg.push(`${lab}：${m.name}、三角形 ${m.tri.toLocaleString()}、${mm(b)}`);
+    if (m.open) bad.push(`${lab}の形が閉じていません（相手のない縁 ${m.open} 本）。閉じた STL にしてください`);
+  }
+  const a = stl.tool && stl.tool.b, w = stl.work && stl.work.b;
+  if (a && w && !stl.tool.err && !stl.work.err) {
+    const n = stlCount();
+    msg.push(`粒子 約 ${n.toLocaleString()} 個`);
+    if (n > STL_MAX) bad.push(`粒子が ${STL_MAX.toLocaleString()} 個を超えます。間隔を広げるか、ワークを小さくしてください`);
+    const reach = $('smotion').value === 'linear' ? parseFloat($('stravel').value) || 0 : 0;   // the straight tool sweeps +x
+    if (a[3] + reach < w[0] || a[0] > w[3] || a[4] < w[1] || a[1] > w[4] || a[5] < w[2] || a[2] > w[5]) bad.push('工具とワークが離れています。工具をワークに食い込ませた位置に置いてください');
+    const mot = $('smotion').value;
+    if (mot !== 'linear') {
+      const ax = 0.5 * (a[0] + a[3]), ay = 0.5 * (a[1] + a[4]), t = stl.tool.t;
+      let R = 0;
+      for (let i = 0; i < t.length; i += 3) R = Math.max(R, Math.hypot(t[i] + off[0] - ax, t[i + 1] + off[1] - ay));
+      const rpm = parseFloat($('vc').value) * 1e3 / (2 * Math.PI * R);
+      const vf = (mot === 'mill' ? parseFloat($('sfz').value) * parseFloat($('sflutes').value) : parseFloat($('sfr').value)) * rpm;
+      msg.push(`回転軸 (${ax.toFixed(2)}, ${ay.toFixed(2)})、半径 ${R.toFixed(3)} mm → ${Math.round(rpm).toLocaleString()} min⁻¹、送り ${Math.round(vf).toLocaleString()} mm/min`);
+    }
+  } else bad.length || msg.push('工具とワークの両方を選んでください');
+  el.textContent = [...msg, ...bad].join('。') + '。';
+  el.classList.toggle('err', bad.length > 0);
+  stl.ok = !!(a && w) && bad.length === 0;
+}
 
 // ---- Workpiece cross-section (orthogonal cutting): a flat block or an imported outline ----
 const work = { text: null, name: '', rot: 0, flip: false, loops: null, info: null };
@@ -163,13 +256,14 @@ const custom = { text: null, name: '', rot: 0, flip: false, profile: null, wornM
 // Visibility: data-only lists the modes an element belongs to, data-shape the tool shapes
 // (3D supports only the standard wedge).
 function showShapeRows() {
-  const sh = is3() ? 'wedge' : $('shape').value;
-  const ws = $('wshape').value;
-  for (const el of document.querySelectorAll('[data-only], [data-shape], [data-wshape]')) {
+  const sh = mode === 'mesh' ? 'mesh' : is3() ? 'wedge' : $('shape').value;
+  const ws = $('wshape').value, mot = $('smotion').value;
+  for (const el of document.querySelectorAll('[data-only], [data-shape], [data-wshape], [data-motion]')) {
     const okMode = !el.dataset.only || el.dataset.only.split(' ').includes(mode);
     const okShape = !el.dataset.shape || el.dataset.shape.split(' ').includes(sh);
     const okWork = !el.dataset.wshape || el.dataset.wshape === ws;
-    el.hidden = !(okMode && okShape && okWork);
+    const okMot = !el.dataset.motion || el.dataset.motion.split(' ').includes(mot);
+    el.hidden = !(okMode && okShape && okWork && okMot);
   }
   view.hidden = is3(); $('view3d').hidden = !is3();
   if (is3()) view3d();
@@ -238,6 +332,9 @@ function reset() {
   cfg = readCfg();
   drawPreview(); drawWork();
   status = 'idle'; frame = null;
+  // STL mode without a usable tool and work: nothing to compute yet (the form says why).
+  if (cfg.mode === 'mesh') stlInfo();
+  if (cfg.mode === 'mesh' && !stl.ok) { cfg.blocked = true; if (v3) v3.clear(); buildCells(); updateRunButton(); drawCharts(); return; }
   worker.postMessage({ type: 'init', cfg });
   buildCells();
   updateRunButton();
@@ -252,6 +349,7 @@ $('reset').addEventListener('click', reset);
 function updateRunButton() {
   const b = $('run');
   b.textContent = status === 'running' ? '一時停止' : status === 'paused' ? '再開' : status === 'done' ? 'もう一度' : '切削開始';
+  b.disabled = !!(cfg && cfg.blocked);
   const pill = $('state');
   pill.dataset.s = status;
   pill.textContent = { idle: '待機', running: '計算中', paused: '一時停止', done: '完了' }[status];
@@ -282,18 +380,25 @@ for (const b of document.querySelectorAll('[data-render]')) {
     draw();
   });
 }
-let section = false;
+let section = false, meshTris = null;
 $('section').addEventListener('click', () => { section = !section; $('section').setAttribute('aria-pressed', section); draw(); });
 
 worker.onmessage = (e) => {
   if (e.data.type !== 'frame') return;
   frame = e.data;
+  // The imported tool's triangles come with the first frame of a run only: keep them for the view.
+  const tl = frame.tool;
+  if (tl && tl.mesh) { if (tl.tris) meshTris = { id: tl.id, tris: tl.tris }; else if (meshTris && meshTris.id === tl.id) tl.tris = meshTris.tris; }
   // A frame sent before the worker saw the latest run request (the one from a reset just before
   // the click, when an edited field loses focus to the button) must not read as a pause.
   if (status === 'running' && !frame.running && frame.runN === runN) status = frame.summary.done ? 'done' : 'paused';
-  updateRunButton();
-  draw(); drawCharts(); readouts();
+  // Draw only the newest frame, once per display refresh: frames can arrive faster than a 3D
+  // surface is drawn, and a backlog would make the page lag ever further behind.
+  if (drawPending) return;
+  drawPending = true;
+  requestAnimationFrame(() => { drawPending = false; if (!frame) return; updateRunButton(); draw(); drawCharts(); readouts(); });
 };
+let drawPending = false;
 
 // ---- Field view ----
 let xf = null; // current world → screen transform
@@ -448,8 +553,8 @@ new ResizeObserver(() => { draw(); drawCharts(); }).observe(view);
 
 function draw3d() {
   const vals = fieldValues(field), [lo, hi] = range(field, vals), f = FIELDS[field];
-  view3d().update(frame, vals, lo, hi, LUT[f.map], section);
-  $('lg-bar').style.background = cssGrad(f.map);
+  view3d().update(frame, vals, lo, hi, LUT[f.map], section, render === 'particles' ? -1 : bandsOf(render));
+  $('lg-bar').style.background = legendGradient(LUT[f.map], render === 'particles' ? 0 : bandsOf(render));
   $('lg-lo').textContent = f.fmt(lo); $('lg-hi').textContent = f.fmt(hi);
   $('lg-name').textContent = (f.unit ? `${f.label} [${f.unit}]` : f.label) + (section ? '・中央断面' : '') + '・ドラッグで回転';
 }
@@ -533,7 +638,20 @@ function drawCharts() {
   const on = prev && cfg && prev.mode === cfg.mode && $('overlay').checked;
   const pv = (key, color) => (on && prev.hist[key] ? [{ data: prev.hist[key], xs: prev.hist.axis, color, dash: true }] : []);
   $('cf-prev').hidden = !on;
-  $('cf-c-wrap').hidden = !(d3 || hx);
+  $('cf-c-wrap').hidden = !(d3 || hx || (cfg && cfg.mode === 'mesh'));
+  if (cfg && cfg.mode === 'mesh') {
+    const h = frame && frame.mesh ? frame.hist : { axis: [], fc: [], ft: [], fr: [], tmax: [], mz: [] }, lin = cfg.motion === 'linear';
+    const xmax = lin ? Math.max(cfg.travel, ...h.axis) : Math.max(cfg.angle, ...h.axis);
+    const xl = lin ? '横軸 工具の移動量 [mm]' : '横軸 工具の回転角 [°]';
+    lineChart($('chart-f'), h.axis, [...pv('fc', '--s1'), ...pv('ft', '--s2'), ...pv('fr', '--s3'), { data: h.fc, color: '--s1' }, { data: h.ft, color: '--s2' }, { data: h.fr, color: '--s3' }], { xmax, unit: 'N', xlabel: xl, signed: true });
+    lineChart($('chart-t'), h.axis, [...pv('tmax', '--s3'), { data: h.tmax, color: '--s3' }], { xmax, unit: '°C', xlabel: xl });
+    lineChart($('chart-ts'), h.axis, lin ? [] : [...pv('mz', '--s1'), { data: (h.mz || []).map((v) => v * 1e3), color: '--s1' }],
+      { xmax, unit: 'mN·m', xlabel: xl, empty: lin ? '直進する工具にはトルクがありません' : '計算を始めると表示します' });
+    $('cf-a').textContent = 'Fx'; $('cf-b').textContent = 'Fy'; $('cf-c').textContent = 'Fz';
+    $('h-t').innerHTML = '温度<span><i style="background: var(--s3)"></i>被削材の最高</span>';
+    $('h-ts').innerHTML = '主軸トルク<span><i style="background: var(--s1)"></i>回転を妨げる向きが正</span>';
+    return;
+  }
   if (hx) {
     const h = frame && frame.dim === 3 ? frame.hist : { axis: [], fc: [], ft: [], fr: [], tmax: [], flow: [] };
     const sm = frame && frame.dim === 3 ? frame.summary : null, np = sm && sm.passes > 1 ? sm.passes : 1;
@@ -592,6 +710,20 @@ function drawCharts() {
 // ---- Readouts ----
 const f0 = (v) => v.toFixed(0), f1 = (v) => v.toFixed(1), f3 = (v) => v.toFixed(3);
 const CELLS = {
+  mesh: [
+    ['Fx の平均', (s) => f1(s.fx), 'N', (s) => `最大 ${f1(s.fxMax)} N。工具が受ける力（ファイルの x 軸）`],
+    ['Fy の平均', (s) => f1(s.fy), 'N', (s) => `最大 ${f1(s.fyMax)} N`],
+    ['Fz の平均', (s) => f1(s.fz), 'N', (s) => `最大 ${f1(s.fzMax)} N`],
+    ['主軸トルク', (s) => (s.motion === 'linear' ? '—' : f1(s.torque * 1e3)), 'mN·m', (s) => (s.motion === 'linear' ? '直進する工具' : `最大 ${f1(s.torqueMax * 1e3)} mN·m、動力 ${f1(s.power)} W`)],
+    ['回転数', (s) => (s.motion === 'linear' ? '—' : f0(s.rpm)), 'min⁻¹', (s) => (s.motion === 'linear' ? `切削速度で +x へ直進` : `外径 φ${f3(2 * s.Rt)} mm で切削速度、送り ${f0(s.vf)} mm/min`)],
+    ['最高温度（被削材）', (s) => f0(s.tmax), '°C', () => '工具は断熱（摩擦熱の工具への分担は差し引く）'],
+    ['最大相当塑性ひずみ', (s) => f1(s.epMax), '', () => '切りくずの裏面付近'],
+    ['エネルギー収支', (s) => f0(s.heatRatio * 100), '%', () => '発熱量 / 工具がした仕事'],
+    ['分断した切りくず片', (s) => f0(s.pieces), '個', (s) => `工具から離れて排出 ${s.evacuated} 粒子 · 割れた粒子 ${s.failed}`],
+    ['進み具合', (s) => f0(s.progress * 100), '%', (s) => (s.motion === 'linear' ? `移動 ${f3(s.travel)} mm` : `回転角 ${f0(s.angle)}°`)],
+    ['粒子数', (s) => s.N.toLocaleString(), '個', (s) => `間隔 ${s.dx.toFixed(0)} µm · 距離場のブロック ${s.bricks}`],
+    ['質量スケーリング', (s) => `×${f0(s.ms)}`, '', () => '慣性だけ密度を上げて高速化'],
+  ],
   '3d': [
     ['主分力 Fc', (s) => f1(s.fc), 'N', () => '後半区間の平均'],
     ['背分力 Ft', (s) => f1(s.ft), 'N', () => '工具を押し上げる向き'],
@@ -755,7 +887,7 @@ function readouts() {
     $(`rs${i}`).textContent = has ? sub(s) : '—';
   });
   $('prog').style.width = s.progress * 100 + '%';
-  $('clock').textContent = (cfg.mode === 'helix' ? `回転角 ${f1(s.angle)}° · ${f0(s.progress * 100)} % · ` : cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : cfg.mode === '3d' ? `移動 ${f3(s.travel)} mm · ${f0(s.progress * 100)} % · ` : (s.relax != null && !s.residual ? `除荷・冷却 ${f0(s.relax * 100)} % · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `))
+  $('clock').textContent = (cfg.mode === 'mesh' ? (s.motion === 'linear' ? `移動 ${f3(s.travel)} mm · ` : `回転角 ${f0(s.angle)}° · `) + `${f0(s.progress * 100)} % · ` : cfg.mode === 'helix' ? `回転角 ${f1(s.angle)}° · ${f0(s.progress * 100)} % · ` : cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : cfg.mode === '3d' ? `移動 ${f3(s.travel)} mm · ${f0(s.progress * 100)} % · ` : (s.relax != null && !s.residual ? `除荷・冷却 ${f0(s.relax * 100)} % · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `))
     + `${(s.t * 1e6).toFixed(1)} µs · 計算 ${(frame.wall / 1000).toFixed(0)} s`;
   $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ`
     + (is3(cfg.mode) ? ' · 3D は計算に数分〜十数分かかります' : '');

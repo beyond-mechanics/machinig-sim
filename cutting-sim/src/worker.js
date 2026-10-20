@@ -9,7 +9,7 @@ let warm = 0;   // preheat cuts done (orthogonal cutting)
 
 onmessage = (e) => {
   const d = e.data;
-  if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; warm = 0; send(); }
+  if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix' || d.cfg.mode === 'mesh') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; warm = 0; send(); }
   else if (d.type === 'run') { runN = d.n || 0; if (sim && !sim.done && !running) { running = true; t0 = performance.now(); loop(); } }
   else if (d.type === 'pause') { if (running) wall += performance.now() - t0; running = false; send(); }
   else if (d.type === 'sweep') { sweep = { cfg: d.cfg, key: d.key, values: d.values, i: 0, sim: null }; sweepLoop(); }
@@ -96,10 +96,14 @@ function send3d() {
     sr[k] = s.sr[i]; p[k] = s.p[i] * 1e-6; D[k] = s.dmg[i]; flag[k] = s.contact[i] ? 2 : s.fixed[i] === 1 ? 1 : 0; k++;
   }
   const now = running ? wall + performance.now() - t0 : wall;
-  const outline = s.outline(3 * s.h).map(([a, b]) => [a * 1e3, b * 1e3]);
+  const outline = s.meshMode ? [] : s.outline(3 * s.h).map(([a, b]) => [a * 1e3, b * 1e3]);
   // Helix: positions stay in the solver frame (z = cutter axis); the view turns the axis upright.
   const m = s.mill;
-  const tool = s.helix
+  // Mesh: the tool's triangles (mm, its own frame) go once per run; each frame carries its pose.
+  const tool = s.meshMode
+    ? { mesh: true, id: meshId(s), tris: sentTris === s ? null : Float32Array.from(s.cfg.toolTris, (v) => v * 1e3),
+      pose: [s.mx * 1e3, s.mz * 1e3, s.ang, s.ax * 1e3, s.ay * 1e3], wb: Array.from(s.wb, (v) => v * 1e3) }
+    : s.helix
     ? { helix: true, c: [m.cx * 1e3, m.cy * 1e3], R: m.R * 1e3, rr: s.rr * 1e3, theta: m.beta, kh: s.kh * 1e-3, ap: s.bz * 1e3, outline }
     : { pos: [s.ox * c * 1e3, s.oy * 1e3, -s.ox * sn * 1e3], lam: s.lam, outline,
       len: ((s.periodic ? s.bz : s.bz / Math.max(Math.cos(s.lam), 0.3)) + 4 * s.h) * 1e3 };
@@ -107,7 +111,17 @@ function send3d() {
     type: 'frame', dim: 3, x, y, z, T, seq, ep, sr, p, D, flag, dx: s.dx * 1e3, h: s.h * 1e3,
     tool,
     box: [s.L * 1e3, s.H * 1e3, s.bz * 1e3],
-    profile: s.done ? s.heat.profile() : null,
+    mesh: s.meshMode ? 1 : 0,
+    profile: s.done && !s.meshMode ? s.heat.profile() : null,
     hist: s.hist, summary: s.summary(), running, runN, wall: now, dt: s.dt,
-  }, [x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer, D.buffer]);
+  }, [...(tool.tris ? [tool.tris.buffer] : []), x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer, D.buffer]);
+  if (s.meshMode) sentTris = s;
+}
+
+// The tool mesh is sent with the first frame of each run only.
+let sentTris = null, meshN = 0;
+const ids = new WeakMap();
+function meshId(s) {
+  if (!ids.has(s)) ids.set(s, ++meshN);
+  return ids.get(s);
 }
