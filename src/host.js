@@ -53,6 +53,7 @@ export class SimHost {
     if (p && p.H.length === (p.j1 - p.j0 + 1) * s.nx) {
       const off = p.j0 * s.nx;
       s.H.set(p.H, off); s.err.set(p.err, off); s.wallErr.set(p.wallErr, off); s.markS.set(p.markS, off); s.markF.set(p.markF, off);
+      if (p.devIdeal && s.devIdeal) { s.devIdeal.set(p.devIdeal, off); s.devTarget.set(p.devTarget, off); }
       const d = s.dirty;
       d.i0 = Math.min(d.i0, p.i0); d.j0 = Math.min(d.j0, p.j0); d.i1 = Math.max(d.i1, p.i1); d.j1 = Math.max(d.j1, p.j1);
       s.removed = m.removed;

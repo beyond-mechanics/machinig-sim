@@ -139,7 +139,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         <button class="chipbtn" data-color="vibration" aria-pressed="false">振動マップ</button>
         <button class="chipbtn" data-color="wall" aria-pressed="false">ワーク変形</button>
         <button class="chipbtn" data-color="depth" aria-pressed="false">深さ</button>
-        <span class="legend" id="legend" hidden><span id="legend0">0</span><i></i><span id="legend1">40 µm</span></span>
+        <button class="chipbtn" data-color="devIdeal" aria-pressed="false" title="工具のたわみ・振動・壁の逃げで、指令どおりの形からどれだけずれたか">指令との差</button>
+        <button class="chipbtn" data-color="devTarget" aria-pressed="false" disabled title="目標形状 (STL) との差。プログラムタブで読み込みます">目標との差</button>
+        <span class="legend" id="legend" hidden><span id="legend0">0</span><i id="legendBar"></i><span id="legend1">40 µm</span></span>
       </div>
     </div>
 
@@ -253,13 +255,20 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="oZ">原点の位置 Z <span class="unit">mm</span></label><input type="number" id="oZ" step="0.1" value="0"></div>
           <p class="hint">原点の位置は、素材上面の左手前の角から測ったプログラム原点 (X0 Y0 Z0) の位置です。素材の下面は Z = −高さ です。</p>
         </fieldset>
+        <fieldset>
+          <legend>目標形状 (仕上がり)</legend>
+          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="tgOpen" aria-pressed="false">目標 STL を開く</button><button id="tgClear" aria-pressed="false" disabled>外す</button></div>
+          <input type="file" id="tgFile" accept=".stl,model/stl,application/sla" hidden>
+          <div class="row"><label for="tol">公差 ± <span class="unit">mm</span></label><input type="number" id="tol" min="0.001" max="5" step="0.005" value="0.05"></div>
+          <p class="hint" id="tgInfo">CAM で使った仕上がり形状の STL を読み込むと、加工結果と比べて削り残し (青) と削り過ぎ (赤) を色で示します。STL はプログラムと同じ座標 (CAM のモデル座標) で置きます。上から見えるのは上面だけなので、張り出しの下は比べません。</p>
+        </fieldset>
         <button class="primary" id="btnLoad">この設定で再シミュレーション</button>
         <ul class="warnings" id="warnings"></ul>
         <fieldset id="toolBox" hidden>
           <legend>プログラムの工具</legend>
           <ul class="hint" id="toolList" style="padding-left:18px;margin:0"></ul>
         </fieldset>
-        <p class="hint">対応: G0 G1 G2 G3 (I J K / R、ヘリカル)、G17 G18 G19、G20 G21 G90 G91 G94 G95、固定サイクル G73 G81〜G89 (G98 G99、K/L 繰返し)、G28 G53 (Z の退避のみ)、T□ M6 の工具交換、F S M3 M4 M5 M30。工具の寸法はコメントから読み取ります: Fusion 形式 <code>(T1 D=10. CR=0. - flat end mill)</code>、または <code>(TOOL T1 D10 N3 FLAT L25 SO35)</code> (N 刃数、L 刃長、SO 突出し長、BALL でボール)。寸法の無い工具は「加工条件」タブの工具で計算します。工具径補正、マクロ、サブプログラムは未対応です。</p>
+        <p class="hint">対応: G0 G1 G2 G3 (I J K / R、ヘリカル)、G17 G18 G19、G20 G21 G90 G91 G94 G95、固定サイクル G73 G81〜G89 (G98 G99、K/L 繰返し)、G28 G53 (Z の退避のみ)、T□ M6 の工具交換、F S M3 M4 M5 M30。工具の寸法はコメントから読み取ります: Fusion 形式 <code>(T1 D=10. CR=0. - flat end mill)</code>、または <code>(TOOL T1 D10 N3 FLAT L25 SO35)</code> (N 刃数、L 刃長、SO 突出し長、BALL でボール)。寸法の無い工具は「加工条件」タブの工具で計算します。工具径補正 G41 G42 G40 は工具の半径 (D 番号ではなく工具の寸法) で経路をずらします (G17 のみ)。マクロとサブプログラムは未対応です。</p>
       </div>
       <div class="tabpane prose" data-pane="about" hidden>
         <h3>何を計算しているか</h3>
@@ -287,6 +296,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li>薄肉壁は荷重高さの壁厚だけで剛性を見積もる簡易モデルで、テーパ状の壁や床(薄い底面)のたわみは扱いません。壁の固有振動数は時間刻みの都合で 5 kHz を上限にしています。</li>
           <li>切削温度は二次元切削のエネルギー収支(Merchant のせん断角、Boothroyd の熱配分、Jaeger の移動熱源)による平均値で、FEM による温度場ではありません。断面図の温度分布は各熱源の温度を使った模式図です。工具摩耗は Usui 式を被削材ごとの代表寿命で校正しています。</li>
           <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。ドリル (固定サイクルの穴あけを含む) は先端角のないフラット工具として底刃のスラストとトルクを計算し、チゼルエッジの押し込み力は含みません。切粉は 1 粒子が数個分の切粉を代表し (最大 5000 粒子)、流体は CFD ではなく噴流・壁面噴流・浅水流の工学的な近似を重ねた速度場です。ポケット内の渦や、工具が噴流をさえぎる効果は入れていません。</li>
+          <li><b>寸法誤差</b>: 同じ素材を指令どおり (たわみ・振動なし) にも削り、加工結果との差を「指令との差」で示します。壁の位置は格子より細かく µm 単位で比べます。目標形状 (STL) を読み込むと「目標との差」で削り残し (青) と削り過ぎ (赤) を示し、原因のプログラム行を出します。目標の壁の位置そのものは格子 (0.3 mm) 単位でしか分からないので、プログラムが目標と食い違う壁際は ± 半格子で表示します。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
         <h3>見どころ</h3>
@@ -306,6 +316,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="tile"><span class="k">除去率</span><span class="v" id="vM">0.0<small>cm³/min</small></span><span class="s" id="sM">ap 0.00 mm · fz 0.000 mm</span></div>
     <div class="tile" id="tileHeat"><span class="k">刃先温度</span><span class="v" id="vH">20<small>°C</small></span><span class="s" id="sH">切りくず 20 °C</span></div>
     <div class="tile"><span class="k">逃げ面摩耗 VB</span><span class="v" id="vWr">0<small>µm</small></span><div class="meter"><i id="mWr"></i></div><span class="s" id="sWr">寿命 VB 300 µm</span></div>
+    <div class="tile" id="tileDev"><span class="k">寸法誤差</span><span class="v" id="vDv">—<small></small></span><span class="s" id="sDv">切削後に指令経路と比べます</span></div>
     <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">残留 0 mm³ · 再切削 0 回</span></div>
   </section>
 

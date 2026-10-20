@@ -75,13 +75,18 @@ export function buildStock(spec, cell = 0.3) {
 // highest triangle above each grid node; nodes no triangle covers are empty (table height).
 // Holes, pockets and through-holes open to the top are kept; anything under an overhang is filled.
 export function rasterizeTop(spec, s) {
-  const { tris, min, max } = spec, H = s.H, nx = s.nx, ny = s.ny, hx = s.hx, hy = s.hy;
+  rasterize(spec.tris, s, -spec.min[0], -spec.min[1], -spec.max[2]);
+}
+
+// the same for a mesh placed in the stock frame by the shift (ox, oy, oz), into H (default s.H)
+export function rasterize(tris, s, ox, oy, oz, H = s.H) {
+  const nx = s.nx, ny = s.ny, hx = s.hx, hy = s.hy;
   H.fill(-Infinity);
   const eps = 1e-6 * Math.max(s.w, s.l, 1);
   for (let t = 0; t < tris.length; t += 9) {
-    const ax = tris[t] - min[0], ay = tris[t + 1] - min[1], az = tris[t + 2] - max[2];
-    const bx = tris[t + 3] - min[0], by = tris[t + 4] - min[1], bz = tris[t + 5] - max[2];
-    const cx = tris[t + 6] - min[0], cy = tris[t + 7] - min[1], cz = tris[t + 8] - max[2];
+    const ax = tris[t] + ox, ay = tris[t + 1] + oy, az = tris[t + 2] + oz;
+    const bx = tris[t + 3] + ox, by = tris[t + 4] + oy, bz = tris[t + 5] + oz;
+    const cx = tris[t + 6] + ox, cy = tris[t + 7] + oy, cz = tris[t + 8] + oz;
     const det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
     if (Math.abs(det) < 1e-12) continue; // vertical faces do not show from above
     const i0 = Math.max(0, Math.ceil((Math.min(ax, bx, cx) - eps) / hx)), i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) + eps) / hx));

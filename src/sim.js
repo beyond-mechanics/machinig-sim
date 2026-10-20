@@ -4,7 +4,8 @@
 
 import { parseGcode, discretize, segmentTime } from './gcode.js';
 import { Stock } from './stock.js';
-import { buildStock, stockExtents, cellFor, stockFromPath, originPreset, bestOrigin, ORIGIN_LABEL } from './workpiece.js';
+import { buildStock, stockExtents, cellFor, stockFromPath, originPreset, bestOrigin, ORIGIN_LABEL, rasterize } from './workpiece.js';
+import { applyCutterComp } from './cuttercomp.js';
 import { CuttingEngine, BINS, END_BINS, END_RINGS } from './cutting.js';
 import { ChipSystem, chipEjection, chipShape, bulkRadius, nozzlePose, NOZZLE_DEFAULT } from './chips.js';
 import { toolModel, toolStress } from './tool.js';
@@ -59,8 +60,25 @@ export class Simulator {
     this.stockCell = cellFor(spec, this.cfg.cell);
     if (this.stockCell > this.cfg.cell) this.warnings.unshift(`素材が大きいため格子を ${this.stockCell} mm に粗くしました`);
     this.baseH = buildStock(spec, this.cfg.cell).H;
+    // target shape (finished part) in program coordinates, as the CAM model shares the program zero
+    this.target = setup.target || null;
+    this.targetH = null;
+    if (this.target) {
+      const g = new Stock(this.stockSize.w, this.stockSize.l, this.stockSize.h, this.stockCell);
+      this.targetH = new Float32Array(g.H.length);
+      rasterize(this.target.tris, g, origin.x, origin.y, origin.z, this.targetH);
+      for (let k = 0; k < this.targetH.length; k++) this.targetH[k] = Math.min(g.zTop, Math.max(g.zBottom, this.targetH[k] === -Infinity ? g.zBottom : this.targetH[k]));
+    }
     this.tools = parsed.meta.tools;
-    this.path = discretize(parsed.moves, 0.5);
+    // cutter compensation with each tool's radius (library, program comment or panel tool)
+    let moves = parsed.moves;
+    if (moves.some(m => m.comp)) {
+      const radius = new Map();
+      const c = applyCutterComp(moves, mv => { if (!radius.has(mv.tool)) radius.set(mv.tool, this.toolFor(mv.tool ?? null).D / 2); return radius.get(mv.tool); });
+      moves = c.moves;
+      this.warnings.push(...c.warnings);
+    }
+    this.path = discretize(moves, 0.5);
     for (const p of this.path) { p.x += origin.x; p.y += origin.y; p.z += origin.z; }
     this.times = [0];
     for (let i = 1; i < this.path.length; i++) this.times.push(this.times[i - 1] + segmentTime(this.path[i - 1], this.path[i]));
@@ -72,6 +90,16 @@ export class Simulator {
     const s = this.stockSize;
     this.stock = new Stock(s.w, s.l, s.h, this.stockCell || this.cfg.cell);
     if (this.baseH && this.baseH.length === this.stock.H.length) this.stock.H.set(this.baseH);
+    // the same stock cut exactly as commanded (rigid tool, no vibration): the reference for
+    // what deflection and chatter did to the part
+    this.ideal = new Stock(s.w, s.l, s.h, this.stockCell || this.cfg.cell);
+    this.ideal.H.set(this.stock.H);
+    const n = this.stock.H.length;
+    this.stock.devIdeal = new Float32Array(n);  // simulated − commanded [mm], + = material left
+    this.stock.devTarget = new Float32Array(n); // simulated − target [mm], + = material left
+    this.devSummary = null; this.devTick = 0;
+    // the whole map once: material the program never reaches still counts against the target
+    this.updateDeviation({ i0: 0, j0: 0, i1: this.stock.nx - 1, j1: this.stock.ny - 1 });
     this.chips.reset();
     this.seg = 1; this.segS = 0; this.mtime = 0; this.done = this.path.length < 2;
     this.pos = this.path.length ? { ...this.path[0] } : { x: 0, y: 0, z: 50 };
@@ -315,6 +343,8 @@ export class Simulator {
       // relative to the workpiece: a wall pushed away by w is cut less (it springs back thicker)
       const dx = (e.x - e.w * e.wnx) * 1e3, dy = (e.y - e.w * e.wny) * 1e3;
       const errVal = Math.hypot(e.x, e.y) * 1e6;
+      this.stock.curLine = this.ideal.curLine = this.line || 0;
+      this.ideal.stamp(p.x, p.y, p.z, R, tool.type === 'profile' ? 'flat' : tool.type, 0, null, tool.lut || null);
       frameStats.removed += this.stock.stamp(p.x + dx, p.y + dy, p.z, R, tool.type === 'profile' ? 'flat' : tool.type, errVal, { ux: this.u[0], uy: this.u[1], f: (this.fz || 0) * tool.N }, tool.lut || null);
       // the shank and holder move with the deflected tool
       this.checkClearance({ x: p.x + dx, y: p.y + dy, z: p.z }, b.rapid);
@@ -322,8 +352,76 @@ export class Simulator {
       this.pos = p;
       if (this.segS >= segLen - 1e-9) this.nextSeg();
     }
+    this.updateDeviation(this.stock.dirty);
     this.collect(frameStats, dtReal);
     this.updateChips(dtReal);
+  }
+
+  // Deviation maps over the rectangle that changed (it may extend a cell either side).
+  // Floors and 3D surfaces: the height difference, exact. Walls: the difference of the closest
+  // cutter edge (stock.wallD), below the grid spacing. Where the simulated edge crossed a cell
+  // the commanded one left standing (or the reverse), the error is at least that cell's distance
+  // to the other edge; the height difference there is the wall height and says nothing.
+  // Against the target, cells where the commanded cut already disagrees at a wall step of the
+  // target are only known to a grid cell: ± half a cell.
+  updateDeviation(rect) {
+    const s = this.stock, id = this.ideal, T = this.targetH;
+    if (!s.devIdeal || rect.i1 < 0) return;
+    const nx = s.nx, half = Math.max(s.hx, s.hy) / 2;
+    const i0 = Math.max(0, rect.i0 - 1), i1 = Math.min(nx - 1, rect.i1 + 1), j0 = Math.max(0, rect.j0 - 1), j1 = Math.min(s.ny - 1, rect.j1 + 1);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const k = j * nx + i;
+      const Da = s.wallD[k], Di = id.wallD[k], fa = Da !== Infinity, fi = Di !== Infinity;
+      const V = s.H[k] - id.H[k];
+      let dev;
+      if (Math.abs(V) <= 1e-4) dev = fa && fi ? Da - Di : 0;
+      // (the tool has no axial dynamics, so a height difference at a wall cell is a flip; a
+      // later, deeper pass may have set the wall distance of a flipped cell again)
+      else if (V < 0 && fi) dev = -Math.max(Di, 1e-3);
+      else if (V > 0 && fa) dev = Math.max(Da, 1e-3);
+      else dev = V;
+      s.devIdeal[k] = dev;
+      if (T) {
+        if (Math.abs(id.H[k] - T[k]) <= 1e-3) s.devTarget[k] = dev;
+        else {
+          const Vt = s.H[k] - T[k];
+          // a wall step of the target next to this cell (≥ 1 mm between neighbours)
+          const t = T[k], step = Math.max(i > 0 ? Math.abs(t - T[k - 1]) : 0, i < nx - 1 ? Math.abs(t - T[k + 1]) : 0, j > 0 ? Math.abs(t - T[k - nx]) : 0, j < s.ny - 1 ? Math.abs(t - T[k + nx]) : 0);
+          s.devTarget[k] = step >= 1 && Math.abs(Vt) > half ? Math.sign(Vt) * half : Vt;
+        }
+      }
+    }
+  }
+
+  // Summary of the deviation maps over the cells that were machined or that the target says
+  // must be: largest material left / gouge (with where and which line), share within tolerance.
+  deviationSummary(tol = this.cfg.tol ?? 0.05) {
+    const s = this.stock, T = this.targetH;
+    if (!s.devIdeal) return null;
+    const res = { ideal: { left: 0, gouge: 0, kLeft: -1, kGouge: -1 }, target: T ? { left: 0, gouge: 0, kLeft: -1, kGouge: -1, n: 0, inTol: 0 } : null };
+    const top = s.zTop - 1e-3;
+    for (let k = 0; k < s.H.length; k++) {
+      const machined = s.H[k] < top || Number.isFinite(s.wallD[k]);
+      if (machined) {
+        const v = s.devIdeal[k], r = res.ideal;
+        if (v > r.left) { r.left = v; r.kLeft = k; }
+        if (v < r.gouge) { r.gouge = v; r.kGouge = k; }
+      }
+      if (T && (machined || T[k] < top)) {
+        const v = s.devTarget[k], r = res.target;
+        r.n++; if (Math.abs(v) <= tol) r.inTol++;
+        if (v > r.left) { r.left = v; r.kLeft = k; }
+        if (v < r.gouge) { r.gouge = v; r.kGouge = k; }
+      }
+    }
+    // the line responsible: the one that cut the cell for a height error, the one that left
+    // the wall for a wall error
+    const where = (k, ref) => k < 0 ? null : { x: (k % s.nx) * s.hx - this.origin.x, y: Math.floor(k / s.nx) * s.hy - this.origin.y, z: s.H[k] - this.origin.z,
+      line: (Math.abs(s.H[k] - ref[k]) > 1e-4 ? s.lineCut[k] : s.lineWall[k]) || s.lineCut[k] || s.lineWall[k] };
+    res.ideal.atLeft = where(res.ideal.kLeft, this.ideal.H); res.ideal.atGouge = where(res.ideal.kGouge, this.ideal.H);
+    if (T) { res.target.atLeft = where(res.target.kLeft, T); res.target.atGouge = where(res.target.kGouge, T); }
+    res.tol = tol;
+    return res;
   }
 
   // Everything above the flutes (neck, shank, holder, spindle nose) must clear the stock.
@@ -435,6 +533,8 @@ export class Simulator {
     d.chatterIdx += ((cutting ? ci.index : 0) - d.chatterIdx) * 0.2;
     d.once += ((cutting ? ci.once || 0 : 0) - d.once) * 0.2;
     if (!cutting) d.pack *= 0.8;
+    // deviation summary about twice a second of real time, and at the end of the program
+    if (++this.devTick % 30 === 0 || this.done) d.dev = this.deviationSummary();
     // cutting temperature of the mean chip and flank wear over the time the teeth were in contact
     const contact = cutting ? st.engTeeth / (st.n * e.N) : 0;
     let wearRateNow = 0;

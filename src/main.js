@@ -27,7 +27,7 @@ for (const [k, s] of Object.entries(SAMPLES)) $('sample').add(new Option(s.name,
 $('sample').value = 'demo';
 $('code').value = SAMPLES.demo.code;
 
-let stockMode = 'prog', stlSpec = null, codeLines = [];
+let stockMode = 'prog', stlSpec = null, targetSpec = null, codeLines = [];
 function stockSetup() {
   const num = id => +$(id).value;
   let stock = null;
@@ -36,7 +36,7 @@ function stockSetup() {
   else if (stockMode === 'stl' && stlSpec) stock = stlSpec;
   const kind = $('orgSel').value;
   const origin = kind === 'manual' ? { x: num('oX'), y: num('oY'), z: num('oZ') } : kind;
-  return { stock, origin };
+  return { stock, origin, target: targetSpec };
 }
 function loadProgram() {
   const setup = stockSetup();
@@ -60,6 +60,8 @@ function loadProgram() {
   showTools();
   syncModalInputs();
   updateMatHint();
+  document.querySelector('[data-color="devTarget"]').disabled = !targetSpec;
+  if (!targetSpec && view.colorMode === 'devTarget') setColorMode('devIdeal');
 }
 function showTools() {
   const used = [...new Set(sim.path.map(p => p.tool).filter(t => t != null))];
@@ -92,9 +94,15 @@ host.setSpeed(+$('speed').value);
 $('btnLoad').onclick = () => { loadProgram(); running = true; host.setRunning(true); $('btnPlay').textContent = '❚❚ 一時停止'; };
 $('sample').onchange = e => {
   setStockMode('prog'); $('orgSel').value = 'auto'; $('orgSel').onchange();
-  $('gcInfo').textContent = SAMPLES[e.target.value].name;
-  $('code').value = SAMPLES[e.target.value].code;
+  const sm = SAMPLES[e.target.value];
+  $('gcInfo').textContent = sm.name;
+  $('code').value = sm.code;
+  // a sample brings its own target shape (or none)
+  targetSpec = sm.target ? sm.target() : null;
+  $('tgClear').disabled = !targetSpec;
+  $('tgInfo').textContent = targetSpec ? `${targetSpec.name} · ${targetSpec.count} 三角形` : '目標形状なし';
   loadProgram();
+  if (targetSpec) setColorMode('devTarget');
   setSpindle(baseS);
 };
 
@@ -133,6 +141,26 @@ document.querySelectorAll('[data-stock]').forEach(b => b.onclick = () => {
 $('gcOpen').onclick = () => $('gcFile').click();
 $('gcFile').onchange = e => { const f = e.target.files[0]; if (f) openProgram(f); e.target.value = ''; };
 $('stlOpen').onclick = () => $('stlFile').click();
+// target (finished) shape for the deviation map
+async function openTarget(file) {
+  try {
+    const m = parseStl(await file.arrayBuffer());
+    targetSpec = { ...m, name: file.name };
+    $('tgInfo').textContent = `${file.name} · ${m.count.toLocaleString()} 三角形 · X ${m.min[0].toFixed(1)}〜${m.max[0].toFixed(1)} Y ${m.min[1].toFixed(1)}〜${m.max[1].toFixed(1)} Z ${m.min[2].toFixed(1)}〜${m.max[2].toFixed(1)} mm (プログラム座標)`;
+    $('tgClear').disabled = false;
+    loadProgram();
+    setColorMode('devTarget');
+  } catch (err) { $('tgInfo').textContent = `${file.name} を読み込めませんでした: ${err.message}`; }
+}
+$('tgOpen').onclick = () => $('tgFile').click();
+$('tgFile').onchange = e => { const f = e.target.files[0]; if (f) openTarget(f); e.target.value = ''; };
+$('tgClear').onclick = () => {
+  targetSpec = null; $('tgClear').disabled = true;
+  $('tgInfo').textContent = '目標形状を外しました。';
+  if (view.colorMode === 'devTarget') setColorMode('devIdeal');
+  loadProgram();
+};
+$('tol').onchange = e => { const v = +e.target.value; if (!(v > 0)) return; sim.cfg.tol = v; host.config(); setColorMode(view.colorMode); };
 $('stlFile').onchange = e => { const f = e.target.files[0]; if (f) openStl(f); e.target.value = ''; };
 // inside the claude.ai viewer a file is offered through the downloads capability; a plain
 // download link is the fallback when the page is opened on its own
@@ -315,13 +343,26 @@ $('showPath').onchange = e => { view.showPath = e.target.checked; };
 $('workFlex').onchange = e => { sim.cfg.workpieceFlex = e.target.checked; host.config(true); };
 $('cutNl').onchange = e => { sim.cfg.cuttingNonlinear = e.target.checked; host.config(true); };
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view.setView(b.dataset.view));
-document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => {
-  document.querySelectorAll('[data-color]').forEach(x => x.setAttribute('aria-pressed', x === b));
-  view.colorMode = b.dataset.color;
-  $('legend').hidden = view.colorMode === 'material';
-  $('legend1').textContent = view.colorMode === 'vibration' ? '40 µm' : view.colorMode === 'wall' ? '50 µm' : `${sim.stock.zTop - sim.stock.zBottom} mm`;
+function setColorMode(mode) {
+  document.querySelectorAll('[data-color]').forEach(x => x.setAttribute('aria-pressed', x.dataset.color === mode));
+  view.colorMode = mode;
+  $('legend').hidden = mode === 'material';
+  const dev = mode === 'devIdeal' || mode === 'devTarget';
+  $('legendBar').style.background = dev ? 'linear-gradient(90deg, #d12e24, #8f949c 35% 65%, #2461d6)' : '';
+  if (dev) {
+    // commanded vs simulated: µm scale; target: around the tolerance
+    const tol = sim.cfg.tol ?? 0.05;
+    view.devScale = mode === 'devIdeal' ? 0.05 : Math.max(4 * tol, 0.02); view.devTol = mode === 'devIdeal' ? 0.002 : tol;
+    const f = v => mode === 'devIdeal' ? `${(v * 1000).toFixed(0)} µm` : `${v} mm`;
+    $('legend0').textContent = `削り過ぎ −${f(view.devScale)}`;
+    $('legend1').textContent = `+${f(view.devScale)} 削り残し`;
+  } else {
+    $('legend0').textContent = '0';
+    $('legend1').textContent = mode === 'vibration' ? '40 µm' : mode === 'wall' ? '50 µm' : `${sim.stock.zTop - sim.stock.zBottom} mm`;
+  }
   view.updateStock(true);
-});
+}
+document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => setColorMode(b.dataset.color));
 document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-tab]').forEach(x => x.setAttribute('aria-selected', x === b));
   document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== b.dataset.tab);
@@ -399,6 +440,7 @@ function updateTiles() {
   $('mWr').style.background = wr > 1 ? 'var(--bad)' : wr > 0.6 ? 'var(--warn)' : 'var(--ok)';
   const tName = sim.activeT != null ? `T${sim.activeT} · ` : '';
   $('sWr').textContent = tName + (d.lifeMin < Infinity ? `この条件の残り寿命 ${d.lifeMin > 600 ? '10 h 超' : d.lifeMin.toFixed(1) + ' 分'}` : `寿命 VB ${VB_LIMIT * 1000} µm`);
+  showDeviation(d.dev);
   const cs = sim.chips.stats;
   // share of the chip volume that has left the workpiece (chips still in flight over it are not yet out)
   const evacPct = cs.producedVol > 0 ? Math.min(100, cs.evacVol / cs.producedVol * 100) : 0;
@@ -414,6 +456,20 @@ function updateTiles() {
   // alerts
   const box = $('alerts'); box.innerHTML = '';
   for (const a of sim.alerts.values()) if (sim.mtime - a.t < 3) { const div = document.createElement('div'); div.className = 'alert'; div.textContent = a.msg; box.appendChild(div); }
+}
+// dimension error: against the target when one is loaded, else against the commanded cut
+function showDeviation(dev) {
+  const r = dev?.target || dev?.ideal;
+  if (!r) { setV('vDv', '—', ''); $('sDv').textContent = targetSpec ? '加工が進むと目標形状と比べます' : '切削後に指令経路と比べます'; $('tileDev').dataset.s = 'stable'; return; }
+  const um = v => Math.abs(v) < 1 ? `${(v * 1000).toFixed(Math.abs(v) < 0.01 ? 1 : 0)} µm` : `${v.toFixed(2)} mm`;
+  const at = a => a?.line ? ` (${a.line}行)` : '';
+  const worst = Math.max(r.left, -r.gouge);
+  const [num, unit] = um(worst).split(' ');
+  setV('vDv', num, unit);
+  const tol = dev.tol;
+  $('tileDev').dataset.s = worst > tol ? 'chatter' : worst > tol / 2 ? 'marginal' : 'stable';
+  const head = dev.target ? `目標比 · 公差内 ${(r.inTol / Math.max(1, r.n) * 100).toFixed(1)}%` : '指令比';
+  $('sDv').textContent = `${head} · 削り残し ${um(r.left)}${at(r.atLeft)} · 削り過ぎ ${um(-r.gouge)}${at(r.atGouge)}`;
 }
 function setV(id, v, unit) { const el = $(id); el.firstChild.nodeValue = v; el.lastChild.textContent = unit; }
 

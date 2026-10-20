@@ -3,6 +3,8 @@ import { LUT_DR } from './assembly.js';
 // Workpiece as a Z-heightfield (single-direction dexel model). Exact for 3-axis machining
 // with vertical tools because no undercut can be produced.
 
+const EDGE_TIE = 2 * 0.0015; // R² − r² below this × R: within 1.5 µm of the cutter edge
+
 export class Stock {
   constructor(w, l, h, cell = 0.3) {
     this.x0 = 0; this.y0 = 0; this.w = w; this.l = l;
@@ -19,6 +21,14 @@ export class Stock {
     // leaves once per revolution (radial runout makes one tooth dominate), feed/rev apart.
     this.markS = new Float32Array(this.nx * this.ny);
     this.markF = new Float32Array(this.nx * this.ny);
+    // where the machined wall next to a standing cell is, below the grid resolution: distance
+    // [mm] from the cell centre to the closest cutter edge that passed it (Infinity: none).
+    // Comparing it between the simulated and the commanded cut gives µm-level wall errors.
+    this.wallD = new Float32Array(this.nx * this.ny).fill(Infinity);
+    // program line that last cut each cell, and the one that set its wall distance (0 = none)
+    this.lineCut = new Int32Array(this.nx * this.ny);
+    this.lineWall = new Int32Array(this.nx * this.ny);
+    this.curLine = 0;
     this.removed = 0;
     // block maxima for interference queries; stamping only lowers heights, so a block is
     // recomputed lazily the next time a query needs it
@@ -107,21 +117,33 @@ export class Stock {
   // corner-radius and imported tool shapes
   stamp(cx, cy, tipZ, R, type, errVal, mark = null, lut = null) {
     if (tipZ >= this.zTop) return 0;
-    const i0 = Math.max(0, Math.floor((cx - R) / this.hx)), i1 = Math.min(this.nx - 1, Math.ceil((cx + R) / this.hx));
-    const j0 = Math.max(0, Math.floor((cy - R) / this.hy)), j1 = Math.min(this.ny - 1, Math.ceil((cy + R) / this.hy));
+    // walls up to two cells outside the cutter record how close its edge came
+    const Rw = R + 2 * Math.max(this.hx, this.hy), Rw2 = Rw * Rw;
+    const i0 = Math.max(0, Math.floor((cx - Rw) / this.hx)), i1 = Math.min(this.nx - 1, Math.ceil((cx + Rw) / this.hx));
+    const j0 = Math.max(0, Math.floor((cy - Rw) / this.hy)), j1 = Math.min(this.ny - 1, Math.ceil((cy + Rw) / this.hy));
     if (i0 > i1 || j0 > j1) return 0;
-    const H = this.H, E = this.err, n = this.nx, R2 = R * R, MS = this.markS, MF = this.markF;
+    const H = this.H, E = this.err, n = this.nx, R2 = R * R, MS = this.markS, MF = this.markF, WD = this.wallD, LC = this.lineCut, LW = this.lineWall, line = this.curLine;
     const mf = mark && mark.f > 0 && type === 'flat' && !lut ? mark.f : 0;
+    // height of the cutter edge at its rim: a cell outside the rim standing higher is a wall
+    const zRim = tipZ + (lut ? lut[lut.length - 1] : type === 'ball' ? R : 0);
     let vol = 0, touched = false;
     for (let j = j0; j <= j1; j++) {
       const dy = j * this.hy - cy;
       for (let i = i0; i <= i1; i++) {
         const dx = i * this.hx - cx;
         const r2 = dx * dx + dy * dy;
-        if (r2 > R2) continue;
-        const z = lut ? tipZ + lut[Math.min(lut.length - 1, Math.round(Math.sqrt(r2) / LUT_DR))] : type === 'ball' ? tipZ + R - Math.sqrt(R2 - r2) : tipZ;
         const k = j * n + i;
-        if (H[k] > z) { vol += H[k] - z; H[k] = Math.max(z, this.zBottom); E[k] = errVal; touched = true; }
+        // a node on the cutter edge stays, within the chord error of arcs (gcode.js CHORD_TOL):
+        // the same tie the target keeps on its boundary
+        if (r2 >= R2 - EDGE_TIE * R) {
+          if (r2 <= Rw2 && H[k] > zRim) {
+            const d = Math.sqrt(r2) - R;
+            if (d < WD[k]) { WD[k] = d; LW[k] = line; touched = true; }
+          }
+          continue;
+        }
+        const z = lut ? tipZ + lut[Math.min(lut.length - 1, Math.round(Math.sqrt(r2) / LUT_DR))] : type === 'ball' ? tipZ + R - Math.sqrt(R2 - r2) : tipZ;
+        if (H[k] > z) { vol += H[k] - z; H[k] = Math.max(z, this.zBottom); E[k] = errVal; WD[k] = Infinity; LC[k] = line; touched = true; }
         // the last pass over a floor at this depth leaves its trailing-edge arcs
         if (mf && H[k] > z - 0.002) {
           const xs = i * this.hx, ys = j * this.hy, p = -dx * mark.uy + dy * mark.ux;

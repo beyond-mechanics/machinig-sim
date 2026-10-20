@@ -21,6 +21,8 @@ export class View {
     this.scene.add(sun, sun.target); this.sun = sun;
     const rim = new T.DirectionalLight(0xffe2b0, 0.3); rim.position.set(150, 120, 80); this.scene.add(rim);
     this.colorMode = 'material';
+    // deviation colouring: full colour at ±devScale [mm], neutral within ±devTol
+    this.devScale = 0.05; this.devTol = 0.002;
     this.exag = 100;
     this.showChips = true; this.showPath = true;
     this.buildTool();
@@ -112,6 +114,7 @@ export class View {
       if (this.colorMode === 'vibration' && cut) [r, g, b] = ramp(Math.min(1, s.err[k] / 40));
       else if (this.colorMode === 'wall') [r, g, b] = s.wallErr[k] > 0.5 ? ramp(Math.min(1, s.wallErr[k] / 50)) : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.62];
       else if (this.colorMode === 'depth') [r, g, b] = ramp(Math.min(1, (s.zTop - z) / depth));
+      else if ((this.colorMode === 'devIdeal' || this.colorMode === 'devTarget') && s.devIdeal) [r, g, b] = diverge((this.colorMode === 'devIdeal' ? s.devIdeal : s.devTarget)[k], this.devTol, this.devScale);
       else if (cut) { r = base[0] * 0.98; g = base[1] * 0.98; b = base[2] * 1.0; }
       else { r = base[0] * 0.78; g = base[1] * 0.78; b = base[2] * 0.8; }
       C[k * 3] = r; C[k * 3 + 1] = g; C[k * 3 + 2] = b;
@@ -690,6 +693,15 @@ function fluteProfile(u) {
 }
 
 // perceptual-ish ramp: deep blue → teal → amber → red
+// red (gouge, negative) — grey within tolerance — blue (material left, positive)
+const DEV_NEUTRAL = [0.56, 0.58, 0.61], DEV_GOUGE = [0.82, 0.18, 0.14], DEV_LEFT = [0.14, 0.38, 0.84];
+function diverge(v, tol, scale) {
+  const a = Math.abs(v);
+  if (!(a > tol)) return DEV_NEUTRAL;
+  const t = Math.min(1, 0.35 + 0.65 * (a - tol) / Math.max(1e-9, scale - tol)), c = v < 0 ? DEV_GOUGE : DEV_LEFT;
+  return [0, 1, 2].map(i => DEV_NEUTRAL[i] + (c[i] - DEV_NEUTRAL[i]) * t);
+}
+
 function ramp(t) {
   const stops = [[0.16, 0.27, 0.55], [0.13, 0.6, 0.62], [0.95, 0.72, 0.2], [0.85, 0.2, 0.15]];
   const x = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
