@@ -818,8 +818,15 @@ function lineStart(n) {
 
 // ---------- machining report ----------
 const BAD = new Set(['びびり', '応力超過']);
-function currentReport() { return host.threaded ? (sim.reportPack ? LineReport.unpack(sim.reportPack) : null) : sim.report; }
-let reportShown = '';
+// the worker's report, unpacked once per packet (it comes about twice a second)
+let packSeen = null, packRep = null;
+function currentReport() {
+  if (!host.threaded) return sim.report;
+  if (!sim.reportPack) return null;
+  if (sim.reportPack !== packSeen) { packSeen = sim.reportPack; packRep = LineReport.unpack(packSeen); }
+  return packRep;
+}
+let reportShown = '', reportPackShown = null;
 // a finished run kept as the reference the next runs are compared with
 let baseline = null, lastNums = null;
 // what the advice needs about a line: its speed and feed, and its stability lobes
@@ -845,8 +852,13 @@ function updateReport() {
     if (reportShown !== 'empty') { reportShown = 'empty'; $('rSum').innerHTML = ''; $('rTable').tBodies[0].innerHTML = ''; $('hReport').textContent = '加工が始まると、プログラムの行ごとにまとめます'; }
     return;
   }
+  // rebuilt when a new report arrives (threaded) or at most twice a second (local stepping)
+  const now = performance.now(), fresh = host.threaded ? packSeen : Math.floor(now / 500);
+  const pre = `${host.threaded ? '' : fresh}|${sim.done}|${!!baseline}`;
+  if (reportShown && reportShown.startsWith(pre + '#') && reportPackShown === fresh) return;
+  reportPackShown = fresh;
   const r = rep.summary({ stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK });
-  const key = `${r.time.toFixed(1)}|${r.issues.length}|${sim.done}`;
+  const key = `${pre}#${r.time.toFixed(1)}|${r.issues.length}`;
   if (key === reportShown) return;
   reportShown = key;
   const lineOf = n => (codeLines[n - 1] || '').trim();
