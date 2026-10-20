@@ -405,6 +405,9 @@ function frameLoop(now) {
   view.updateSpray(sim.cfg.coolant, sim.pos, running && sim.S > 0, sim.activeTool.R);
   view.updateChips(sim.chips, sim.mat);
   view.updatePool(sim.chips.pool);
+  const dd = sim.display, cl = COOLANTS[sim.cfg.coolant];
+  view.updateSparks({ active: running && dd.cutting, pos: sim.pos, R: sim.activeTool.R, ap: dd.ap, ux: e.ux ?? 1, uy: e.uy ?? 0, phiSt: dd.phiSt ?? 0, phiEx: dd.phiEx ?? Math.PI,
+    tempChip: dd.tempChip ?? 20, mrr: dd.mrr, burns: sim.cfg.material === 'Ti64', quench: !!cl?.liquid });
   view.render();
   if (now - uiTick > 120) { uiTick = now; updateTiles(); }
   if (now - chartTick > 90) { chartTick = now; updateCharts(); }
