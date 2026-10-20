@@ -53,6 +53,7 @@ function loadProgram() {
   const setup = stockSetup();
   host.load($('code').value, setup);
   codeLines = $('code').value.split('\n');
+  stabCache.clear();
   // a feed optimisation belongs to the program it was made from
   { foText = null; $('foLoad').disabled = $('foSave').disabled = true; $('foOut').innerHTML = ''; }
   baseS = firstSpindle(sim.path) || 12000;
@@ -168,7 +169,12 @@ function openProject(text) {
   const pj = JSON.parse(text);
   if (pj.app !== 'machining-sim' || typeof pj.code !== 'string') throw new Error('このシミュレーターのプロジェクトではありません');
   // configuration first (nested objects merged so newer fields keep their defaults)
-  for (const [k, v] of Object.entries(pj.cfg || {})) sim.cfg[k] = v && typeof v === 'object' && !Array.isArray(v) && sim.cfg[k] && typeof sim.cfg[k] === 'object' ? { ...sim.cfg[k], ...v } : v;
+  // (the dynamics and the coefficient overrides are taken whole: what the project had, no more)
+  for (const [k, v] of Object.entries(pj.cfg || {})) sim.cfg[k] = k !== 'modal' && v && typeof v === 'object' && !Array.isArray(v) && sim.cfg[k] && typeof sim.cfg[k] === 'object' ? { ...sim.cfg[k], ...v } : v;
+  sim.cfg.coefs = pj.cfg?.coefs || {};
+  if (pj.cfg?.modal) { const m = pj.cfg.modal; for (const key of ['modesX', 'modesY', 'speedFrfs']) if (!(key in m)) m[key] = null; }
+  if (!sim.cfg.modal.modesX && !sim.cfg.modal.speedFrfs) { $('frfClear').disabled = true; $('frfInfo').innerHTML = frfHint; }
+  else { $('frfClear').disabled = false; $('frfInfo').textContent = 'プロジェクトの FRF (実測モード) を使っています。'; }
   for (const k of Object.keys(wcsDelta)) delete wcsDelta[k];
   Object.assign(wcsDelta, pj.wcsDelta || {});
   for (const [id, v] of Object.entries(pj.inputs || {})) if ($(id)) $(id).value = v;
@@ -184,6 +190,8 @@ function openProject(text) {
   $('mAuto').checked = sim.cfg.modal.auto !== false;
   if (sim.cfg.spindleSoft) $('spSoft').value = Math.round((sim.cfg.spindleSoft.drop ?? 0.25) * 100);
   $('ovF').value = Math.round((sim.cfg.feedOverride ?? 1) * 100); $('ovFOut').textContent = `${$('ovF').value} %`;
+  $('tVB0').value = t.VB0 ?? 0; $('tol').value = sim.cfg.tol ?? 0.05;
+  if (sim.cfg.nozzle) { $('nzAz').value = sim.cfg.nozzle.az; $('nzH').value = sim.cfg.nozzle.h; nozzleChanged(); }
   $('code').value = pj.code; $('sample').value = '';
   $('gcInfo').dataset.file = pj.name || 'project'; $('gcInfo').textContent = `${pj.name || 'プロジェクト'} · ${pj.code.split('\n').length.toLocaleString()} 行 (プロジェクト)`;
   setStockMode(pj.stockMode === 'stl' && !stlSpec ? 'prog' : pj.stockMode || 'prog'); $('orgSel').onchange();
@@ -324,7 +332,8 @@ $('orgPick').onclick = () => {
 addEventListener('keydown', e => {
   if (e.key === 'Escape' && view.onPick) { endPick(); return; }
   // shortcuts while no field has the focus: Space play / pause, Home / End to the start / end
-  const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName) || t.getAttribute?.('role') === 'slider');
+  if (e.defaultPrevented) return;
+  const t = e.target, typing = t && t.closest?.('input, textarea, select, button, summary, a, tr, [contenteditable], [role="slider"]');
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === ' ') { e.preventDefault(); $('btnPlay').click(); }
   else if (e.key === 'Home') { e.preventDefault(); seekTo(0); }
@@ -456,7 +465,7 @@ $('tdLim').onclick = () => {
 // ---- the time-domain limit over the speed range, computed in a worker of its own ----
 /* global __STAB_WORKER_SRC__ */
 let stabWorker = null, tdCurve = null;
-const tdKey = () => { const d = sim.display; return JSON.stringify([sim.cfg.material, sim.cfg.coefs?.[sim.cfg.material] || null, sim.activeTool.D, sim.activeTool.N, sim.activeTool.helixDeg, (d.phiSt ?? 0).toFixed(2), (d.phiEx ?? Math.PI).toFixed(2), sim.cfg.modal, sim.cfg.cuttingNonlinear]); };
+const tdKey = () => { const d = sim.display, t = sim.activeTool; return JSON.stringify([sim.cfg.material, sim.cfg.coefs?.[sim.cfg.material] || null, t.D, t.N, t.helixDeg, t.type, t.fluteLen, t.stickout, (d.phiSt ?? 0).toFixed(2), (d.phiEx ?? Math.PI).toFixed(2), sim.cfg.modal, sim.cfg.spindleSoft, sim.cfg.cuttingNonlinear, tdCurve?.fz]); };
 $('tdCurve').onclick = () => {
   if (typeof __STAB_WORKER_SRC__ !== 'string' || typeof Worker === 'undefined') { $('tdOut').textContent = 'このブラウザでは使えません (Web Worker が必要です)。'; return; }
   if (!stabWorker) {
@@ -472,8 +481,9 @@ $('tdCurve').onclick = () => {
   const d = sim.display, arc = [d.phiSt ?? 0, d.phiEx ?? Math.PI], fz = d.fz > 0 ? d.fz : startConditions(sim.mat, sim.activeTool).fz;
   const [r0, r1] = LOBE_RANGE, n = 18, points = [];
   for (let i = 0; i < n; i++) { const S = Math.round(r0 * (r1 / r0) ** (i / (n - 1))); points.push({ S, modal: sim.modalNow(S) }); }
-  const t = sim.activeTool, key = tdKey();
-  tdCurve = { key, n, pts: [] };
+  const t = sim.activeTool;
+  tdCurve = { n, pts: [], fz };
+  const key = tdCurve.key = tdKey();
   $('tdCurve').disabled = true; $('tdOut').textContent = '時間領域で計算中…';
   stabWorker.postMessage({ key, points, tool: { N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen }, mat: sim.mat, arc, fz, nonlinear: sim.cfg.cuttingNonlinear });
 };
@@ -890,13 +900,21 @@ function adviceCtx(line) {
     D: sim.activeTool.D, rakeDeg: sim.cfg.tool.rakeDeg ?? 10, limits: { stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK },
     stability: (r, S) => {
       if (!(S > 0) || !(r.pex > r.pst)) return null;
-      const lob = sim.lobes(r.pst, r.pex), alim = alimAt(lob, S);
-      if (!(alim < Infinity)) return null;
-      let pocketS = 0, pocketA = alim;
-      for (let s2 = Math.max(2000, S * 0.75); s2 <= Math.min(30000, S * 1.25); s2 += 50) { const a = alimAt(lob, s2); if (a > pocketA && a < Infinity) { pocketA = a; pocketS = s2; } }
-      return { alim, pocketS: pocketA > 1.3 * alim && pocketA > r.ap ? Math.round(pocketS / 10) * 10 : 0, pocketA };
+      const ck = `${r.pst.toFixed(2)}|${r.pex.toFixed(2)}|${Math.round(S)}|${r.ap.toFixed(2)}|${sim.toolVersion}|${sim.cfg.material}`;
+      if (stabCache.has(ck)) return stabCache.get(ck);
+      if (stabCache.size > 500) stabCache.clear();
+      const res = stabilityOf(r, S); stabCache.set(ck, res); return res;
     },
   };
+}
+const stabCache = new Map();
+// the limit of a line's engagement at its speed, and a stable pocket nearby (cached per run)
+function stabilityOf(r, S) {
+  const lob = sim.lobes(r.pst, r.pex), alim = alimAt(lob, S);
+  if (!(alim < Infinity)) return null;
+  let pocketS = 0, pocketA = alim;
+  for (let s2 = Math.max(2000, S * 0.75); s2 <= Math.min(30000, S * 1.25); s2 += 50) { const a = alimAt(lob, s2); if (a > pocketA && a < Infinity) { pocketA = a; pocketS = s2; } }
+  return { alim, pocketS: pocketA > 1.3 * alim && pocketA > r.ap ? Math.round(pocketS / 10) * 10 : 0, pocketA };
 }
 const partsPerTool = (VB, VB0 = 0) => { const n = Math.floor((VB_LIMIT - VB0) / (VB - VB0)); return n > 9999 ? '1 万' : n.toLocaleString(); };
 function updateReport() {
@@ -907,7 +925,7 @@ function updateReport() {
   }
   // rebuilt when a new report arrives (threaded) or at most twice a second (local stepping)
   const now = performance.now(), fresh = host.threaded ? packSeen : Math.floor(now / 500);
-  const pre = `${host.threaded ? '' : fresh}|${sim.done}|${!!baseline}`;
+  const pre = `${sim.done}|${!!baseline}`;
   if (reportShown && reportShown.startsWith(pre + '#') && reportPackShown === fresh) return;
   reportPackShown = fresh;
   const r = rep.summary({ stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK });
@@ -936,9 +954,16 @@ function updateReport() {
     const d = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dd.title = v; d.append(dt, dd);
     const b = baseline?.nums[k], c = nums[k];
     if (b != null && c != null && sim.done) {
-      const cmp = document.createElement('span'), rel = b > 1e-9 ? (c - b) / b : 0;
-      cmp.className = `cmp ${Math.abs(rel) < 0.02 ? '' : rel < 0 ? 'better' : 'worse'}`;
-      cmp.textContent = `基準 ${b.toFixed(b < 10 ? 1 : 0)} → ${rel === 0 ? '±0' : `${rel > 0 ? '+' : ''}${(rel * 100).toFixed(0)} %`}`;
+      const cmp = document.createElement('span'), fx = v => v.toFixed(Math.abs(v) < 10 ? 1 : 0);
+      if (b > 1e-9) {
+        const rel = (c - b) / b;
+        cmp.className = `cmp ${Math.abs(rel) < 0.02 ? '' : rel < 0 ? 'better' : 'worse'}`;
+        cmp.textContent = `基準 ${fx(b)} → ${Math.abs(rel) < 0.005 ? '±0' : `${rel > 0 ? '+' : ''}${(rel * 100).toFixed(0)} %`}`;
+      } else {
+        // a zero baseline (no chatter, no wear): the change itself
+        cmp.className = `cmp ${c > 1e-6 ? 'worse' : ''}`;
+        cmp.textContent = `基準 0 → ${c > 1e-6 ? `+${fx(c)}` : '±0'}`;
+      }
       dd.title += ` (基準: ${baseline.name})`; dd.appendChild(cmp);
     }
     dl.appendChild(d);
@@ -1029,7 +1054,7 @@ $('rCsv').onclick = async () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 // ---------- feed optimisation ----------
-let foText = null;
+let foText = null, foQ = 1; // foQ: spindle factor of a spindle optimisation (applied to the speed slider too)
 $('foRun').onclick = () => {
   const rep = currentReport();
   foText = null; $('foLoad').disabled = $('foSave').disabled = true;
@@ -1038,7 +1063,7 @@ $('foRun').onclick = () => {
   const opt = optimizeFeeds(rep, sim.mat, { Ftarget: target, maxUp: +$('foUp').value, maxDown: +$('foDown').value, stressLimit: 0.8 * ALLOWABLE_STRESS, nonlinear: sim.cfg.cuttingNonlinear });
   const feedLines = new Set(sim.path.filter(p => !p.rapid).map(p => p.line));
   const factor = new Map([...opt.lines].map(([l, o]) => [l, o.k]));
-  foText = rewriteFeeds(codeLines.join('\n'), feedLines, factor); // the program that was run, not later edits
+  foText = rewriteFeeds(codeLines.join('\n'), feedLines, factor); foQ = 1; // the program that was run, not later edits
   const changed = [...opt.lines].filter(([, o]) => o.k !== 1).sort((a, b) => a[0] - b[0]);
   const up = changed.filter(([, o]) => o.k > 1).length, down = changed.length - up;
   const dt = opt.time1 - opt.time0;
@@ -1064,7 +1089,7 @@ $('soRun').onclick = () => {
   const w0 = worstLine(1), w1 = worstLine(o.q);
   const ratio = v => (v < Infinity ? v.toFixed(2) : '—');
   if (Math.abs(o.q - 1) < 0.005) { $('foOut').innerHTML = `<p class="hint">今の回転数が一番安定です (最も厳しい行 ${w0.l?.line} 行: 切込み ÷ 限界 ${ratio(w0.v)})。</p>`; return; }
-  foText = rewriteSpindle(codeLines.join('\n'), o.q);
+  foText = rewriteSpindle(codeLines.join('\n'), o.q); foQ = o.q;
   $('foOut').innerHTML = `<p class="hint">回転数を <b>×${o.q.toFixed(3)}</b> (例: S${Math.round(S0)} → S${Math.round(S0 * o.q)}) に、送りも同じ比で。最も厳しい行の「切込み ÷ 安定限界」: ${ratio(w0.v)} (${w0.l?.line} 行) → <b>${ratio(w1.v)}</b> (${w1.l?.line} 行)。${o.worst < 1 ? 'すべての行が線図の上で安定になります。' : '1 を超える行が残ります (切込みも見直してください)。'}加工時間は ${o.q > 1 ? '短く' : '長く'}なります (×${(1 / o.q).toFixed(2)})。読み込んで計算し直すと確かめられます。</p>`;
   $('foLoad').disabled = $('foSave').disabled = false;
 };
@@ -1072,7 +1097,10 @@ $('foLoad').onclick = () => {
   if (!foText) return;
   $('code').value = foText;
   const f = $('gcInfo').dataset.file; if (f && !/_opt\./.test(f)) $('gcInfo').dataset.file = f.replace(/(\.[^.]+)?$/, m => '_opt' + (m || '.nc'));
+  // the speed slider is absolute: it follows the new speed, or the old one would stay in force
+  const q = foQ, S0 = +$('ovS').value;
   loadProgram();
+  if (q !== 1) setSpindle(S0 * q);
   $('foOut').innerHTML = '<p class="hint">最適化したプログラムを読み込みました。再生すると、加工レポートで結果を確かめられます。</p>';
   foText = null; $('foLoad').disabled = $('foSave').disabled = true;
 };

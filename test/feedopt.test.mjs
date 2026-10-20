@@ -91,4 +91,12 @@ import { MATERIALS } from '../src/materials.js';
   console.log(`spindle ×${o.q} (worst ap/limit ${o.worst0.toFixed(2)} → ${o.worst.toFixed(2)}): chatter ${(s0.chatterShare * 100).toFixed(0)} % → ${(s1.chatterShare * 100).toFixed(0)} %, time ${s0.time.toFixed(1)} → ${s1.time.toFixed(1)} s`);
   assert.ok(o.worst < o.worst0 && s1.chatterShare < 0.5 * s0.chatterShare);
 }
+// review fixes: a line out of the spindle range does not block the rest; code after a comment
+{
+  const { optimizeSpindle, rewriteSpindle } = await import('../src/feedopt.js');
+  const lim = S => (Math.abs(S - 9500) < 400 ? 3 : 0.8);
+  const r = optimizeSpindle([{ ap: 1.5, S: 8000, lim }, { ap: 0.5, S: 1500, lim }]);
+  assert.ok(r.worst < 1, JSON.stringify(r));
+  assert.equal(rewriteSpindle('N30 (ROUGH) S8000 M03 (S1)\nG1 X1 F100 ; F2', 1.5), 'N30 (ROUGH) S12000 M03 (S1)\nG1 X1 F150 ; F2');
+}
 console.log('feedopt tests passed');

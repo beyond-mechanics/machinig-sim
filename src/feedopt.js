@@ -100,9 +100,10 @@ export function rewriteFeeds(text, feedLines, factor) {
 // q in [qMin, qMax], speeds capped at sMax. Returns { q, worst0, worst } (worst < 1: all stable).
 export function optimizeSpindle(lines, { qMin = 0.75, qMax = 1.25, sMax = 30000, sMin = 2000, step = 0.005 } = {}) {
   const worst = q => {
-    let w = 0;
-    for (const l of lines) { const S = q * l.S; if (S > sMax || S < sMin) return Infinity; const a = l.lim(S); w = Math.max(w, a > 0 ? l.ap / a : Infinity); }
-    return w;
+    // lines outside the spindle range at this factor (a slow drilling cycle) are left out
+    let w = 0, n = 0;
+    for (const l of lines) { const S = q * l.S; if (S > sMax || S < sMin) continue; n++; const a = l.lim(S); w = Math.max(w, a > 0 ? l.ap / a : Infinity); }
+    return n ? w : Infinity;
   };
   const w0 = worst(1);
   let best = 1, bw = w0;
@@ -115,9 +116,13 @@ export function optimizeSpindle(lines, { qMin = 0.75, qMax = 1.25, sMax = 30000,
 export function rewriteSpindle(text, q) {
   let perRev = false;
   return text.split('\n').map(line => {
-    const c = line.search(/[;(]/), code = c >= 0 ? line.slice(0, c) : line, rest = c >= 0 ? line.slice(c) : '';
-    const g = code.match(/G\s*0*9([45])(?!\d)/i);
-    if (g) perRev = g[1] === '5';
-    return code.replace(/([SF])\s*([-+]?(?:\d+\.?\d*|\.\d+))/gi, (m, w, v) => (w.toUpperCase() === 'S' ? `${w}${Math.round(+v * q)}` : perRev ? m : `${w}${fmt(+v * q)}`)) + rest;
+    // code between the comments: (…) anywhere on the line, ; to its end
+    const parts = line.split(/(\([^)]*\)|;.*$)/);
+    for (let i = 0; i < parts.length; i += 2) {
+      const g = parts[i].match(/G\s*0*9([45])(?!\d)/i);
+      if (g) perRev = g[1] === '5';
+      parts[i] = parts[i].replace(/([SF])\s*([-+]?(?:\d+\.?\d*|\.\d+))/gi, (m, w, v) => (w.toUpperCase() === 'S' ? `${w}${Math.round(+v * q)}` : perRev ? m : `${w}${fmt(+v * q)}`));
+    }
+    return parts.join('');
   }).join('\n');
 }

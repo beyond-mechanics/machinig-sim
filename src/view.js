@@ -118,9 +118,12 @@ export class View {
       // at its neighbours' height (the stock data keep it).
       if (i > 0 && j > 0 && i < nx - 1 && j < ny - 1 && this.needleR > 2 * s.hx) {
         let low = 0, top = -Infinity;
-        for (const q of [k - 1, k + 1, k - nx, k + nx, k - nx - 1, k - nx + 1, k + nx - 1, k + nx + 1]) if (H[q] < z - 0.3) { low++; if (H[q] > top) top = H[q]; }
-        // a single column: 7 of 8 neighbours below; a pair: 6, on the cutter edge
-        if (low >= 7 || (low >= 6 && s.wallD?.[k] < 0.5 * s.hx)) z = top;
+        const high = [];
+        for (const [di, dj] of NB8) { const q = k + dj * nx + di; if (H[q] < z - 0.3) { low++; if (H[q] > top) top = H[q]; } else high.push(di, dj); }
+        // a single column: 7 of 8 neighbours below; a pair: 6, on the cutter edge, with the two
+        // standing neighbours next to each other (on opposite sides it is a wall one cell thick)
+        const pair = low === 6 && Math.abs(high[0] - high[2]) <= 1 && Math.abs(high[1] - high[3]) <= 1;
+        if (low >= 7 || (pair && s.wallD?.[k] < 0.5 * s.hx)) z = top;
       }
       P[k * 3 + 2] = z;
       // a wall foot sits where the cutter edge actually passed, not on the grid point
@@ -962,6 +965,7 @@ function glow(T) {
 // then stands upright at its true place and follows the cutter's path smoothly.
 // all 8 neighbours: on a curved wall many feet touch the wall only across a corner
 const FOOT = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+const NB8 = FOOT;
 const _foot = [0, 0];
 function wallFoot(s, i, j) {
   const { nx, ny, H, hx, hy } = s, k = j * nx + i, z = H[k], x = i * hx, y = j * hy;
