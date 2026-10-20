@@ -84,6 +84,9 @@ export class Simulator {
     // start and home 50 mm above the stock top, which is at program Z = -origin.z
     parsed = parseGcode(program, { start: { x: 0, y: 0, z: 50 - origin.z }, wcs });
     this.wcsUsed = parsed.meta.workOffsets.length ? parsed.meta.workOffsets : ['G54'];
+    // the offsets the program writes with G10 (their final values, for the markers and the sheet)
+    this.wcsG10 = new Set(Object.keys(parsed.meta.g10Zero || {}));
+    if (parsed.meta.g10Zero) for (const [n, z] of Object.entries(parsed.meta.g10Zero)) wcs[n] = z;
     this.warnings = [...warnings, ...parsed.warnings];
     this.stockSpec = spec; this.origin = origin;
     this.stockSize = stockExtents(spec);
@@ -111,7 +114,7 @@ export class Simulator {
     this.path = discretize(moves, 0.5);
     // each point into the stock frame through its own system's zero and the G52 local shift
     for (const p of this.path) {
-      const z = wcs[p.wcs] || origin, l = p.local || { x: 0, y: 0, z: 0 };
+      const z = p.zero || wcs[p.wcs] || origin, l = p.local || { x: 0, y: 0, z: 0 };
       p.x += z.x + l.x; p.y += z.y + l.y; p.z += z.z + l.z;
     }
     this.times = [0];

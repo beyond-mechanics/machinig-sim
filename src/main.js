@@ -107,6 +107,8 @@ function showWcs() {
       const inp = document.createElement('input'); inp.type = 'number'; inp.step = '0.1'; inp.value = d[k];
       inp.id = `wcs-${name}-${k}`; inp.setAttribute('aria-label', `${name} の Δ${k.toUpperCase()} [mm]`); inp.title = `G54 からの Δ${k.toUpperCase()} [mm]`;
       inp.onchange = () => { const v = +inp.value; if (Number.isFinite(v)) { d[k] = v; wcsDelta[name] = d; loadProgram(); } };
+      // written by the program's G10: shown, not edited here
+      if (sim.wcsG10?.has(name)) { const z = sim.wcs[name], o = sim.origin; inp.value = +(z[k] - o[k]).toFixed(3); inp.disabled = true; inp.title = `プログラムの G10 で設定 (G54 からの Δ${k.toUpperCase()})`; }
       row.appendChild(inp);
     }
     // or picked on the 3D view: the offset from G54 to the clicked point
@@ -116,6 +118,7 @@ function showWcs() {
       loadProgram();
       return `${name} を${p.snap ? `素材の${p.snap}` : 'クリックした点'}に (G54 から Δ ${wcsDelta[name].x} ${wcsDelta[name].y} ${wcsDelta[name].z})`;
     });
+    if (sim.wcsG10?.has(name)) pb.disabled = true;
     row.appendChild(pb);
     box.appendChild(row);
   }

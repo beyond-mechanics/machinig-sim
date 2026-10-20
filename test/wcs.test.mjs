@@ -53,3 +53,19 @@ const frame = mv => { const z = W[mv.wcs] || W.G54, l = mv.local; return { x: mv
   assert.deepEqual(sim.wcsUsed, ['G54', 'G55']);
 }
 console.log('wcs tests passed');
+
+// G10 L2 / L20: offsets written by the program, placed by their difference from G54's G10 value
+{
+  const prog = 'G21 G90\nG10 L2 P1 X-300 Y-200 Z-400\nG10 L2 P2 X-250 Y-200 Z-402\nG10 L20 P3 X-300 Y-150 Z-400\nG54 G0 X0 Y0 Z5\nG55 G0 X0 Y0 Z5\nG54.1 P3 G0 X0 Y0 Z5\nG91 G10 L2 P2 X1\nG90 G55 G0 X0 Y0';
+  const { moves, warnings, meta } = parseGcode(prog, { wcs: W });
+  const at = mv => { const z = mv.zero, l = mv.local; return { x: mv.to.x + z.x + l.x, y: mv.to.y + z.y + l.y, z: mv.to.z + z.z + l.z }; };
+  assert.deepEqual(moves.map(at), [{ x: 0, y: 0, z: 5 }, { x: 50, y: 0, z: 3 }, { x: 0, y: 50, z: 5 }, { x: 51, y: 0, z: 5 }]); // no Z on the last block: the tool keeps its height
+  assert.equal(moves.length, 4, 'G10 blocks make no motion');
+  assert.deepEqual(meta.g10Zero.G55, { x: 51, y: 0, z: -2 });
+  assert.equal(warnings.length, 0, warnings.join(' / '));
+  // without a G10 for G54 the screen's offsets are used, with a warning
+  const b = parseGcode('G10 L2 P2 X-250 Y-200 Z-402\nG55 G0 X0 Y0 Z5', { wcs: W });
+  assert.deepEqual(frame(b.moves[0]), { x: 60, y: 5, z: 3 });
+  assert.ok(b.warnings.some(w => /G10/.test(w)));
+}
+console.log('G10 offsets ok');

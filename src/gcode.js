@@ -61,7 +61,17 @@ const ARG_VAR = { A: 1, B: 2, C: 3, I: 4, J: 5, K: 6, D: 7, E: 8, F: 9, H: 11, M
 export function parseGcode(text, opts = {}) {
   const start = opts.start || { x: 0, y: 0, z: 50 };
   const W = opts.wcs || {};
-  const zeroOf = name => W[name] || W.G54 || { x: 0, y: 0, z: 0 };
+  // G10 L2 P□ / L20 P□ in the program: the offsets (machine coordinates) it writes. The machine zero
+  // is unknown here, so they are placed by their differences, anchored at the G54 the screen sets:
+  // zero = G54 + (offset − the first G10 value of G54). Without a G10 for G54 they are not used.
+  const mo = {};
+  let mo0 = null, g10Unanchored = false;
+  const zeroOf = name => {
+    const g = W.G54 || { x: 0, y: 0, z: 0 };
+    if (mo[name] && mo0) return { x: g.x + mo[name].x - mo0.x, y: g.y + mo[name].y - mo0.y, z: g.z + mo[name].z - mo0.z };
+    if (mo[name] && name !== 'G54') g10Unanchored = true;
+    return W[name] || g;
+  };
   const homeZ = opts.homeZ ?? start.z;
   const st = { x: start.x, y: start.y, z: start.z, abs: true, unit: 1, motion: 0, plane: 17, perRev: false, F: 1000, S: 10000, spindle: false, T: null, pendingT: null, cycle: null, retractR: false, comp: null, compD: null, wcs: 'G54', local: { x: 0, y: 0, z: 0 } };
   const moves = [];
@@ -74,6 +84,7 @@ export function parseGcode(text, opts = {}) {
     const from = { x: st.x, y: st.y, z: st.z };
     if (to.x === from.x && to.y === from.y && to.z === from.z && !extra?.arc) return;
     const mv = { rapid, from, to: { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, wcs: st.wcs, local: st.local, ...extra };
+    if (meta.g10) mv.zero = zeroOf(st.wcs);
     if (!st.spindle && !rapid) warn(ln, '主軸停止中の切削送り');
     moves.push(mv);
     st.x = to.x; st.y = to.y; st.z = to.z;
@@ -152,7 +163,7 @@ export function parseGcode(text, opts = {}) {
     const words = [...line.matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)].map(m => [m[1], parseFloat(m[2]), m[2]]);
     if (!words.length) continue;
     const w = {};
-    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false, sub = null;
+    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false, sub = null, g10 = false;
     for (const [k, v, s] of words) {
       if (k === 'G') {
         if ([0, 1, 2, 3].includes(v)) { st.motion = v; hasMotionWord = true; st.cycle = null; }
@@ -178,7 +189,8 @@ export function parseGcode(text, opts = {}) {
         else if (v === 41 || v === 42) { if (st.plane !== 17) warn(ln, `工具径補正 G${v} は G17 平面のみ対応`); else st.comp = v; }
         else if (v === 40) st.comp = null;
         else if (v === 68 || v === 51 || v === 16) warn(ln, `座標変換 G${v} は未対応`);
-        else if (v === 4 || v === 10 || v === 65) { /* dwell, data setting, macro call: no motion */ }
+        else if (v === 10) g10 = true;
+        else if (v === 4 || v === 65) { /* dwell, data setting, macro call: no motion */ }
         else if (!IGNORED_G.has(v)) warn(ln, `G${v} は無視`);
       } else if (k === 'M') {
         if (v === 3 || v === 4) st.spindle = true;
@@ -192,6 +204,27 @@ export function parseGcode(text, opts = {}) {
         w[k] = v;
         if ('XYZ'.includes(k) && !s.includes('.') && Math.abs(v) >= 1000) noDecimal = true;
       }
+    }
+    if (g10) {
+      // G10 L2 P1–6 (G54–G59) / L20 P n (G54.1 P n) X Y Z: write a work offset; G91 adds to it.
+      // The other L numbers (tool offsets) are data with no motion.
+      const L = Math.round(w.L ?? -1), P = Math.round(w.P ?? -1);
+      const name = L === 2 && P >= 1 && P <= 6 ? `G${53 + P}` : L === 20 && P >= 1 ? `G54.1P${P}` : null;
+      if (L === 2 && P === 0) warn(ln, 'G10 L2 P0 (外部ワーク座標系オフセット) は未対応 (この行は無視)');
+      else if (name) {
+        const before = zeroOf(st.wcs), u0 = st.unit;
+        const cur = mo[name] || (st.abs ? { x: 0, y: 0, z: 0 } : null);
+        if (!cur) warn(ln, `G91 G10: ${name} の元の値が不明のため 0 からの値として扱います`);
+        const base = cur || { x: 0, y: 0, z: 0 }, add = !st.abs;
+        const val = k => (w[k] === undefined ? base[k.toLowerCase()] : (add ? base[k.toLowerCase()] : 0) + w[k] * u0);
+        mo[name] = { x: val('X'), y: val('Y'), z: val('Z') };
+        if (name === 'G54' && !mo0) mo0 = { ...mo.G54 };
+        meta.g10 = true;
+        // the tool stays where it is when its own system moves
+        const after = zeroOf(st.wcs);
+        st.x += before.x - after.x; st.y += before.y - after.y; st.z += before.z - after.z;
+      }
+      continue;
     }
     if (newWcs) {
       // G54.1 P n: the extended systems; the P word belongs to it on this block
@@ -272,7 +305,9 @@ export function parseGcode(text, opts = {}) {
     }
   }
   if (noDecimal) warnings.push('小数点のない座標値を mm として扱いました (最小設定単位 0.001 mm の機械では値が1000倍になります)');
-  const unset = [...meta.workOffsets].filter(n => n !== 'G54' && !W[n]);
+  if (g10Unanchored) warnings.push('G10 で設定したワーク座標系がありますが、G54 の G10 が無いため位置を決められません (画面の設定を使います)');
+  if (meta.g10 && mo0) meta.g10Zero = Object.fromEntries(Object.keys(mo).map(n => [n, zeroOf(n)]));
+  const unset = [...meta.workOffsets].filter(n => n !== 'G54' && !W[n] && !meta.g10Zero?.[n]);
   if (unset.length) warnings.push(`ワーク座標系 ${unset.join(' ')} の原点が未設定のため G54 と同じ位置として扱います (プログラムタブで設定できます)`);
   const undefinedTools = meta.toolOrder.filter(t => !meta.tools[t]);
   if (undefinedTools.length && Object.keys(meta.tools).length) warnings.push(`工具 ${undefinedTools.map(t => 'T' + t).join(' ')} の寸法がコメントに無いため「加工条件」の工具で計算します`);
@@ -334,9 +369,9 @@ const CHORD_TOL = 0.001; // largest chord error of an arc [mm]
 // Convert moves into a polyline. Each point carries the attributes of the segment ending at it.
 export function discretize(moves, maxSeg = 0.5) {
   if (!moves.length) return [];
-  const pts = [{ ...moves[0].from, rapid: true, F: moves[0].F, S: moves[0].S, line: moves[0].line, tool: moves[0].tool, wcs: moves[0].wcs, local: moves[0].local }];
+  const pts = [{ ...moves[0].from, rapid: true, F: moves[0].F, S: moves[0].S, line: moves[0].line, tool: moves[0].tool, wcs: moves[0].wcs, local: moves[0].local, zero: moves[0].zero }];
   for (const mv of moves) {
-    const attr = { rapid: mv.rapid, F: mv.F, S: mv.S, line: mv.line, tool: mv.tool, wcs: mv.wcs, local: mv.local };
+    const attr = { rapid: mv.rapid, F: mv.F, S: mv.S, line: mv.line, tool: mv.tool, wcs: mv.wcs, local: mv.local, zero: mv.zero };
     if (mv.arc) {
       const { ca, cb, cw } = mv.arc;
       const [a, b, n] = mv.arc.axes || ['x', 'y', 'z'];
