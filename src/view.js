@@ -110,7 +110,18 @@ export class View {
     const mk = this.topGeo.attributes.mark, rg = this.topGeo.attributes.rough, M = mk.array, RG = rg.array;
     const base = this.mat.surf || this.mat.chip, depth = s.zTop - s.zBottom;
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const k = j * nx + i, z = H[k];
+      const k = j * nx + i;
+      let z = H[k];
+      // A needle one or two cells across: left where the cutter edge passed through the cell
+      // centres (the tie on the edge keeps them on every pass), or as a cusp between two cutter
+      // positions on a tight arc. A cutter much wider than a cell sweeps it away, so it is drawn
+      // at its neighbours' height (the stock data keep it).
+      if (i > 0 && j > 0 && i < nx - 1 && j < ny - 1 && this.needleR > 2 * s.hx) {
+        let low = 0, top = -Infinity;
+        for (const q of [k - 1, k + 1, k - nx, k + nx, k - nx - 1, k - nx + 1, k + nx - 1, k + nx + 1]) if (H[q] < z - 0.3) { low++; if (H[q] > top) top = H[q]; }
+        // a single column: 7 of 8 neighbours below; a pair: 6, on the cutter edge
+        if (low >= 7 || (low >= 6 && s.wallD?.[k] < 0.5 * s.hx)) z = top;
+      }
       P[k * 3 + 2] = z;
       // a wall foot sits where the cutter edge actually passed, not on the grid point
       if (!this.bentSet?.has(k)) { const f = wallFoot(s, i, j); P[k * 3] = f[0]; P[k * 3 + 1] = f[1]; }
@@ -276,6 +287,8 @@ export class View {
   setTool(t) {
     const T = THREE;
     this.toolCfg = t;
+    // smallest cutter radius used so far: needles much narrower than it are drawn away
+    this.needleR = Math.min(this.needleR ?? Infinity, t.R ?? t.D / 2);
     this.setCoating(t.coating || this.coating || 'none');
     for (const c of [...this.spin.children]) { this.spin.remove(c); c.geometry.dispose(); }
     if (this.blurGroup) { this.pivot.remove(this.blurGroup); this.blurGroup.traverse(o => o.geometry && o.geometry.dispose()); }
