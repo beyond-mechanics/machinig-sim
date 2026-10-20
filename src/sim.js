@@ -219,7 +219,13 @@ export class Simulator {
     return { k: m.k, fn: m.fn, zeta: m.zeta, modesX: ms.x, modesY: ms.y };
   }
   // compliance chain of the active tool for the speed model: its own bending and the spindle
-  chain() { return this.tm ? { kTool: this.tm.kTool, kSp: this.activeTool?.kSpindle ?? this.cfg.tool.kSpindle } : null; }
+  chain() {
+    if (!this.tm) return null;
+    const kSp = this.activeTool?.kSpindle ?? this.cfg.tool.kSpindle, sm = this.cfg.modal.spindleMode;
+    // optional spindle/holder mode: its mass from the spindle stiffness and its natural frequency
+    const twoDof = sm?.on ? { mTool: this.tm.mEff, mSp: kSp * 1e3 / (2 * Math.PI * (sm.fn || 1200)) ** 2, zSp: sm.zeta ?? 0.05 } : null;
+    return { kTool: this.tm.kTool, kSp, twoDof };
+  }
   // tool-tip stiffness at speed relative to rest
   speedFactor(S = this.S || 0) {
     if (this.cfg.modal.speedFrfs?.length) return null; // measured at speed: no model factor
@@ -242,7 +248,7 @@ export class Simulator {
   // (one composite curve). staticOnly: the diagram of the tool at rest, for comparison.
   lobes(phiSt, phiEx, staticOnly = false) {
     const m = this.cfg.modal, dep = !staticOnly && speedDependent(m, this.cfg.spindleSoft);
-    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${m.k}|${m.fn}|${m.zeta}|${JSON.stringify(m.modesX)}|${JSON.stringify(m.modesY)}|${JSON.stringify(m.speedFrfs)}|${this.cfg.material}|${this.activeTool.N}|${dep ? JSON.stringify(this.cfg.spindleSoft) + this.tm?.kTool : 'static'}`;
+    const key = `${phiSt.toFixed(2)}|${phiEx.toFixed(2)}|${m.k}|${m.fn}|${m.zeta}|${JSON.stringify(m.modesX)}|${JSON.stringify(m.modesY)}|${JSON.stringify(m.speedFrfs)}|${this.cfg.material}|${this.activeTool.N}|${dep ? JSON.stringify(this.cfg.spindleSoft) + this.tm?.kTool : 'static'}|${JSON.stringify(m.auto ? m.spindleMode : null)}`;
     const cache = this.lobeCaches || (this.lobeCaches = new Map());
     if (cache.has(key)) return cache.get(key);
     if (cache.size > 8) cache.clear();

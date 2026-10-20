@@ -482,7 +482,18 @@ function syncModalInputs() {
   $('mFn').value = sim.cfg.modal.fn;
   $('mZeta').value = sim.cfg.modal.zeta;
   $('mK').disabled = $('mFn').disabled = false;
+  // the two-mode model of the tool on its spindle (with the tool model only)
+  const sm = sim.cfg.modal.spindleMode, on = !!sm?.on && sim.cfg.modal.auto;
+  $('mSp').checked = on; $('mSp').disabled = !sim.cfg.modal.auto;
+  $('rowSpFn').hidden = !on; $('mSpInfo').hidden = !on;
+  if (on) {
+    const ms = sim.modalNow(0).modesX;
+    const zs = sm.zeta ?? 0.05, zt = sim.cfg.modal.zeta, part = (m, i) => (zs !== zt ? (m.zeta === zs ? '主軸' : '工具') : i ? '工具' : '主軸');
+    $('mSpInfo').textContent = `静止時の工具先端: ${ms.map((m, i) => `${part(m, i)}のモード ${Math.round(m.fn)} Hz (${(m.k / 1000).toFixed(1)} N/µm)`).join('、')}。主軸側の剛性 ${(sim.chain().kSp / 1000).toFixed(0)} N/µm と固有振動数から質量 ${sim.chain().twoDof.mSp.toFixed(2)} kg を決めます。回転による剛性低下は主軸側のばねにだけ効きます。`;
+  }
 }
+$('mSp').onchange = e => { sim.cfg.modal.spindleMode = { ...(sim.cfg.modal.spindleMode || { fn: +$('mSpFn').value, zeta: 0.05 }), on: e.target.checked }; host.config(true); syncModalInputs(); };
+$('mSpFn').onchange = e => { const v = +e.target.value; if (!(v >= 200 && v <= 5000)) return; sim.cfg.modal.spindleMode = { ...(sim.cfg.modal.spindleMode || { zeta: 0.05 }), on: true, fn: v }; host.config(true); syncModalInputs(); };
 // measured FRF: fit modes per direction, show the dominant one in the single-mode inputs
 const frfHint = $('frfInfo').innerHTML;
 const fmtModes = ms => ms.map(m => `${Math.round(m.fn)} Hz, ${(m.k / 1000).toFixed(1)} N/µm, ζ ${m.zeta.toFixed(3)}`).join(' ・ ');

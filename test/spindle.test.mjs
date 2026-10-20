@@ -87,4 +87,28 @@ const dep = sim.lobes(0, Math.PI), rest = sim.lobes(0, Math.PI, true);
   assert.equal(at(40000).fn, 2400, 'held beyond the measured range');
   assert.equal(modesAt(m, 15000).y[0].fn, 2700, 'Y follows X when Y was not measured');
 }
+
+// Spindle/holder mode: two lumped masses give two tip modes whose compliances add up to the
+// static chain, the spindle mode below the tool's; a stiff spindle leaves the tool mode alone;
+// the bearing softening at speed lowers the spindle mode most
+{
+  const { twoDofModes } = await import('../src/spindle.js');
+  const { SAMPLES } = await import('../src/samples.js');
+  const kT = 10600, mT = kT * 1e3 / (2 * Math.PI * 2400) ** 2, kS = 50000, mS = kS * 1e3 / (2 * Math.PI * 1200) ** 2;
+  const ms = twoDofModes(kT, mT, kS, mS);
+  assert.ok(Math.abs(1 / ms.reduce((a, m) => a + 1 / m.k, 0) - 1 / (1 / kT + 1 / kS)) < 1e-6 * kT, 'static chain');
+  assert.ok(ms[0].fn < 1200 && ms[1].fn > 2400 && ms[0].zeta === 0.05);
+  const stiff = twoDofModes(kT, mT, 1e9, mS);
+  // (the spindle mode then moves far up, above the tool's, and hardly shows at the tip)
+  assert.ok(Math.abs(stiff[0].fn / 2400 - 1) < 1e-3 && stiff[0].zeta === 0.03 && stiff[1].k > 1e6, 'rigid spindle: the tool mode alone');
+  const sim2 = new Simulator();
+  sim2.cfg.modal.spindleMode = { on: true, fn: 1200, zeta: 0.05 }; sim2.load(SAMPLES.demo.code);
+  const m0 = sim2.modalNow(0).modesX, m30 = sim2.modalNow(30000).modesX;
+  console.log(`spindle mode: rest ${m0.map(m => Math.round(m.fn) + ' Hz').join(' + ')}, 30000 min⁻¹ ${m30.map(m => Math.round(m.fn) + ' Hz').join(' + ')}`);
+  assert.equal(m0.length, 2);
+  assert.ok(m30[0].fn / m0[0].fn < m30[1].fn / m0[1].fn && m30[0].fn < m0[0].fn, 'softening on the spindle mode');
+  // the lobe diagram changes with the extra mode
+  const a1 = sim2.lobes(0, Math.PI), sim3 = new Simulator(); sim3.load(SAMPLES.demo.code); const a0 = sim3.lobes(0, Math.PI);
+  assert.ok(JSON.stringify(a1) !== JSON.stringify(a0));
+}
 console.log('spindle tests passed');

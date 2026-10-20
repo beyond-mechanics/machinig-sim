@@ -246,6 +246,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="mK">剛性 k <span class="unit">N/µm</span></label><input type="number" id="mK" min="0.5" max="200" step="0.1"></div>
           <div class="row"><label for="mFn">固有振動数 <span class="unit">Hz</span></label><input type="number" id="mFn" min="100" max="20000" step="10"></div>
           <div class="row"><label for="mZeta">減衰比 ζ</label><input type="number" id="mZeta" min="0.005" max="0.3" step="0.005" value="0.04"></div>
+          <label class="check"><input type="checkbox" id="mSp"> 主軸・ホルダーのモードも入れる (2 自由度)</label>
+          <div class="row" id="rowSpFn" hidden><label for="mSpFn">主軸側の固有振動数 <span class="unit">Hz</span></label><input type="number" id="mSpFn" min="200" max="5000" step="50" value="1200"></div>
+          <p class="hint" id="mSpInfo" hidden></p>
           <div class="row"><label for="spSoft">主軸の剛性低下 <span class="unit">% @30000</span></label><input type="number" id="spSoft" min="0" max="60" step="1" value="25"></div>
           <p class="hint" id="spInfo">高速回転では軸受の予圧が抜けホルダーが緩むので、主軸側の剛性が下がり固有振動数が下がります。30000 min⁻¹ での低下率 (0 で無効) です。工具先端には主軸側のコンプライアンスの割合だけ効きます。</p>
           <div class="row"><label for="frfS">測定時の回転数 <span class="unit">min⁻¹</span></label><input type="number" id="frfS" min="0" max="60000" step="500" placeholder="静止"></div>
