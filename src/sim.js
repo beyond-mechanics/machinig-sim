@@ -4,7 +4,7 @@
 
 import { parseGcode, discretize, segmentTime } from './gcode.js';
 import { Stock } from './stock.js';
-import { CuttingEngine, BINS } from './cutting.js';
+import { CuttingEngine, BINS, END_BINS, END_RINGS } from './cutting.js';
 import { ChipSystem } from './chips.js';
 import { toolModel, toolStress } from './tool.js';
 import { stabilityLobes, alimAt } from './sld.js';
@@ -123,6 +123,27 @@ export class Simulator {
     return hmax;
   }
 
+  // material depth above the end face on a polar grid (angle bins × rings) in the cutter's
+  // feed frame; returns the largest depth. Rings stop half a cell inside the radius for the
+  // same reason as fillEngagement (finished walls smeared by the grid).
+  fillEndEngagement(cx, cy, tipZ, u) {
+    const Eb = this.engine.Eb, R = this.cfg.tool.R, vx = -u[1], vy = u[0], ball = this.cfg.tool.type === 'ball';
+    const rOut = R - 0.5 * Math.max(this.stock.hx, this.stock.hy);
+    let dmax = 0;
+    for (let b = 0; b < END_BINS; b++) {
+      const phi = (b + 0.5) / END_BINS * 2 * Math.PI, sn = Math.sin(phi), cs = Math.cos(phi);
+      const ex = sn * u[0] + cs * vx, ey = sn * u[1] + cs * vy;
+      for (let j = 0; j < END_RINGS; j++) {
+        const r = (j + 0.5) / END_RINGS * rOut;
+        const zEdge = ball ? tipZ + R - Math.sqrt(R * R - r * r) : tipZ;
+        const d = Math.max(0, this.stock.sample(cx + r * ex, cy + r * ey) - zEdge);
+        Eb[b * END_RINGS + j] = d;
+        if (d > dmax) dmax = d;
+      }
+    }
+    return { dmax, rOut };
+  }
+
   // engagement angles at the bottom slice, for the lobe diagram
   immersion(tipZ) {
     const Hb = this.engine.Hb, z = tipZ + 0.1;
@@ -165,24 +186,29 @@ export class Simulator {
       this.ensureEngine(S);
       const e = this.engine;
       // engagement & dynamics
-      // vertical moves: the side edges do not cut; plunging uses the end edges (not modelled)
+      // vertical moves: only the end (bottom) edges cut
       const vertical = dxy < 1e-6;
       const hmax = vertical ? -Infinity : this.fillEngagement(p.x, p.y, this.u);
       const ap = Math.min(tool.fluteLen, Math.max(0, hmax - p.z));
       this.ap = ap;
-      const under = this.stock.sample(p.x, p.y) - p.z;
-      if (vertical && b.z < a.z && under > 0.01) this.alert(b.rapid ? 'rapid' : 'plunge', b.rapid ? '早送り(G0)で材料に突入しています' : 'プランジ(垂直切込み)は底刃の切削力を計算していません');
+      // descending (plunge / ramp / helix): axial feed per tooth for the end edges
+      const fza = !b.rapid && b.z < a.z ? (this.F / (S * tool.N)) * ((a.z - b.z) / segLen) : 0;
+      const end = fza > 0 ? this.fillEndEngagement(p.x, p.y, p.z, this.u) : null;
+      const endCut = !!end && end.dmax > 2e-4;
+      this.plunging = endCut;
+      if (vertical && b.z < a.z && b.rapid && this.stock.sample(p.x, p.y) - p.z > 0.01) this.alert('rapid', '早送り(G0)で材料に突入しています');
       if (!vertical && ap > 0.01 && b.rapid) this.alert('rapid', '早送り(G0)で材料に干渉しています');
-      if (ap > 0.01 && !b.rapid) {
+      if ((ap > 0.01 || endCut) && !b.rapid) {
         const fzEff = dxy > 1e-6 ? (this.F / (S * tool.N)) * (dxy / segLen) : 0;
         e.setEngagement(this.u, fzEff, p.z, ap);
-        this.fz = fzEff;
+        e.setEndEngagement(endCut ? fza : 0, end ? end.rOut : 0);
+        this.fz = fzEff; this.fza = fza;
         // thin-wall compliance at the force centroid (uniform helix: mid-depth)
-        this.wall = this.cfg.workpieceFlex ? wallAt(this.stock, p, R, e.Hb, this.u, p.z + ap / 2, this.mat, this.toolStaticK()) : null;
+        this.wall = this.cfg.workpieceFlex && ap > 0.01 ? wallAt(this.stock, p, R, e.Hb, this.u, p.z + ap / 2, this.mat, this.toolStaticK()) : null;
         e.setWork(this.wall);
         // dynamics time for this substep: compressed when the frame budget is short
         const want = Math.max(1, Math.round(dtm / e.dt));
-        const cost = tool.N * Math.max(1, e.nz);
+        const cost = tool.N * Math.max(1, e.nz + (endCut ? END_RINGS : 0));
         const share = Math.max(e.stepsPerTooth / 4, dynLeft / cost / Math.max(1, nSubEst - guard + 1));
         const n = Math.max(1, Math.min(want, Math.floor(share)));
         dynLeft -= n * cost;
@@ -191,7 +217,8 @@ export class Simulator {
         const compress = want / n;
         this.spawnChips(e, before, compress, p);
         frameStats.cutTime += dtm; frameStats.dynTime += n * e.dt;
-        const imm = this.immersion(p.z);
+        if (endCut && ap <= 0.01) { this.display.phiSt = 0; this.display.phiEx = Math.PI; }
+        const imm = ap > 0.01 ? this.immersion(p.z) : null;
         if (imm) { this.display.phiSt = imm.st; this.display.phiEx = imm.ex; }
         // shank / holder collision: material above the flutes inside the tool radius
         if (hmax > p.z + tool.fluteLen + 0.05) this.alert('shank', '切れ刃長を超える切込み: シャンク干渉');

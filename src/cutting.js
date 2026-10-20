@@ -10,12 +10,17 @@
 import { modeSet } from './frf.js';
 
 export const BINS = 180; // angular resolution of the engagement map
+export const END_BINS = 36; // angular bins of the end-face (bottom edge) engagement map
+export const END_RINGS = 6; // radial rings of the end-face map
 export const H_REF = 0.05; // chip thickness at which the size-effect coefficients equal K [mm]
 const H_MIN = 0.002;       // below this the exponential law is not extrapolated [mm]
 
 export class CuttingEngine {
   constructor() {
     this.Hb = new Float32Array(BINS);
+    // material depth above the cutter's end face [mm], [angle bin][ring]; filled by the caller
+    this.Eb = new Float32Array(END_BINS * END_RINGS);
+    this.fza = 0; this.endR = 0;
     this.stats = newStats();
     this.hist = { n: 4096, i: 0, count: 0, Fx: new Float32Array(4096), Fy: new Float32Array(4096), Fz: new Float32Array(4096), x: new Float32Array(4096), y: new Float32Array(4096) };
     this.toothSamples = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
@@ -58,6 +63,7 @@ export class CuttingEngine {
     this.pr = 0;
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0; this.t = 0;
     this.setWork(null);
+    this.fza = 0;
     this.toothEngaged = new Uint8Array(this.N);
     this.toothVol = new Float64Array(this.N);
     this.toothPhi = new Float64Array(this.N);
@@ -101,10 +107,29 @@ export class CuttingEngine {
     }
   }
 
+  // End (bottom) edges: fza = axial feed per tooth [mm] while descending (plunge / ramp),
+  // rOut = outer radius of the end-face map [mm]. Eb filled by caller. Each end-edge element at
+  // radius r cuts an axial chip min(fza, depth); on a ball nose the chip normal to the edge is
+  // that times cosκ and the edge element is dr / cosκ (κ: angle of the edge normal from the axis).
+  setEndEngagement(fza, rOut) {
+    this.fza = fza > 0 ? fza : 0; this.endR = rOut;
+    const R = this.R, dr = rOut / END_RINGS;
+    this.ringR = new Float64Array(END_RINGS); this.ringCos = new Float64Array(END_RINGS); this.ringZ = new Float64Array(END_RINGS);
+    this.ringDs = new Float64Array(END_RINGS);
+    for (let j = 0; j < END_RINGS; j++) {
+      const r = (j + 0.5) * dr;
+      const c = this.tool.type === 'ball' ? Math.sqrt(Math.max(0.05, R * R - r * r)) / R : 1;
+      this.ringR[j] = r; this.ringCos[j] = c; this.ringDs[j] = dr / c;
+      // height of the edge above the tip (ball surface)
+      this.ringZ[j] = this.tool.type === 'ball' ? R - c * R : 0;
+    }
+  }
+
   // Integrate nSteps. Returns nothing; results accumulate in this.stats / hist / chipEvents.
   run(nSteps) {
     const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap } = this;
     const ux = this.ux, uy = this.uy, vx = this.vx_, vy = this.vy_, fz = this.fz;
+    const Eb = this.Eb, fza = this.fza, ringR = this.ringR, ringCos = this.ringCos, ringDs = this.ringDs, ringZ = this.ringZ;
     const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kte = mat.Kte, Kre = mat.Kre, Kae = mat.Kae;
     const nl = this.tool.nonlinear !== false;
     const mc = nl ? (mat.mc ?? 0) : 0;
@@ -163,6 +188,28 @@ export class CuttingEngine {
           Fsum += fr; Fr2z += fr * (sliceZ[k] - this.tipZ);
           engaged = 1; ph = phi; zsum = sliceZ[k];
           this.toothVol[i] += h * db * sliceR[k] * dphi;
+        }
+        if (fza) {
+          // end edges sit at the tip (no helix lag); thrust, torque and in-plane tangential force
+          let phi = (theta + i * pitch) % TWO_PI; if (phi < 0) phi += TWO_PI;
+          const row = ((phi / TWO_PI * END_BINS) | 0) * END_RINGS;
+          const sn = Math.sin(phi), cs = Math.cos(phi);
+          const txg = cs * ux - sn * vx, tyg = cs * uy - sn * vy;
+          for (let j = 0; j < END_RINGS; j++) {
+            const depth = Eb[row + j];
+            if (depth <= 2e-4) continue;
+            const c = ringCos[j], ds = ringDs[j];
+            let h = (depth < fza ? depth : fza) * c;
+            const se = mc ? Math.pow(H_REF / (h > H_MIN ? h : H_MIN), mc) : 1;
+            const Ft = Ktc * se * h * ds + Kte * ds;
+            const Fn = Krc * se * h * ds + Kre * ds; // along the edge normal: mostly axial thrust
+            Fx += -Ft * txg; Fy += -Ft * tyg;
+            Fz -= Fn * c;
+            T += Ft * ringR[j];
+            Fsum += Ft; Fr2z += Ft * ringZ[j];
+            engaged = 1; ph = phi; zsum = this.tipZ + ringZ[j];
+            this.toothVol[i] += h * ds * ringR[j] * dphi;
+          }
         }
         if (engaged) { this.toothPhi[i] = ph; this.toothZ[i] = zsum; }
         else if (this.toothEngaged[i]) {
