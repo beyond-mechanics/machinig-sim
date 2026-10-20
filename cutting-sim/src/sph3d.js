@@ -420,7 +420,7 @@ export class Cutting3D {
     let np = this.k0;
     for (let q = 0; q < nm; q++) {
       const k = mi[q], i = ci[k], j = cj[k];
-      if (fixed[i] === 2 && fixed[j] === 2) continue;           // frozen after the search
+      if (fixed[i] >= 2 && fixed[j] >= 2) continue;            // frozen (or asleep) after the search
       if (pair(i, j, np)) np++;
     }
     this.np = np;
@@ -517,7 +517,7 @@ export class Cutting3D {
     // supports (the frozen surface skips the constitutive update).
     for (let k = 0; k < this.k0; k++) {
       const i = pi[k], j = pj[k];
-      if (fixed[i] === 2 && fixed[j] === 2) continue;
+      if (fixed[i] >= 2 && fixed[j] >= 2) continue;
       const Vi = m / Q[4 * i + 3], Vj = m / Q[4 * j + 3];
       const rx = prx[k], ry = pry[k], rz = prz[k], g1 = gx[k], g2 = gy[k], g3 = gz[k];
       const b0 = rx * g1, b1 = rx * g2, b2 = rx * g3, b3 = ry * g1, b4 = ry * g2, b5 = ry * g3, b6 = rz * g1, b7 = rz * g2, b8 = rz * g3;
@@ -535,8 +535,8 @@ export class Cutting3D {
     const dmg = this.dmg, frac = cfg.fracture && mat.D1 != null, efs = cfg.efScale, Tr = mat.Tr, Tm = mat.Tm;
     for (let i = 0; i < N; i++) {
       const o = 19 * i, pk = 9 * i;
-      if (fixed[i] === 2 || this.dead[i]) {
-        // Frozen or removed: keep the stored stress in the momentum sums, no artificial stress.
+      if (fixed[i] >= 2 || this.dead[i]) {
+        // Frozen, asleep or removed: keep the stored stress in the momentum sums, no artificial stress.
         const ir2 = 1 / (rho[i] * rho[i]);
         PK[pk] = (Sxx[i] - p[i]) * ir2; PK[pk + 1] = (Syy[i] - p[i]) * ir2; PK[pk + 2] = (Szz[i] - p[i]) * ir2;
         PK[pk + 3] = Sxy[i] * ir2; PK[pk + 4] = Syz[i] * ir2; PK[pk + 5] = Sxz[i] * ir2; PK[pk + 6] = 0; PK[pk + 7] = 0; PK[pk + 8] = 0;
@@ -644,9 +644,12 @@ export class Cutting3D {
     let i0 = 0, i1 = 0, i2 = 0, work = 0, lt = 0, lr = 0, qt = 0;
     const heat = this.heat, Lz = this.Lz, acc = helix || this.progress() > 0.5, cMat = mat.c;
     const meshM = this.meshMode, touched = this.touched, vSlow2 = (0.02 * V) ** 2, dFree = 8 * dx;
+    const sleep = meshM && cfg.sleep !== false, wake = this.steps % 10 === 0, dWake = 10 * dx, dSleep = 14 * dx;
     for (let i = 0; i < N; i++) {
       // Mesh: a frozen particle comes back to life when the tool (the next tooth) comes near.
       if (meshM && fixed[i] === 2 && !this.dead[i] && this.sdf(x[i], y[i], z[i]) < 3 * dx) fixed[i] = 0;
+      // Mesh: material far from the tool sleeps (held, no stress update); it wakes 10 spacings out.
+      if (meshM && fixed[i] === 3 && wake && this.sdf(x[i], y[i], z[i]) < dWake) fixed[i] = 0;
       if (fixed[i] || this.dead[i]) { vx[i] = 0; vy[i] = 0; vz[i] = 0; this.contact[i] = 0; continue; }
       // Machined surface well behind the edge (normal distance) has unloaded: freeze it.
       if (meshM) { /* below, from the tool distance */ } else if (helix) {
@@ -666,6 +669,7 @@ export class Cutting3D {
         this.contact[i] = 0;
         // Mesh: material the tool has touched, now clear of it and at rest, is machined surface.
         if (meshM && touched[i] && dist > dFree && vx[i] * vx[i] + vy[i] * vy[i] + vz[i] * vz[i] < vSlow2) { fixed[i] = 2; vx[i] = 0; vy[i] = 0; vz[i] = 0; }
+        else if (sleep && !touched[i] && dist > dSleep && vx[i] * vx[i] + vy[i] * vy[i] + vz[i] * vz[i] < vSlow2) { fixed[i] = 3; vx[i] = 0; vy[i] = 0; vz[i] = 0; }
         continue;
       }
       this.contact[i] = 1;
