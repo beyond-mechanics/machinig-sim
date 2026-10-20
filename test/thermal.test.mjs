@@ -1,7 +1,7 @@
 // Cutting temperature and tool wear: trends that any machinist expects, the calibration anchor,
 // and the force increase of a worn flank in the dynamics.
 import assert from 'node:assert/strict';
-import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT } from '../src/thermal.js';
+import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT, edgeCycle, CARBIDE, T0 } from '../src/thermal.js';
 import { CuttingEngine, BINS } from '../src/cutting.js';
 import { Simulator } from '../src/sim.js';
 import { MATERIALS } from '../src/materials.js';
@@ -88,5 +88,30 @@ M30`);
   assert.ok(w1 > 0 && w2 > 0, 'both tools wear');
   assert.ok(vbAtChange < 0.2 * w1, 'the new tool does not inherit the old tool\'s wear');
   assert.equal(sim.display.VB, w2, 'display shows the active tool');
+}
+// Interrupted cutting: the edge temperature over a revolution
+{
+  const Tss = 820, lc = 0.1, kap = CARBIDE.k / (CARBIDE.rho * CARBIDE.cp), tau = (lc * 1e-3) ** 2 / kap;
+  // a continuous cut stays at the steady value
+  const c = edgeCycle(Tss, 12000, 1, lc);
+  assert.equal(c.swing, 0); assert.equal(c.onMean, Tss);
+  // a long contact (≫ a²/κ) gets near the steady value and cools almost to ambient in the gap
+  const L = edgeCycle(Tss, 600, 0.5, lc);
+  assert.ok(L.max > T0 + 0.97 * (Tss - T0) && L.max < Tss + 1, `long contact peak ${L.max}`);
+  assert.ok(L.min < T0 + 0.05 * (Tss - T0), `long gap low ${L.min}`);
+  // a very short contact (high speed, light radial engagement): the 1-D semi-infinite rise
+  // (2/√π)·√(t/τ) of a surface under constant flux, well below the steady value
+  const S = 30000, duty = 0.02, s = edgeCycle(Tss, S, duty, lc), tOn = duty * 60 / S;
+  const rise = 2 / Math.sqrt(Math.PI) * Math.sqrt(tOn / tau);
+  const got = (s.max - T0) / (Tss - T0);
+  console.log(`edge cycle: τ = a²/κ ${(tau * 1e3).toFixed(2)} ms; long contact ${L.min.toFixed(0)}–${L.max.toFixed(0)} °C; short ${(tOn * 1e3).toFixed(3)} ms contact: peak ${(got * 100).toFixed(0)} % of steady (1-D ${(rise * 100).toFixed(0)} %), wear temperature ${s.onMean.toFixed(0)} °C`);
+  assert.ok(Math.abs(got / rise - 1) < 0.12, 'short contact follows the semi-infinite rise');
+  assert.ok(s.onMean < s.max && s.onMean < T0 + 0.5 * (Tss - T0), 'and the edge cuts cooler, so it wears less');
+  // coolant takes more heat out while the edge is out of the cut: lower low, larger swing
+  const dry = edgeCycle(Tss, 300, 0.3, 0.2, 'dry'), wet = edgeCycle(Tss, 300, 0.3, 0.2, 'through');
+  assert.ok(wet.min < dry.min && wet.swing > dry.swing);
+  // the wear calibration point (a continuous cut) is unchanged by the cycle
+  const m = MATERIALS.S50C, ref = cuttingTemperature(m, 0.05, m.vc / 60).tool;
+  assert.equal(edgeCycle(ref, 5000, 1, 0.1).onMean, ref);
 }
 console.log('thermal tests passed');

@@ -27,7 +27,7 @@ function withCoefs(mat, c) {
   if (!m) { m = { ...mat, Ktc: c.Ktc, Krc: c.Krc, Kac: c.Kac, mc: c.mc ?? mat.mc, coefSource: c.source }; coefMats.set(key, m); }
   return m;
 }
-import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT, T0 } from './thermal.js';
+import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT, T0, edgeCycle } from './thermal.js';
 
 // speed-dependent lobe diagram: an FRF every LOBE_NODE min⁻¹, the curve sampled every LOBE_STEP
 const LOBE_NODE = 1000, LOBE_STEP = 25;
@@ -620,12 +620,19 @@ export class Simulator {
     if (cutting && st.sumB > 0) {
       const Vc = (e.omega || 0) * this.activeTool.R * 1e-3; // m/s
       const T = cuttingTemperature(this.mat, st.sumHb / st.sumB, Vc, this.activeTool.rakeDeg ?? 10);
-      this.temp = { tool: this.temp.tool + (T.tool - this.temp.tool) * 0.3, chip: this.temp.chip + (T.chip - this.temp.chip) * 0.3, shear: T.shear, phi: T.phi, hc: T.hc, h: st.sumHb / st.sumB };
-      wearRateNow = wearRate(this.mat, Vc, T.tool) * contact; // mm per second of machining
+      // each edge is in the cut for `contact` of the revolution: the temperature cycle, and the
+      // mean while cutting for the wear law (below the steady value when the contact is short)
+      const cyc = edgeCycle(T.tool, this.S || 0, contact, 2 * T.hc, this.cfg.coolant);
+      const ease = (a, b) => a + (b - a) * 0.3;
+      const pc = this.temp.cycle || cyc;
+      this.temp = { tool: ease(this.temp.tool, T.tool), chip: ease(this.temp.chip, T.chip), shear: T.shear, phi: T.phi, hc: T.hc, h: st.sumHb / st.sumB,
+        cycle: { max: ease(pc.max, cyc.max), min: ease(pc.min, cyc.min), swing: ease(pc.swing, cyc.swing), stress: ease(pc.stress, cyc.stress), onMean: ease(pc.onMean, cyc.onMean), tOn: cyc.tOn } };
+      wearRateNow = wearRate(this.mat, Vc, cyc.onMean) * contact; // mm per second of machining
       this.VB += wearRateNow * fs.cutTime;
     } else {
       // the edge cools between cuts (display only; wear is not accumulated)
       this.temp.tool += (T0 - this.temp.tool) * 0.1; this.temp.chip += (T0 - this.temp.chip) * 0.1;
+      this.temp.cycle = null;
     }
     d.lifeMin = wearRateNow > 0 ? Math.max(0, VB_LIMIT - this.VB) / wearRateNow / 60 : Infinity;
     const stress = this.tm.assembly ? this.sectionStress(m.Fmax, m.zc, m.Tmax) : toolStress(this.activeTool, this.tm.I, this.tm.De, m.Fmax, m.zc, m.Tmax);
@@ -638,12 +645,12 @@ export class Simulator {
       defl: m.defl, vib: m.vib, stress: stress.vm, mrr: m.mrr,
       wallDefl: m.wall, wallMax: m.wallMax, wall: this.wall && cutting ? this.wall : null,
       ap: this.ap || 0, S: this.S || 0, F_: this.F || 0, fz: this.fz || 0, fza: this.plunging ? this.fza : 0,
-      tempTool: this.temp.tool, tempChip: this.temp.chip, tempShear: this.temp.shear ?? T0, hMean: this.temp.h || 0, shearDeg: (this.temp.phi || 0) * 180 / Math.PI, VB: this.VB, contact,
+      tempTool: this.temp.tool, tempCycle: cutting ? this.temp.cycle || null : null, tempChip: this.temp.chip, tempShear: this.temp.shear ?? T0, hMean: this.temp.h || 0, shearDeg: (this.temp.phi || 0) * 180 / Math.PI, VB: this.VB, contact,
       // chatter = vibration that is not synchronous with tooth passing (once-per-tooth scatter)
       state: !cutting ? 'idle' : (d.chatterIdx > 0.55 && d.once > 3) ? 'chatter' : (d.chatterIdx > 0.35 && d.once > 1.5) ? 'marginal' : 'stable',
     });
     // the frame's cutting statistics belong to the line that cut (the frame may end on a retract)
-    if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.tool, stress: stress.vm }, d.state, fs.cutTime);
+    if (cutting) this.report.sample(this.lastCutLine ?? this.line, { F: cur.Fmax, vib: cur.vib, defl: cur.defl, temp: this.temp.cycle?.max ?? this.temp.tool, stress: stress.vm, swing: this.temp.cycle?.swing || 0 }, d.state, fs.cutTime);
     if (this.activeT !== undefined) this.report.toolWear(this.activeT, this.VB);
     if (this.VB > VB_LIMIT) this.alert('wear', `逃げ面摩耗 VB ${this.VB.toFixed(2)} mm: 工具寿命 (VB ${VB_LIMIT} mm) を超過`);
     if (cutting && this.temp.tool > 900) this.alert('heat', `刃先温度 ${this.temp.tool.toFixed(0)} °C: 拡散摩耗・刃先の塑性変形が急増する領域`);

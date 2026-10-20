@@ -12,7 +12,7 @@ import { HOLDERS, parseToolLibrary } from './assembly.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
 import { speedDependent } from './spindle.js';
-import { VB_LIMIT, T0 } from './thermal.js';
+import { VB_LIMIT, T0, SWING_CRACK } from './thermal.js';
 import { LineReport } from './report.js';
 import { JC, predictCoefs } from './oxley.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
@@ -549,9 +549,13 @@ function updateTiles() {
   $('mS').style.width = `${Math.min(100, sr * 100)}%`;
   $('mS').style.background = sr > 1 ? 'var(--bad)' : sr > 0.6 ? 'var(--warn)' : 'var(--ok)';
   setV('vM', d.mrr.toFixed(1), 'cm³/min'); $('sM').textContent = `ap ${d.ap.toFixed(2)} mm · fz ${d.fz.toFixed(3)} mm`;
-  setV('vH', d.tempTool.toFixed(0), '°C');
-  $('sH').textContent = d.cutting ? `切りくず ${d.tempChip.toFixed(0)} °C · 平均 h ${(d.hMean * 1000).toFixed(0)} µm` : `切りくず ${d.tempChip.toFixed(0)} °C`;
-  $('tileHeat').dataset.s = d.tempTool > 900 ? 'chatter' : d.tempTool > 700 ? 'marginal' : 'stable';
+  // milling: the peak of the edge's cycle over a revolution; otherwise the quasi-steady value
+  const cy = d.cutting && d.tempCycle?.swing > 1 ? d.tempCycle : null, peak = cy ? cy.max : d.tempTool;
+  setV('vH', peak.toFixed(0), '°C');
+  $('sH').textContent = cy ? `1 回転で ${cy.min.toFixed(0)}〜${cy.max.toFixed(0)} °C (変動 ${cy.swing.toFixed(0)} °C) · 連続切削なら ${d.tempTool.toFixed(0)} °C`
+    : d.cutting ? `切りくず ${d.tempChip.toFixed(0)} °C · 平均 h ${(d.hMean * 1000).toFixed(0)} µm` : `切りくず ${d.tempChip.toFixed(0)} °C`;
+  $('sH').title = cy ? `切削中の平均 ${cy.onMean.toFixed(0)} °C (摩耗の計算に使う)、接触 ${cy.tOn.toFixed(2)} ms/回転、切りくず ${d.tempChip.toFixed(0)} °C、熱応力の振幅 約 ${Math.round(cy.stress / 10) * 10} MPa。変動が ${SWING_CRACK} °C を超えると熱亀裂 (くし状の割れ) が出やすくなります。` : '';
+  $('tileHeat').dataset.s = peak > 900 ? 'chatter' : peak > 700 || (cy?.swing ?? 0) > SWING_CRACK ? 'marginal' : 'stable';
   setV('vWr', (d.VB * 1000).toFixed(1), 'µm');
   const wr = d.VB / VB_LIMIT;
   $('mWr').style.width = `${Math.min(100, wr * 100)}%`;
@@ -629,7 +633,7 @@ function updateReport() {
     if (reportShown !== 'empty') { reportShown = 'empty'; $('rSum').innerHTML = ''; $('rTable').tBodies[0].innerHTML = ''; $('hReport').textContent = '加工が始まると、プログラムの行ごとにまとめます'; }
     return;
   }
-  const r = rep.summary({ stress: ALLOWABLE_STRESS, temp: 900 });
+  const r = rep.summary({ stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK });
   const key = `${r.time.toFixed(1)}|${r.issues.length}|${sim.done}`;
   if (key === reportShown) return;
   reportShown = key;
