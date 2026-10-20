@@ -22,9 +22,13 @@ import { modesAt, speedDependent, tipFactor, SOFT_DEFAULT } from './spindle.js';
 const coefMats = new Map();
 function withCoefs(mat, c) {
   if (!c) return mat;
-  const key = `${mat.name}|${c.Ktc}|${c.Krc}|${c.Kac}|${c.mc}`;
+  const key = `${mat.name}|${c.Ktc}|${c.Krc}|${c.Kac}|${c.Kte}|${c.Kre}|${c.Kae}|${c.mc}`;
   let m = coefMats.get(key);
-  if (!m) { m = { ...mat, Ktc: c.Ktc, Krc: c.Krc, Kac: c.Kac, mc: c.mc ?? mat.mc, coefSource: c.source }; coefMats.set(key, m); }
+  if (!m) {
+    m = { ...mat, Ktc: c.Ktc, Krc: c.Krc, Kac: c.Kac, mc: c.mc ?? mat.mc, coefSource: c.source };
+    for (const k of ['Kte', 'Kre', 'Kae']) if (c[k] != null) m[k] = c[k];
+    coefMats.set(key, m);
+  }
   return m;
 }
 import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT, T0, edgeCycle } from './thermal.js';

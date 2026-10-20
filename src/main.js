@@ -15,6 +15,7 @@ import { speedDependent } from './spindle.js';
 import { VB_LIMIT, T0, SWING_CRACK } from './thermal.js';
 import { LineReport } from './report.js';
 import { JC, predictCoefs } from './oxley.js';
+import { identify, parseTests, unitForces, COEF_KEYS } from './identify.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
 const $ = id => document.getElementById(id);
@@ -272,9 +273,11 @@ function showJc() {
     inp.onchange = () => { const v = +inp.value; if (Number.isFinite(v) && v >= 0) jc[k] = v; };
     l.append(label, inp); box.appendChild(l);
   }
-  $('oxReset').disabled = !sim.cfg.coefs?.[key];
+  $('coefReset').hidden = !sim.cfg.coefs?.[key];
   $('oxApply').disabled = !(oxLast && oxLast.key === key);
   if (!(oxLast && oxLast.key === key)) $('oxOut').innerHTML = '';
+  $('idApply').disabled = !(idLast && idLast.key === key);
+  if (!(idLast && idLast.key === key)) $('idOut').innerHTML = '';
 }
 $('oxRun').onclick = () => {
   const key = sim.cfg.material, base = MATERIALS[key], t = sim.activeTool;
@@ -302,7 +305,45 @@ $('oxApply').onclick = () => {
   sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [oxLast.key]: { Ktc: r(p.Ktc), Krc: r(p.Krc), Kac: r(p.Kac), mc: +p.mc.toFixed(3), source: 'Oxley 予測' } };
   host.config(true); updateMatHint(); showJc();
 };
-$('oxReset').onclick = () => {
+// ---- coefficients identified from cutting tests ----
+let idLast = null;
+const idTool = () => { const t = sim.activeTool; return { D: t.D, N: t.N, helixDeg: t.helixDeg, type: t.type, fluteLen: t.fluteLen, runout: t.runout ?? 0 }; };
+const idMc = () => (sim.cfg.cuttingNonlinear ? sim.mat.mc ?? 0 : 0);
+$('idExample').onclick = () => {
+  // what a dynamometer would read for the table coefficients, with ±3 % scatter
+  const m = MATERIALS[sim.cfg.material], tool = idTool(), mode = $('idMode').value, ae = mode === 'slot' ? tool.D : tool.D * 0.3;
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
+  const lines = ['# 例: 表の係数から作った値 (±3 % のばらつき)', '# fz ap ae Fx Fy Fz'];
+  for (const fz of [0.02, 0.04, 0.06, 0.08]) {
+    const U = unitForces(tool, { fz, ap: 2, ae, mode }, idMc());
+    const F = [0, 1, 2].map(k => COEF_KEYS.reduce((s, key, j) => s + m[key] * U[j][k], 0) * (1 + rnd()));
+    lines.push(`${fz} 2 ${ae.toFixed(1)} ${F.map(v => v.toFixed(1)).join(' ')}`);
+  }
+  $('idData').value = lines.join('\n');
+};
+$('idRun').onclick = () => {
+  const { tests, bad } = parseTests($('idData').value, $('idMode').value);
+  if (!tests.length) { $('idOut').textContent = '試験データがありません (1 行に fz ap ae Fx Fy Fz)。'; return; }
+  const key = sim.cfg.material, base = MATERIALS[key];
+  const r = identify(idTool(), tests, sim.mat, idMc());
+  if (!r) { $('idOut').textContent = '解けませんでした (送りや切込みの違う試験を足してください)。'; idLast = null; $('idApply').disabled = true; return; }
+  idLast = { key, r };
+  const f = v => Math.round(v).toLocaleString(), g = v => v.toFixed(1);
+  const unit = k => (k.endsWith('c') ? 'N/mm²' : 'N/mm');
+  $('idOut').innerHTML = `<table class="oxtable"><thead><tr><th></th><th>同定</th><th>表の値</th></tr></thead><tbody>${COEF_KEYS.map(k =>
+    `<tr><td>${k} [${unit(k)}]</td><td>${k.endsWith('c') ? f(r.coefs[k]) : g(r.coefs[k])}${r.edgeFixed && !k.endsWith('c') ? ' (固定)' : ''}</td><td>${k.endsWith('c') ? f(base[k]) : g(base[k])}</td></tr>`).join('')}</tbody></table>
+    <p class="hint">${tests.length} 試験、決定係数 R² ${r.r2.toFixed(4)}、残差 ${r.rms.toFixed(1)} N (RMS)。${r.edgeFixed ? '送りが 1 種類なので、エッジ係数は今の値のままです。' : ''}${bad.length ? `読めなかった行: ${bad.join(', ')}。` : ''}</p>
+    <table class="oxtable" aria-label="試験ごとの測定値と計算値"><caption class="hint" style="text-align:left">測定 / 同定値での計算 [N]</caption><thead><tr><th>fz</th><th>Fx</th><th>Fy</th><th>Fz</th></tr></thead><tbody>${r.rows.map(q =>
+      `<tr><td>${q.test.fz}</td><td>${g(q.test.Fx)} / ${g(q.pred[0])}</td><td>${g(q.test.Fy)} / ${g(q.pred[1])}</td><td>${g(q.test.Fz)} / ${g(q.pred[2])}</td></tr>`).join('')}</tbody></table>`;
+  $('idApply').disabled = false;
+};
+$('idApply').onclick = () => {
+  if (!idLast || idLast.key !== sim.cfg.material) return;
+  const c = idLast.r.coefs, r1 = v => Math.round(v * 10) / 10;
+  sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [idLast.key]: { Ktc: Math.round(c.Ktc), Krc: Math.round(c.Krc), Kac: Math.round(c.Kac), Kte: r1(c.Kte), Kre: r1(c.Kre), Kae: r1(c.Kae), source: '試験から同定' } };
+  host.config(true); updateMatHint(); showJc();
+};
+$('coefReset').onclick = () => {
   if (sim.cfg.coefs) delete sim.cfg.coefs[sim.cfg.material];
   host.config(true); updateMatHint(); showJc();
 };

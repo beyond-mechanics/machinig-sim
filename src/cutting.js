@@ -101,13 +101,15 @@ export class CuttingEngine {
     const nz = ap <= 0 ? 0 : Math.min(this.maxSlices, Math.ceil(ap / this.dz));
     this.nz = nz;
     this.db = this.dz;
+    // the top slice covers only what is left of ap (a whole slice would add up to dz of width)
+    this.sliceB = Float64Array.from({ length: nz }, (_, k) => Math.min(this.dz, ap - k * this.dz));
     this.sliceZ = new Float64Array(nz);
     this.sliceLag = new Float64Array(nz);
     this.sliceR = new Float64Array(nz);
     this.sliceKap = new Float64Array(nz);
     const R = this.R;
     for (let k = 0; k < nz; k++) {
-      const zr = (k + 0.5) * this.dz;
+      const zr = k * this.dz + 0.5 * this.sliceB[k];
       this.sliceZ[k] = tipZ + zr;
       let r = R, kap = 1;
       if (this.tool.rAt) {
@@ -142,7 +144,7 @@ export class CuttingEngine {
 
   // Integrate nSteps. Returns nothing; results accumulate in this.stats / hist / chipEvents.
   run(nSteps) {
-    const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap, dR } = this;
+    const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceB, sliceZ, sliceLag, sliceR, sliceKap, dR } = this;
     const ux = this.ux, uy = this.uy, vx = this.vx_, vy = this.vy_, fz = this.fz;
     const Eb = this.Eb, fza = this.fza, ringR = this.ringR, ringCos = this.ringCos, ringDs = this.ringDs, ringZ = this.ringZ;
     const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kae = mat.Kae;
@@ -193,11 +195,12 @@ export class CuttingEngine {
           // physical cap: beyond this the real tool breaks or jumps out; keeps severe chatter bounded
           if (h > hMax) h = hMax;
           const se = mc ? Math.pow(H_REF / (h > H_MIN ? h : H_MIN), mc) : 1;
-          const Ft = Ktc * se * h * db + Kte * db;
-          let Fr = Krc * se * h * db + Kre * db;
-          const Fa = Kac * se * h * db + Kae * db;
+          const bk = sliceB[k];
+          const Ft = Ktc * se * h * bk + Kte * bk;
+          let Fr = Krc * se * h * bk + Kre * bk;
+          const Fa = Kac * se * h * bk + Kae * bk;
           // flank indentation resists motion along the edge normal (process damping)
-          if (pdK) Fr += pdK / sliceR[k] * (rvx * nxg + rvy * nyg);
+          if (pdK) Fr += pdK * (bk / db) / sliceR[k] * (rvx * nxg + rvy * nyg);
           const txg = cs * ux - sn * vx, tyg = cs * uy - sn * vy;
           Fx += -Ft * txg - Fr * nxg;
           Fy += -Ft * tyg - Fr * nyg;
@@ -206,8 +209,8 @@ export class CuttingEngine {
           const fr = Math.hypot(Ft, Fr);
           Fsum += fr; Fr2z += fr * (sliceZ[k] - this.tipZ);
           engaged = 1; ph = phi; zsum = sliceZ[k];
-          st.sumHb += h * db; st.sumB += db;
-          this.toothVol[i] += h * db * sliceR[k] * dphi;
+          st.sumHb += h * bk; st.sumB += bk;
+          this.toothVol[i] += h * bk * sliceR[k] * dphi;
         }
         if (fza) {
           // end edges sit at the tip (no helix lag); thrust, torque and in-plane tangential force
