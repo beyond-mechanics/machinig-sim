@@ -93,7 +93,7 @@ G80`);
   const { warnings } = parseGcode('G90 X1000 Y20\n#100=5\nG1 X#100\nM98 P100');
   assert.ok(warnings.some(w => /小数点/.test(w)));
   assert.ok(warnings.some(w => /マクロ/.test(w)));
-  assert.ok(warnings.some(w => /M98/.test(w)));
+  assert.ok(warnings.some(w => /O100/.test(w)), 'M98 to a missing subprogram is reported');
   // Shift_JIS comment
   const sjis = new Uint8Array([0x28, 0x83, 0x65, 0x83, 0x58, 0x83, 0x67, 0x29, 0x0a, 0x47, 0x30]); // (テスト)\nG0
   assert.equal(decodeText(sjis), '(テスト)\nG0');
