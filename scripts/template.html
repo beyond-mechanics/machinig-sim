@@ -357,7 +357,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <legend>プログラムの工具</legend>
           <ul class="hint" id="toolList" style="padding-left:18px;margin:0"></ul>
         </fieldset>
-        <p class="hint">対応: G0 G1 G2 G3 (I J K / R、ヘリカル)、G17 G18 G19、G20 G21 G90 G91 G94 G95、固定サイクル G73 G81〜G89 (G98 G99、K/L 繰返し)、G28 G53 (Z の退避のみ)、T□ M6 の工具交換、ワーク座標系 G54〜G59・G54.1 P□・G52、サブプログラム M98 M99、F S M3 M4 M5 M30。工具の寸法はコメントから読み取ります: Fusion 形式 <code>(T1 D=10. CR=0. - flat end mill)</code>、または <code>(TOOL T1 D10 N3 FLAT L25 SO35)</code> (N 刃数、L 刃長、SO 突出し長、BALL でボール)。寸法の無い工具は「加工条件」タブの工具で計算します。工具径補正 G41 G42 G40 は工具の半径 (D 番号ではなく工具の寸法) で経路をずらします (G17 のみ)。サブプログラム (O 番号、M98 P□ L□ / P□□□□□□□、M99) と、カスタムマクロ B の基本 (変数 #1〜、#n = 式、ワードの値に #n や [式]、SIN COS SQRT ABS ROUND FIX FUP など、IF [ ] GOTO / THEN、WHILE [ ] DO … END) に対応。G65 のマクロ呼び出しは未対応です。</p>
+        <p class="hint">対応: G0 G1 G2 G3 (I J K / R、ヘリカル)、G17 G18 G19、G20 G21 G90 G91 G94 G95、固定サイクル G73 G81〜G89 (G98 G99、K/L 繰返し)、G28 G53 (Z の退避のみ)、T□ M6 の工具交換、ワーク座標系 G54〜G59・G54.1 P□・G52、サブプログラム M98 M99、F S M3 M4 M5 M30。工具の寸法はコメントから読み取ります: Fusion 形式 <code>(T1 D=10. CR=0. - flat end mill)</code>、または <code>(TOOL T1 D10 N3 FLAT L25 SO35)</code> (N 刃数、L 刃長、SO 突出し長、BALL でボール)。寸法の無い工具は「加工条件」タブの工具で計算します。工具径補正 G41 G42 G40 は工具の半径 (D 番号ではなく工具の寸法) で経路をずらします (G17 のみ)。サブプログラム (O 番号、M98 P□ L□ / P□□□□□□□、M99) と、カスタムマクロ B の基本 (変数 #1〜、#n = 式、ワードの値に #n や [式]、SIN COS SQRT ABS ROUND FIX FUP など、IF [ ] GOTO / THEN、WHILE [ ] DO … END) に対応。G65 P□ <引数> のマクロ呼び出し (X→#24 など、ローカル変数は呼び出しごとに独立) にも対応。</p>
       </div>
       <div class="tabpane prose" data-pane="about" hidden>
         <h3>何を計算しているか</h3>

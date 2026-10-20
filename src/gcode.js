@@ -55,6 +55,9 @@ export function parseToolComment(text) {
 // G28/G53 Z moves go to (the machine's Z home is unknown, so it is taken as a safe height)
 // opts.wcs: { G54: {x,y,z}, G55: … } zero of each system in one common frame (missing ones
 // coincide with G54)
+// G65 argument addresses → local variables (Fanuc argument specification I)
+const ARG_VAR = { A: 1, B: 2, C: 3, I: 4, J: 5, K: 6, D: 7, E: 8, F: 9, H: 11, M: 13, Q: 17, R: 18, S: 19, T: 20, U: 21, V: 22, W: 23, X: 24, Y: 25, Z: 26 };
+
 export function parseGcode(text, opts = {}) {
   const start = opts.start || { x: 0, y: 0, z: 50 };
   const W = opts.wcs || {};
@@ -120,7 +123,21 @@ export function parseGcode(text, opts = {}) {
         line = substitute(line, vars);
       } catch (err) { warn(ln, `マクロ: ${err.message} (この行は無視)`); continue; }
     }
-    if (/^G\s*65\b/.test(line)) { warn(ln, 'マクロ呼び出し G65 は未対応 (この行は無視)'); continue; }
+    if (/^G\s*0*65(?!\d)/.test(line)) {
+      // G65 P<program> L<times> <arguments>: a subprogram with its own local variables #1–#33,
+      // the arguments set by address (A → #1, B → #2, … Z → #26)
+      const args = {};
+      for (const m of line.slice(line.search(/65/) + 2).matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)) args[m[1]] = parseFloat(m[2]);
+      const at = args.P === undefined ? undefined : labels.get(Math.round(args.P));
+      if (at === undefined) { warn(ln, `G65 のマクロ O${args.P ?? '?'} が見つかりません (この呼び出しは無視)`); continue; }
+      if (calls.length >= 8) { warn(ln, 'マクロ呼び出しの入れ子が深すぎます (8 段まで)'); continue; }
+      const saved = [];
+      for (let n = 1; n <= 33; n++) { saved.push(vars.get(n)); vars.delete(n); }
+      for (const [k, v] of Object.entries(args)) if (ARG_VAR[k]) vars.set(ARG_VAR[k], v);
+      calls.push({ ret: ln, left: Math.max(1, Math.round(args.L ?? 1)) - 1, start: at, locals: saved, args });
+      ln = at;
+      continue;
+    }
     const words = [...line.matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)].map(m => [m[1], parseFloat(m[2]), m[2]]);
     if (!words.length) continue;
     const w = {};
@@ -228,7 +245,14 @@ export function parseGcode(text, opts = {}) {
     } else if (sub === 'return') {
       const c = calls[calls.length - 1];
       if (!c) break; // M99 in the main program: the end (its loop back to the start is not run)
-      if (c.left > 0) { c.left--; ln = c.start; } else { calls.pop(); ln = c.ret; }
+      if (c.left > 0) {
+        c.left--; ln = c.start;
+        if (c.locals) { for (let n = 1; n <= 33; n++) vars.delete(n); for (const [k, v] of Object.entries(c.args)) if (ARG_VAR[k]) vars.set(ARG_VAR[k], v); }
+      } else {
+        calls.pop(); ln = c.ret;
+        // a G65 call gives the caller its local variables back
+        if (c.locals) c.locals.forEach((v, i) => (v === undefined ? vars.delete(i + 1) : vars.set(i + 1, v)));
+      }
     }
   }
   if (noDecimal) warnings.push('小数点のない座標値を mm として扱いました (最小設定単位 0.001 mm の機械では値が1000倍になります)');

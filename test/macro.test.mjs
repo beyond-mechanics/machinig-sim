@@ -39,4 +39,23 @@ assert.ok(bad.warnings.some(w => /マクロ/.test(w)) && bad.moves.length === 1)
 const forever = parseGcode('N1 G91 G0 X0.001\nGOTO 1');
 assert.ok(forever.warnings.some(w => /打ち切り/.test(w)));
 console.log(`macro: ${drills.length} holes from a WHILE loop, IF/GOTO jumps, ${bad.warnings.length} warning for a bad expression`);
+// G65: a hole macro called with its arguments, local variables restored afterwards
+{
+  const g = parseGcode(`G21 G90 G17
+S6000 M3
+#1 = 99
+G65 P9100 X10 Y20 Z-4 L1
+G65 P9100 X30 Y20 Z-6
+G0 X#1
+M30
+O9100 (HOLE: X=#24 Y=#25 DEPTH=#26)
+G0 X#24 Y#25 Z2
+G1 Z#26 F200
+G0 Z2
+M99`);
+  const holes = g.moves.filter(m => m.line === 10);
+  assert.deepEqual(holes.map(m => [m.to.x, m.to.z]), [[10, -4], [30, -6]]);
+  assert.equal(g.moves[g.moves.length - 1].to.x, 99, 'the caller keeps its #1');
+  assert.equal(g.warnings.length, 0, g.warnings.join(' / '));
+}
 console.log('macro tests passed');
