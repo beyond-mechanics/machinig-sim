@@ -8,6 +8,7 @@ import { COOLANTS } from './chips.js';
 import { SAMPLES } from './samples.js';
 import { decodeText } from './gcode.js';
 import { parseMesh, orientMesh } from './workpiece.js';
+import { parseCad, CAD_RE } from './cad.js';
 import { HOLDERS, parseToolLibrary } from './assembly.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
@@ -63,7 +64,7 @@ function loadProgram() {
   // the origin actually used, in the inputs (they stay as typed in manual mode)
   if ($('orgSel').value !== 'manual') for (const k of ['x', 'y', 'z']) $('o' + k.toUpperCase()).value = +sim.origin[k].toFixed(3);
   const sz = sim.stockSize, sp = sim.stockSpec;
-  const shape = sp.type === 'cyl' ? `丸棒 φ${sp.d} × ${sp.h} mm` : sp.type === 'stl' ? `${/\.obj$/i.test(sp.name || '') ? 'OBJ' : 'STL'} ${sp.name || ''} ${sz.w.toFixed(1)} × ${sz.l.toFixed(1)} × ${sz.h.toFixed(1)} mm (${sp.count.toLocaleString()} 三角形${sp.scale && sp.scale !== 1 ? `、×${sp.scale} で mm に換算` : ''})` : `直方体 ${sz.w} × ${sz.l} × ${sz.h} mm`;
+  const shape = sp.type === 'cyl' ? `丸棒 φ${sp.d} × ${sp.h} mm` : sp.type === 'stl' ? `${/\.obj$/i.test(sp.name || '') ? 'OBJ' : CAD_RE.test(sp.name || '') ? 'STEP' : 'STL'} ${sp.name || ''} ${sz.w.toFixed(1)} × ${sz.l.toFixed(1)} × ${sz.h.toFixed(1)} mm (${sp.count.toLocaleString()} 三角形${sp.scale && sp.scale !== 1 ? `、×${sp.scale} で mm に換算` : ''})` : `直方体 ${sz.w} × ${sz.l} × ${sz.h} mm`;
   $('stockInfo').textContent = `${shape} · 格子 ${sim.stockCell} mm`;
   showTools();
   showWcs();
@@ -154,7 +155,16 @@ async function openProgram(file) {
 }
 // imported meshes as read (before units / up axis / rotation), so a change of those re-applies
 let stlRaw = null, targetRaw = null;
-const meshOpts = (rot = true) => ({ unit: $('stlUnit').value, up: $('stlUp').value, rotZ: rot ? +$('stlRot').value : 0 });
+// a mesh file (STL / OBJ) or a CAD model (STEP / IGES, triangulated by OpenCascade on first use)
+async function readMeshFile(file, status) {
+  const buf = await file.arrayBuffer();
+  if (!CAD_RE.test(file.name)) return parseMesh(buf, file.name);
+  status?.(`${file.name} を変換しています… (初回は変換部品 約 8 MB を取得します)`);
+  await new Promise(r => setTimeout(r, 30)); // let the message show before the conversion blocks
+  return parseCad(buf, file.name);
+}
+// CAD files carry their unit (converted to mm), so "auto" means mm for them
+const meshOpts = (rot = true, raw = stlRaw) => ({ unit: $('stlUnit').value === 'auto' && raw?.mesh.unitMm ? 'mm' : $('stlUnit').value, up: $('stlUp').value, rotZ: rot ? +$('stlRot').value : 0 });
 function applyStlOrientation() {
   if (!stlRaw) return;
   const m = orientMesh(stlRaw.mesh, meshOpts());
@@ -162,7 +172,7 @@ function applyStlOrientation() {
 }
 async function openStl(file) {
   try {
-    stlRaw = { mesh: parseMesh(await file.arrayBuffer(), file.name), name: file.name };
+    stlRaw = { mesh: await readMeshFile(file, t => { $('stockInfo').textContent = t; }), name: file.name };
     applyStlOrientation();
     setStockMode('stl');
     loadProgram();
@@ -186,11 +196,11 @@ $('stlOpen').onclick = () => $('stlFile').click();
 // target (finished) shape for the deviation map
 function applyTargetOrientation() {
   if (!targetRaw) return;
-  targetSpec = { ...orientMesh(targetRaw.mesh, meshOpts(false)), name: targetRaw.name };
+  targetSpec = { ...orientMesh(targetRaw.mesh, meshOpts(false, targetRaw)), name: targetRaw.name };
 }
 async function openTarget(file) {
   try {
-    targetRaw = { mesh: parseMesh(await file.arrayBuffer(), file.name), name: file.name };
+    targetRaw = { mesh: await readMeshFile(file, t => { $('tgInfo').textContent = t; }), name: file.name };
     applyTargetOrientation();
     const m = targetSpec;
     $('tgInfo').textContent = `${file.name} · ${m.count.toLocaleString()} 三角形 · X ${m.min[0].toFixed(1)}〜${m.max[0].toFixed(1)} Y ${m.min[1].toFixed(1)}〜${m.max[1].toFixed(1)} Z ${m.min[2].toFixed(1)}〜${m.max[2].toFixed(1)} mm (プログラム座標)`;
@@ -233,7 +243,8 @@ addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $('dropzone').hidden = true;
   const files = [...e.dataTransfer.files];
-  const stl = files.find(f => /\.(stl|obj)$/i.test(f.name)), prog = files.find(f => !/\.(stl|obj)$/i.test(f.name));
+  const isMesh = f => /\.(stl|obj)$/i.test(f.name) || CAD_RE.test(f.name);
+  const stl = files.find(isMesh), prog = files.find(f => !isMesh(f));
   (async () => {
     if (stl) await openStl(stl);
     if (prog) await openProgram(prog);
@@ -381,7 +392,7 @@ function applyAssets(msg) {
   if (assets.stlTool) $('tD').value = +sim.activeTool.D.toFixed(3); else $('tD').value = sim.cfg.tool.D;
   showTools(); syncModalInputs(); updateMatHint();
 }
-async function readStl(file) { const m = parseMesh(await file.arrayBuffer(), file.name); return { ...m, name: file.name }; }
+async function readStl(file) { const m = await readMeshFile(file, t => { $('toolInfo').textContent = t; }); return { ...m, name: file.name }; }
 $('stlToolBtn').onclick = () => $('stlToolFile').click();
 $('stlHolderBtn').onclick = () => $('stlHolderFile').click();
 $('libBtn').onclick = () => $('libFile').click();

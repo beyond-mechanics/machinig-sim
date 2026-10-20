@@ -49,7 +49,7 @@ export function parseObj(buf) {
 export function parseMesh(buf, name = '') {
   return /\.obj$/i.test(name) ? parseObj(buf) : parseStl(buf);
 }
-function meshInfo(tris) {
+export function meshInfo(tris) {
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < tris.length; i += 3) for (let k = 0; k < 3; k++) {
     const x = tris[i + k];

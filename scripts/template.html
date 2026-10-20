@@ -144,7 +144,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
-<div class="dropzone" id="dropzone" hidden>NC プログラムか STL をここに放してください</div>
+<div class="dropzone" id="dropzone" hidden>NC プログラムか STL / OBJ / STEP をここに放してください</div>
 <div class="wrap">
   <header class="bar">
     <div class="brand"><h1>3軸加工シミュレーター</h1><span class="sub">切削力 · びびり振動 · たわみ · 切粉</span></div>
@@ -232,8 +232,8 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="tNeckD">首の径 <span class="unit">mm</span></label><input type="number" id="tNeckD" min="0" max="50" step="0.1" placeholder="なし"></div>
           <div class="row"><label for="tNeckL">首下長さ <span class="unit">mm</span></label><input type="number" id="tNeckL" min="0" max="300" step="1" placeholder="なし"></div>
           <div class="row"><label for="tHolder">ホルダー</label><select id="tHolder"></select></div>
-          <div class="seg"><button id="stlToolBtn" aria-pressed="false">工具 STL</button><button id="stlHolderBtn" aria-pressed="false">ホルダー STL</button><button id="libBtn" aria-pressed="false">工具ライブラリ</button></div>
-          <input type="file" id="stlToolFile" accept=".stl,.obj" hidden><input type="file" id="stlHolderFile" accept=".stl,.obj" hidden><input type="file" id="libFile" accept=".json,application/json" hidden>
+          <div class="seg"><button id="stlToolBtn" aria-pressed="false">工具 STL/STEP</button><button id="stlHolderBtn" aria-pressed="false">ホルダー STL/STEP</button><button id="libBtn" aria-pressed="false">工具ライブラリ</button></div>
+          <input type="file" id="stlToolFile" accept=".stl,.obj,.step,.stp" hidden><input type="file" id="stlHolderFile" accept=".stl,.obj,.step,.stp" hidden><input type="file" id="libFile" accept=".json,application/json" hidden>
           <button id="assetClear" hidden>読み込んだ工具・ホルダーを外す</button>
           <p class="hint" id="toolInfo" style="white-space:pre-line">ホルダーを選ぶと、シャンク・ホルダー・主軸端が素材に当たらないかを調べ、工具とホルダーを段付きのはりとして剛性を計算します。STL は工具の軸を Z、刃先を下にして書き出してください (寸法は mm)。工具ライブラリは Autodesk Fusion の JSON を読み、T 番号ごとの工具とホルダーを使います。</p>
           <p class="hint">プログラムのコメントに工具寸法があれば、その工具番号ではそちらを使います (直径・形状・刃数など、書かれている項目だけ)。</p>
@@ -299,15 +299,15 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
             <div class="row"><label for="cH">高さ Z <span class="unit">mm</span></label><input type="number" id="cH" min="1" max="500" step="1" value="30"></div>
           </div>
           <div style="display:grid;gap:8px" data-for="stl" hidden>
-            <button id="stlOpen" style="width:100%">STL / OBJ ファイルを開く</button>
-            <input type="file" id="stlFile" accept=".stl,.obj,model/stl,model/obj,application/sla" hidden>
+            <button id="stlOpen" style="width:100%">STL / OBJ / STEP ファイルを開く</button>
+            <input type="file" id="stlFile" accept=".stl,.obj,.step,.stp,.iges,.igs,model/stl,model/obj,model/step,application/sla" hidden>
             <div class="row"><label for="stlUnit">単位</label><select id="stlUnit"><option value="auto">自動</option><option value="mm">mm</option><option value="inch">inch</option><option value="m">m</option></select></div>
             <div class="row"><label for="stlUp">上方向の軸</label><select id="stlUp"><option value="Z">Z (CAM の標準)</option><option value="Y">Y (多くの CAD の書き出し)</option><option value="-Y">−Y</option><option value="X">X</option></select></div>
             <div class="row"><label for="stlRot">Z 軸まわりの回転</label><select id="stlRot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></div>
           </div>
           <p class="hint" id="stockInfo">「プログラム」はコメント <code>(STOCK 幅 奥行 高さ)</code> か <code>(STOCK CYL 直径 高さ)</code> を使い、無ければ切削送りの範囲から直方体を仮定します。</p>
           <div class="row"><label for="orgSel">プログラム原点</label><select id="orgSel">
-            <option value="auto">自動</option><option value="corner">上面の左手前の角</option><option value="center">上面の中心</option><option value="center-bottom">下面の中心</option><option value="model">STL の座標そのまま</option><option value="manual">数値で指定</option>
+            <option value="auto">自動</option><option value="corner">上面の左手前の角</option><option value="center">上面の中心</option><option value="center-bottom">下面の中心</option><option value="model">モデルの座標そのまま</option><option value="manual">数値で指定</option>
           </select></div>
           <div class="row"><label for="oX">原点の位置 X <span class="unit">mm</span></label><input type="number" id="oX" step="0.1" value="0"></div>
           <div class="row"><label for="oY">原点の位置 Y <span class="unit">mm</span></label><input type="number" id="oY" step="0.1" value="0"></div>
@@ -321,10 +321,10 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         </fieldset>
         <fieldset>
           <legend>目標形状 (仕上がり)</legend>
-          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="tgOpen" aria-pressed="false">目標 STL / OBJ を開く</button><button id="tgClear" aria-pressed="false" disabled>外す</button></div>
-          <input type="file" id="tgFile" accept=".stl,.obj,model/stl,model/obj,application/sla" hidden>
+          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="tgOpen" aria-pressed="false">目標 STL / STEP を開く</button><button id="tgClear" aria-pressed="false" disabled>外す</button></div>
+          <input type="file" id="tgFile" accept=".stl,.obj,.step,.stp,.iges,.igs,model/stl,model/obj,model/step,application/sla" hidden>
           <div class="row"><label for="tol">公差 ± <span class="unit">mm</span></label><input type="number" id="tol" min="0.001" max="5" step="0.005" value="0.05"></div>
-          <p class="hint" id="tgInfo">CAM で使った仕上がり形状の STL を読み込むと、加工結果と比べて削り残し (青) と削り過ぎ (赤) を色で示します。STL はプログラムと同じ座標 (CAM のモデル座標) で置きます。単位と上方向の軸は素材の STL と同じ設定を使います (Z 軸まわりの回転はしません)。上から見えるのは上面だけなので、張り出しの下は比べません。</p>
+          <p class="hint" id="tgInfo">CAM で使った仕上がり形状 (STL / STEP) を読み込むと、加工結果と比べて削り残し (青) と削り過ぎ (赤) を色で示します。STL はプログラムと同じ座標 (CAM のモデル座標) で置きます。単位と上方向の軸は素材の STL と同じ設定を使います (Z 軸まわりの回転はしません)。上から見えるのは上面だけなので、張り出しの下は比べません。</p>
         </fieldset>
         <button class="primary" id="btnLoad">この設定で再シミュレーション</button>
         <ul class="warnings" id="warnings"></ul>
@@ -346,7 +346,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li><b>安定限界線図</b>: 同じ動特性から Altintas–Budak のゼロ次解で解析的に求めます。時間領域シミュレーションの結果と照らし合わせられます。</li>
           <li><b>たわみと応力</b>: 工具を片持ちはり(刃部の等価直径 0.8D、超硬 E=600 GPa)と主軸側ばねの直列で扱い、根元の曲げとねじりから相当応力を出します。</li>
           <li><b>ワーク(薄肉壁)の変形</b>: 工具が押している壁の厚さ・自由高さ・長さを高さマップから読み取り、根元固定の片持ち板(有効幅は荷重高さの約2倍)として剛性と質量を出します。壁は壁の法線方向の1自由度振動系として工具と連成し、切りくず厚さは工具と壁の相対変位で決まります。壁が逃げた分だけ削り残しが生じます。</li>
-          <li><b>素材とプログラムの取り込み</b>: 素材は直方体・丸棒・STL から選べます。STL は真上から見た一番上の面を高さマップにします (上から見える穴やポケットは残り、オーバーハングの下は埋まります)。プログラム原点は、切削送りが素材に一番よく収まる位置を自動で選ぶか、素材上面の角から測った位置で指定します。T□ M6 で工具が替わり、寸法はプログラムのコメントから読みます。</li>
+          <li><b>素材とプログラムの取り込み</b>: 素材は直方体・丸棒・STL / OBJ / STEP / IGES から選べます。STEP・IGES はブラウザの中で OpenCascade (初回に約 8 MB を取得) が三角形に分けます (面の誤差 0.02 mm、単位は mm に換算)。STL は真上から見た一番上の面を高さマップにします (上から見える穴やポケットは残り、オーバーハングの下は埋まります)。プログラム原点は、切削送りが素材に一番よく収まる位置を自動で選ぶか、素材上面の角から測った位置で指定します。T□ M6 で工具が替わり、寸法はプログラムのコメントから読みます。</li>
           <li><b>工具とホルダー</b>: シャンク径・首・ホルダー(焼きばめ・コレット・ミーリングチャック・サイドロック)を指定するか、工具 STL・ホルダー STL・Fusion 360 の工具ライブラリ(JSON)を読み込めます。剛性は段付きの片持ちはりとして積分し、工具 STL の先端形状(ドリルの円すい・ボールなど)はそのまま削った形に出ます。シャンクやホルダーが素材に食い込むと、部位と食い込み量を警告し、場所を赤い点で示します。</li>
           <li><b>切粉の排出</b>: 刃が材料から抜けるたびに、その刃が削った体積の切粉を出します。速さは切削速度、向きは切削方向にすくい面を上がる流れ (流出角 ≈ ねじれ角、Stabler の法則) を加えたもので、上向きの成分は 切削速度 × sin(ねじれ角) / 圧縮比 です。切粉 1 個の質量と投影面積は実際の切りくず厚さ (平均切取り厚さ × 被削材ごとの圧縮比) から求め、空気・クーラント中の抗力 ½ρC<sub>d</sub>A|u−v|(u−v)、浮力、付加質量、重力で動かします (アルミの切粉の終端速度は空気中で約 3 m/s、水溶性クーラント中で約 0.08 m/s)。</li>
           <li><b>クーラントの流れ</b>: エアブローは乱流噴流 (中心速度がノズル径/距離に比例して落ち、幅が距離の約 1 割で広がる)、クーラントは崩れない液柱、スルーは工具先端から真下へ出る噴流とし、床に当たると放射状の壁面噴流になります。壁面噴流は高さマップの壁で止まって壁をはい上がり、縁を越えて外へ流れます。ノズルが低いとポケットの縁に当たって底まで届きません。クーラントは素材上に浅水流の層をつくり、ポケットにたまり、縁からあふれて端から流れ落ちます (薄い青の面)。工具の回転が周りの流体を引きずる旋回流と、乱れによる不規則な速度も入れています。</li>
