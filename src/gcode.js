@@ -2,12 +2,14 @@
 // Supported: G0 G1 G2 G3 (I/J/K or R, helical) in G17/G18/G19, G20 G21 G90 G91 G94 G95,
 // canned cycles G73 G81-G89 with G98/G99 and K/L repeats, G28/G53 (to the home height),
 // tool changes (T.. M6) with tool definitions read from comments, F S M3 M4 M5 M30, subprograms
-// (O-number labels, M98 P… L… / P<times><number>, M99 return).
+// (O-number labels, M98 P… L… / P<times><number>, M99 return), custom macro B variables, IF/GOTO
+// and WHILE/DO/END (macro.js).
 // Work coordinate systems G54-G59 and G54.1 P1-P48: each move records its system (mv.wcs);
 // opts.wcs gives every system's zero in a common frame, so a change of system re-expresses the
 // current position (incremental moves stay right). G52 shifts the local zero of the system.
 // Cutter compensation G41/G42/G40 is recorded on each move (mv.comp, mv.compD) and applied by
 // cuttercomp.js once the tool radii are known. Macros and subprograms are ignored with a warning.
+import { macroStatement, substitute } from './macro.js';
 
 const IGNORED_G = new Set([43, 44, 49, 54, 55, 56, 57, 58, 59, 61, 64, 80, 94, 15, 69, 50, 13, 12]);
 const CYCLES = new Set([73, 74, 76, 81, 82, 83, 84, 85, 86, 87, 88, 89]);
@@ -77,6 +79,11 @@ export function parseGcode(text, opts = {}) {
   const labels = new Map();
   lines.forEach((l, i) => { const m = l.replace(/\([^)]*\)/g, '').trim().toUpperCase().match(/^[O:]\s*0*(\d+)/); if (m && !labels.has(+m[1])) labels.set(+m[1], i); });
   const calls = [];
+  // custom macro: variables, N-number jump targets, WHILE loops by DO number
+  const clean = l => { let c = l.replace(/\([^)]*\)/g, '').replace(/;.*$/, '').toUpperCase().trim(); if (c.startsWith('/')) c = c.slice(1).trim(); return c; };
+  const vars = new Map(Object.entries(opts.vars || {}).map(([k, v]) => [+k, v]));
+  const nLabels = new Map(), loops = new Map();
+  lines.forEach((l, i) => { const m = clean(l).match(/^N\s*(\d+)/); if (m && !nLabels.has(+m[1])) nLabels.set(+m[1], i); });
   let executed = 0;
   for (let ln = 0; ln < lines.length; ln++) {
     if (++executed > 2e6) { warn(ln, 'サブプログラムの呼び出しが多すぎるため打ち切り'); break; }
@@ -91,7 +98,29 @@ export function parseGcode(text, opts = {}) {
     let line = raw.replace(/\([^)]*\)/g, '').replace(/;.*$/, '').toUpperCase().trim();
     if (line.startsWith('/')) line = line.slice(1); // block delete switch assumed off
     if (!line || line.startsWith('%')) continue;
-    if (/[#[\]]/.test(line) || /\b(IF|GOTO|WHILE)\b/.test(line)) { warn(ln, 'マクロ(変数・式)は未対応 (この行は無視)'); continue; }
+    if (/[#[\]]/.test(line) || /^(N\s*\d+\s*)?(IF\s*\[|GOTO|WHILE\s*\[|END\s*\d)/.test(line)) {
+      // custom macro: statements change the variables or the flow; other blocks get their values
+      try {
+        const r = macroStatement(line, vars);
+        if (r) {
+          if (r.goto !== undefined) {
+            const at = nLabels.get(r.goto);
+            if (at === undefined) { warn(ln, `GOTO ${r.goto} の飛び先 N${r.goto} がありません (ここで終了)`); break; }
+            ln = at - 1;
+          } else if (r.whileFalse !== undefined) {
+            // past the matching END
+            const m = r.whileFalse, open = new RegExp(`^(N\\s*\\d+\\s*)?WHILE\\b.*\\bDO\\s*${m}$`), close = new RegExp(`^(N\\s*\\d+\\s*)?END\\s*${m}$`);
+            let d = 0, j = ln + 1;
+            for (; j < lines.length; j++) { const L = clean(lines[j]); if (open.test(L)) d++; else if (close.test(L)) { if (!d) break; d--; } }
+            ln = j;
+          } else if (r.loopStart !== undefined) loops.set(r.loopStart, ln);
+          else if (r.loopEnd !== undefined) { const at = loops.get(r.loopEnd); if (at !== undefined) ln = at - 1; }
+          continue;
+        }
+        line = substitute(line, vars);
+      } catch (err) { warn(ln, `マクロ: ${err.message} (この行は無視)`); continue; }
+    }
+    if (/^G\s*65\b/.test(line)) { warn(ln, 'マクロ呼び出し G65 は未対応 (この行は無視)'); continue; }
     const words = [...line.matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)].map(m => [m[1], parseFloat(m[2]), m[2]]);
     if (!words.length) continue;
     const w = {};
