@@ -167,6 +167,8 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="tN">刃数</label><input type="number" id="tN" min="1" max="8" step="1" value="3"></div>
           <div class="row"><label for="tHelix">ねじれ角 <span class="unit">°</span></label><input type="number" id="tHelix" min="0" max="60" step="1" value="30"></div>
           <div class="row"><label for="tFlute">刃長 <span class="unit">mm</span></label><input type="number" id="tFlute" min="2" max="80" step="1" value="25"></div>
+          <div class="row"><label for="tRake">すくい角 <span class="unit">°</span></label><input type="number" id="tRake" min="-10" max="25" step="1" value="10"></div>
+          <div class="row"><label for="tVB0">初期摩耗 VB <span class="unit">mm</span></label><input type="number" id="tVB0" min="0" max="0.5" step="0.05" value="0"></div>
           <div class="row"><label for="tStick">突出し長 <span class="unit">mm</span></label><input type="number" id="tStick" min="5" max="150" step="1" value="30"></div>
         </fieldset>
         <fieldset>
@@ -226,7 +228,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li>振動の積分には 1 刃あたり数十〜数百ステップが要ります。等倍以下なら加工時間をすべて積分しますが、早送り再生では1フレームあたりの計算量に上限を設け、区間の一部だけを積分して全体を代表させています。びびりの成長速度は実時間より遅く見えることがあります。</li>
           <li>切削係数と動特性は代表値です。実機の値はハンマリング試験(FRF)と切削力測定で同定して入力してください。</li>
           <li>薄肉壁は荷重高さの壁厚だけで剛性を見積もる簡易モデルで、テーパ状の壁や床(薄い底面)のたわみは扱いません。壁の固有振動数は時間刻みの都合で 5 kHz を上限にしています。</li>
-          <li>底刃の切削力(プランジ)、工具摩耗、熱は未対応です。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
+          <li>切削温度は二次元切削のエネルギー収支(Merchant のせん断角、Boothroyd の熱配分、Jaeger の移動熱源)による平均値で、FEM による温度場ではありません。断面図の温度分布は各熱源の温度を使った模式図です。工具摩耗は Usui 式を被削材ごとの代表寿命で校正しています。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
         <h3>見どころ</h3>
@@ -244,6 +246,8 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="tile"><span class="k">ワークたわみ</span><span class="v" id="vW">0.0<small>µm</small></span><span class="s" id="sW">剛体として扱い中</span></div>
     <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s">許容目安 1500 MPa</span></div>
     <div class="tile"><span class="k">除去率</span><span class="v" id="vM">0.0<small>cm³/min</small></span><span class="s" id="sM">ap 0.00 mm · fz 0.000 mm</span></div>
+    <div class="tile" id="tileHeat"><span class="k">刃先温度</span><span class="v" id="vH">20<small>°C</small></span><span class="s" id="sH">切りくず 20 °C</span></div>
+    <div class="tile"><span class="k">逃げ面摩耗 VB</span><span class="v" id="vWr">0<small>µm</small></span><div class="meter"><i id="mWr"></i></div><span class="s" id="sWr">寿命 VB 300 µm</span></div>
     <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">素材上に残留 0 · 再切削 0 回</span></div>
   </section>
 
@@ -252,6 +256,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="chart"><h2>工具先端の軌跡 <span>● 1刃ごとの位置</span></h2><canvas id="cvOrbit"></canvas></div>
     <div class="chart"><h2>振動スペクトル <span id="hSpec"></span></h2><canvas id="cvSpec"></canvas></div>
     <div class="chart"><h2>安定限界線図 <span id="hLobe">クリックで主軸回転を変更</span></h2><canvas id="cvLobes"></canvas></div>
+    <div class="chart wide"><h2>切削断面と温度分布 <span id="hSec"></span></h2><canvas id="cvSec" aria-label="二次元切削断面: 工具・せん断面・切りくずと温度分布。カーソルを当てるとその位置の温度を表示"></canvas></div>
     <div class="chart wide"><h2>側面の仕上げ面 <span id="hRough"></span></h2><canvas id="cvRough"></canvas></div>
   </section>
 </div>

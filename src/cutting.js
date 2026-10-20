@@ -75,6 +75,9 @@ export class CuttingEngine {
     this.stepCount = 0;
   }
 
+  // flank wear VB [mm]: edge coefficients including the wear land
+  setWear(edge) { this.Kte = edge.Kte; this.Kre = edge.Kre; }
+
   // wall: {k [N/mm], m [kg], zeta, nx, ny} or null for a rigid workpiece
   setWork(wall) {
     if (!wall) { this.runMeanW = 0; this.wk = 0; this.wm = 1; this.wc = 0; this.w = 0; this.wv = 0; this.wnx = 1; this.wny = 0; return; }
@@ -130,7 +133,9 @@ export class CuttingEngine {
     const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap } = this;
     const ux = this.ux, uy = this.uy, vx = this.vx_, vy = this.vy_, fz = this.fz;
     const Eb = this.Eb, fza = this.fza, ringR = this.ringR, ringCos = this.ringCos, ringDs = this.ringDs, ringZ = this.ringZ;
-    const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kte = mat.Kte, Kre = mat.Kre, Kae = mat.Kae;
+    const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kae = mat.Kae;
+    // edge coefficients grow with the flank wear land (setWear)
+    const Kte = this.Kte ?? mat.Kte, Kre = this.Kre ?? mat.Kre;
     const nl = this.tool.nonlinear !== false;
     const mc = nl ? (mat.mc ?? 0) : 0;
     // process damping per slice [N·s/m] = Ci·b / V_c, V_c = ω·r
@@ -187,6 +192,7 @@ export class CuttingEngine {
           const fr = Math.hypot(Ft, Fr);
           Fsum += fr; Fr2z += fr * (sliceZ[k] - this.tipZ);
           engaged = 1; ph = phi; zsum = sliceZ[k];
+          st.sumHb += h * db; st.sumB += db;
           this.toothVol[i] += h * db * sliceR[k] * dphi;
         }
         if (fza) {
@@ -208,6 +214,7 @@ export class CuttingEngine {
             T += Ft * ringR[j];
             Fsum += Ft; Fr2z += Ft * ringZ[j];
             engaged = 1; ph = phi; zsum = this.tipZ + ringZ[j];
+            st.sumHb += h * ds; st.sumB += ds;
             this.toothVol[i] += h * ds * ringR[j] * dphi;
           }
         }
@@ -217,6 +224,7 @@ export class CuttingEngine {
           this.toothVol[i] = 0;
         }
         this.toothEngaged[i] = engaged;
+        st.engTeeth += engaged;
       }
       // modal integration (semi-implicit Euler), SI
       x = 0; y = 0; vxs = 0; vys = 0;
@@ -291,5 +299,5 @@ export class CuttingEngine {
 
 function newStats() {
   return { n: 0, sumF: 0, maxF: 0, sumFx: 0, sumFy: 0, sumFz: 0, maxFz: 0, sumT: 0, maxT: 0, sumX: 0, sumY: 0,
-    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0 };
+    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0, sumHb: 0, sumB: 0, engTeeth: 0 };
 }

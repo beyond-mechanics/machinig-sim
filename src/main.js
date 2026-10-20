@@ -7,7 +7,8 @@ import { MATERIALS } from './materials.js';
 import { SAMPLES } from './samples.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
-import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness } from './charts.js';
+import { VB_LIMIT, T0 } from './thermal.js';
+import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
 const $ = id => document.getElementById(id);
 const sim = new Simulator();
@@ -85,6 +86,9 @@ for (const [id, key] of Object.entries(toolInputs)) $(id).onchange = e => {
   if (sim.cfg.tool.stickout < sim.cfg.tool.fluteLen) { sim.cfg.tool.stickout = sim.cfg.tool.fluteLen + 2; $('tStick').value = sim.cfg.tool.stickout; }
   toolChanged();
 };
+$('tRake').onchange = e => { const v = +e.target.value; if (!(v >= -10 && v <= 25)) return; sim.cfg.tool.rakeDeg = v; host.config(); };
+// initial wear applies from the start of the program
+$('tVB0').onchange = e => { const v = +e.target.value; if (!(v >= 0 && v <= 0.5)) return; sim.cfg.tool.VB0 = v; host.config(); restart(); };
 function toolChanged() { host.config(true); view.setTool(sim.cfg.tool); syncModalInputs(); updateMatHint(); }
 $('mAuto').onchange = e => { sim.cfg.modal.auto = e.target.checked; if (e.target.checked) clearFrf(); host.config(true); syncModalInputs(); };
 $('mK').onchange = e => { sim.cfg.modal.k = +e.target.value * 1000; manualModal(); };
@@ -203,6 +207,14 @@ function updateTiles() {
   $('mS').style.width = `${Math.min(100, sr * 100)}%`;
   $('mS').style.background = sr > 1 ? 'var(--bad)' : sr > 0.6 ? 'var(--warn)' : 'var(--ok)';
   setV('vM', d.mrr.toFixed(1), 'cm³/min'); $('sM').textContent = `ap ${d.ap.toFixed(2)} mm · fz ${d.fz.toFixed(3)} mm`;
+  setV('vH', d.tempTool.toFixed(0), '°C');
+  $('sH').textContent = d.cutting ? `切りくず ${d.tempChip.toFixed(0)} °C · 平均 h ${(d.hMean * 1000).toFixed(0)} µm` : `切りくず ${d.tempChip.toFixed(0)} °C`;
+  $('tileHeat').dataset.s = d.tempTool > 900 ? 'chatter' : d.tempTool > 700 ? 'marginal' : 'stable';
+  setV('vWr', (d.VB * 1000).toFixed(1), 'µm');
+  const wr = d.VB / VB_LIMIT;
+  $('mWr').style.width = `${Math.min(100, wr * 100)}%`;
+  $('mWr').style.background = wr > 1 ? 'var(--bad)' : wr > 0.6 ? 'var(--warn)' : 'var(--ok)';
+  $('sWr').textContent = d.lifeMin < Infinity ? `この条件の残り寿命 ${d.lifeMin > 600 ? '10 h 超' : d.lifeMin.toFixed(1) + ' 分'}` : `寿命 VB ${VB_LIMIT * 1000} µm`;
   const cs = sim.chips.stats;
   const evacPct = cs.producedVol > 0 ? Math.min(100, (cs.producedVol - cs.restVol) / cs.producedVol * 100) : 0;
   setV('vC', evacPct.toFixed(0), '% 排出'); $('sC').textContent = `素材上に残留 ${cs.restVol.toFixed(0)} mm³ · 再切削 ${cs.recut} 回`;
@@ -212,7 +224,14 @@ function updateTiles() {
 }
 function setV(id, v, unit) { const el = $(id); el.firstChild.nodeValue = v; el.lastChild.textContent = unit; }
 
-let lastRough = null;
+let lastRough = null, lastSec = null, secHover = false;
+const ZONE = { tool: '工具', chip: '切りくず', work: '被削材' };
+$('cvSec').addEventListener('pointermove', ev => {
+  const r = ev.currentTarget.getBoundingClientRect(), p = sectionProbe(ev.clientX - r.left, ev.clientY - r.top);
+  secHover = !!p;
+  if (p) $('hSec').textContent = `${ZONE[p.zone]} ${p.T.toFixed(0)} °C`;
+});
+$('cvSec').addEventListener('pointerleave', () => { secHover = false; });
 function updateCharts() {
   const e = sim.engine, d = sim.display;
   drawForces($('cvForce'), e);
@@ -238,6 +257,11 @@ function updateCharts() {
   if (prof) lastRough = prof; else prof = sim.mtime > 0 ? lastRough : (lastRough = null);
   drawRoughness($('cvRough'), prof);
   $('hRough').textContent = prof ? `${fresh ? '' : '直前の側面 · '}Rz ${prof.Rz.toFixed(2)} µm · Ra ${prof.Ra.toFixed(2)} µm (理論 ${prof.Rth.toFixed(2)})` : '';
+  // orthogonal cutting section at the mean chip
+  const sec = d.cutting && d.hMean > 0 ? { h: d.hMean, hc: d.hMean * Math.cos((d.shearDeg - (sim.cfg.tool.rakeDeg ?? 10)) * Math.PI / 180) / Math.sin(d.shearDeg * Math.PI / 180), phiDeg: d.shearDeg, rakeDeg: sim.cfg.tool.rakeDeg ?? 10, Tsh: d.tempShear, Ttool: d.tempTool, T0, VB: d.VB } : lastSec;
+  if (sec) lastSec = sec;
+  drawSection($('cvSec'), sim.mtime > 0 ? sec : (lastSec = null));
+  if (!secHover) $('hSec').textContent = sec ? `刃先 ${sec.Ttool.toFixed(0)} °C · せん断域 ${sec.Tsh.toFixed(0)} °C` : '';
   const immDeg = ((d.phiEx - d.phiSt) * 180 / Math.PI).toFixed(0);
   $('hLobe').textContent = `接触角 ${immDeg}° · 限界 ${lim === Infinity ? '—' : lim.toFixed(2) + ' mm'}`;
 }

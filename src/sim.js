@@ -11,13 +11,14 @@ import { stabilityLobes, alimAt } from './sld.js';
 import { MATERIALS } from './materials.js';
 import { wallAt, FN_CAP } from './wall.js';
 import { modeSet, staticK } from './frf.js';
+import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT, T0 } from './thermal.js';
 
 export class Simulator {
   constructor() {
     this.engine = new CuttingEngine();
     this.chips = new ChipSystem();
     this.cfg = {
-      tool: { D: 10, N: 3, helixDeg: 30, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000 },
+      tool: { D: 10, N: 3, helixDeg: 30, rakeDeg: 10, type: 'flat', fluteLen: 25, stickout: 30, kSpindle: 50000, VB0: 0 },
       modal: { auto: true, k: 0, fn: 0, zeta: 0.04 },
       material: 'A5052', coolant: 'air', workpieceFlex: true, cuttingNonlinear: true,
       feedOverride: 1, spindleOverride: 1,
@@ -52,6 +53,8 @@ export class Simulator {
     this.display = blankDisplay();
     this.ema = null;
     this.lastS = -1;
+    this.VB = this.cfg.tool.VB0 || 0; // flank wear [mm], carried through the whole program
+    this.temp = { tool: T0, chip: T0 };
     this.reconfigure();
   }
 
@@ -185,6 +188,7 @@ export class Simulator {
       this.F = b.F * this.cfg.feedOverride;
       this.ensureEngine(S);
       const e = this.engine;
+      e.setWear(wornEdge(this.mat, this.VB));
       // engagement & dynamics
       // vertical moves: only the end (bottom) edges cut
       const vertical = dxy < 1e-6;
@@ -251,7 +255,8 @@ export class Simulator {
     if (ev.length <= from) return;
     const tool = this.cfg.tool, R = tool.R;
     const Vc = e.omega * R; // mm/s
-    const heat = this.mat.hot ? Math.min(1, Vc / 1000 / 3) : 0.15;
+    // glow from the computed chip temperature (dull red from ~450 °C)
+    const heat = Math.min(1, Math.max(0.05, (this.temp.chip - 250) / 600));
     for (let k = from; k < ev.length; k++) {
       const c = ev[k];
       const sn = Math.sin(c.phi), cs = Math.cos(c.phi);
@@ -296,16 +301,33 @@ export class Simulator {
     const ci = cutting ? e.chatterIndex() : { index: 0, amp: 0 };
     d.chatterIdx += ((cutting ? ci.index : 0) - d.chatterIdx) * 0.2;
     d.once += ((cutting ? ci.once || 0 : 0) - d.once) * 0.2;
+    // cutting temperature of the mean chip and flank wear over the time the teeth were in contact
+    const contact = cutting ? st.engTeeth / (st.n * e.N) : 0;
+    let wearRateNow = 0;
+    if (cutting && st.sumB > 0) {
+      const Vc = (e.omega || 0) * this.cfg.tool.R * 1e-3; // m/s
+      const T = cuttingTemperature(this.mat, st.sumHb / st.sumB, Vc, this.cfg.tool.rakeDeg ?? 10);
+      this.temp = { tool: this.temp.tool + (T.tool - this.temp.tool) * 0.3, chip: this.temp.chip + (T.chip - this.temp.chip) * 0.3, shear: T.shear, phi: T.phi, hc: T.hc, h: st.sumHb / st.sumB };
+      wearRateNow = wearRate(this.mat, Vc, T.tool) * contact; // mm per second of machining
+      this.VB += wearRateNow * fs.cutTime;
+    } else {
+      // the edge cools between cuts (display only; wear is not accumulated)
+      this.temp.tool += (T0 - this.temp.tool) * 0.1; this.temp.chip += (T0 - this.temp.chip) * 0.1;
+    }
+    d.lifeMin = wearRateNow > 0 ? Math.max(0, VB_LIMIT - this.VB) / wearRateNow / 60 : Infinity;
     const stress = toolStress(this.cfg.tool, this.tm.I, this.tm.De, m.Fmax, m.zc, m.Tmax);
     Object.assign(d, {
       cutting, F: m.F, Fmax: m.Fmax, Fz: m.Fz, torque: m.T / 1000, // N·m
       power: m.T * (e.omega || 0) / 1e6, // kW
       defl: m.defl, vib: m.vib, stress: stress.vm, mrr: m.mrr,
       wallDefl: m.wall, wallMax: m.wallMax, wall: this.wall && cutting ? this.wall : null,
-      ap: this.ap || 0, S: this.S || 0, F_: this.F || 0, fz: this.fz || 0,
+      ap: this.ap || 0, S: this.S || 0, F_: this.F || 0, fz: this.fz || 0, fza: this.plunging ? this.fza : 0,
+      tempTool: this.temp.tool, tempChip: this.temp.chip, tempShear: this.temp.shear ?? T0, hMean: this.temp.h || 0, shearDeg: (this.temp.phi || 0) * 180 / Math.PI, VB: this.VB, contact,
       // chatter = vibration that is not synchronous with tooth passing (once-per-tooth scatter)
       state: !cutting ? 'idle' : (d.chatterIdx > 0.55 && d.once > 3) ? 'chatter' : (d.chatterIdx > 0.35 && d.once > 1.5) ? 'marginal' : 'stable',
     });
+    if (this.VB > VB_LIMIT) this.alert('wear', `逃げ面摩耗 VB ${this.VB.toFixed(2)} mm: 工具寿命 (VB ${VB_LIMIT} mm) を超過`);
+    if (cutting && this.temp.tool > 900) this.alert('heat', `刃先温度 ${this.temp.tool.toFixed(0)} °C: 拡散摩耗・刃先の塑性変形が急増する領域`);
     if (stress.vm > 1500) this.alert('stress', '工具応力が許容値(目安1500 MPa)を超過: 折損リスク');
   }
 
@@ -313,5 +335,5 @@ export class Simulator {
 }
 
 function blankDisplay() {
-  return { cutting: false, F: 0, Fmax: 0, Fz: 0, torque: 0, power: 0, defl: 0, vib: 0, stress: 0, mrr: 0, ap: 0, S: 0, F_: 0, fz: 0, chatterIdx: 0, once: 0, wallDefl: 0, wallMax: 0, wall: null, state: 'idle', phiSt: 0, phiEx: Math.PI };
+  return { cutting: false, F: 0, Fmax: 0, Fz: 0, torque: 0, power: 0, defl: 0, vib: 0, stress: 0, mrr: 0, ap: 0, S: 0, F_: 0, fz: 0, chatterIdx: 0, once: 0, tempTool: T0, tempChip: T0, tempShear: T0, hMean: 0, shearDeg: 0, VB: 0, contact: 0, lifeMin: Infinity, fza: 0, wallDefl: 0, wallMax: 0, wall: null, state: 'idle', phiSt: 0, phiEx: Math.PI };
 }
