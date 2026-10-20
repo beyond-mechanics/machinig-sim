@@ -2,9 +2,10 @@
 // Supported: G0 G1 G2 G3 (I/J/K or R, helical) in G17/G18/G19, G20 G21 G90 G91 G94 G95,
 // canned cycles G73 G81-G89 with G98/G99 and K/L repeats, G28/G53 (to the home height),
 // tool changes (T.. M6) with tool definitions read from comments, F S M3 M4 M5 M30.
-// Cutter compensation, macros and subprograms are ignored with a warning.
+// Cutter compensation G41/G42/G40 is recorded on each move (mv.comp, mv.compD) and applied by
+// cuttercomp.js once the tool radii are known. Macros and subprograms are ignored with a warning.
 
-const IGNORED_G = new Set([40, 43, 44, 49, 54, 55, 56, 57, 58, 59, 61, 64, 80, 94, 15, 69, 50, 13, 12]);
+const IGNORED_G = new Set([43, 44, 49, 54, 55, 56, 57, 58, 59, 61, 64, 80, 94, 15, 69, 50, 13, 12]);
 const CYCLES = new Set([73, 74, 76, 81, 82, 83, 84, 85, 86, 87, 88, 89]);
 // plane → [first axis, second axis, normal]; each triple is right-handed, so G2 is clockwise
 // when looking from the positive normal, and the arc-centre words follow the axes
@@ -49,7 +50,7 @@ export function parseToolComment(text) {
 export function parseGcode(text, opts = {}) {
   const start = opts.start || { x: 0, y: 0, z: 50 };
   const homeZ = opts.homeZ ?? start.z;
-  const st = { x: start.x, y: start.y, z: start.z, abs: true, unit: 1, motion: 0, plane: 17, perRev: false, F: 1000, S: 10000, spindle: false, T: null, pendingT: null, cycle: null, retractR: false };
+  const st = { x: start.x, y: start.y, z: start.z, abs: true, unit: 1, motion: 0, plane: 17, perRev: false, F: 1000, S: 10000, spindle: false, T: null, pendingT: null, cycle: null, retractR: false, comp: null, compD: null };
   const moves = [];
   const warnings = [];
   const meta = { tools: {}, workOffsets: new Set(), toolOrder: [] };
@@ -59,7 +60,7 @@ export function parseGcode(text, opts = {}) {
   const push = (ln, to, rapid, extra) => {
     const from = { x: st.x, y: st.y, z: st.z };
     if (to.x === from.x && to.y === from.y && to.z === from.z && !extra?.arc) return;
-    const mv = { rapid, from, to: { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, ...extra };
+    const mv = { rapid, from, to: { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, ...extra };
     if (!st.spindle && !rapid) warn(ln, '主軸停止中の切削送り');
     moves.push(mv);
     st.x = to.x; st.y = to.y; st.z = to.z;
@@ -102,7 +103,8 @@ export function parseGcode(text, opts = {}) {
         }
         else if (v >= 54 && v <= 59) meta.workOffsets.add(`G${v}`);
         else if (Math.floor(v) === 54) meta.workOffsets.add(`G${v}`);
-        else if (v === 41 || v === 42) warn(ln, `工具径補正 G${v} は未対応 (工具中心の経路として扱います)`);
+        else if (v === 41 || v === 42) { if (st.plane !== 17) warn(ln, `工具径補正 G${v} は G17 平面のみ対応`); else st.comp = v; }
+        else if (v === 40) st.comp = null;
         else if (v === 68 || v === 51 || v === 16) warn(ln, `座標変換 G${v} は未対応`);
         else if (v === 4 || v === 10 || v === 65) { /* dwell, data setting, macro call: no motion */ }
         else if (!IGNORED_G.has(v)) warn(ln, `G${v} は無視`);
@@ -122,6 +124,7 @@ export function parseGcode(text, opts = {}) {
       st.T = st.pendingT;
       if (!meta.toolOrder.includes(st.T)) meta.toolOrder.push(st.T);
     }
+    if (w.D !== undefined) st.compD = w.D;
     if (w.F !== undefined) st.F = w.F * st.unit;
     if (w.S !== undefined) st.S = w.S;
     const feed = () => st.perRev ? st.F * st.S : st.F;
@@ -208,6 +211,8 @@ export function parseGcode(text, opts = {}) {
   }
 }
 
+const CHORD_TOL = 0.001; // largest chord error of an arc [mm]
+
 // Convert moves into a polyline. Each point carries the attributes of the segment ending at it.
 export function discretize(moves, maxSeg = 0.5) {
   if (!moves.length) return [];
@@ -221,9 +226,13 @@ export function discretize(moves, maxSeg = 0.5) {
       const a0 = Math.atan2(mv.from[b] - cb, mv.from[a] - ca);
       const a1 = Math.atan2(mv.to[b] - cb, mv.to[a] - ca);
       let sweep = a1 - a0;
-      if (cw) { if (sweep >= -1e-9) sweep -= 2 * Math.PI; }
+      if (mv.arc.sweep !== undefined) sweep = mv.arc.sweep; // set by cutter compensation (a trimmed arc may be tiny)
+      else if (cw) { if (sweep >= -1e-9) sweep -= 2 * Math.PI; }
       else if (sweep <= 1e-9) sweep += 2 * Math.PI;
-      const segs = Math.max(2, Math.ceil(Math.abs(sweep) * r / maxSeg));
+      // chords no longer than maxSeg and no more than CHORD_TOL inside the arc (a control follows
+      // the true arc; coarse chords would cut into an outside corner by their sagitta)
+      const dAng = 2 * Math.acos(Math.max(-1, 1 - CHORD_TOL / Math.max(r, CHORD_TOL)));
+      const segs = Math.max(Math.abs(sweep) * r < 1e-9 ? 1 : 2, Math.ceil(Math.abs(sweep) * r / maxSeg), Math.ceil(Math.abs(sweep) / dAng));
       for (let i = 1; i <= segs; i++) {
         const ang = a0 + sweep * i / segs;
         const p = { [a]: ca + r * Math.cos(ang), [b]: cb + r * Math.sin(ang), [n]: mv.from[n] + (mv.to[n] - mv.from[n]) * i / segs };

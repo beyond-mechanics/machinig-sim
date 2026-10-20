@@ -39,7 +39,7 @@ function post() {
   const d = s.dirty;
   if (d.i1 >= 0) {
     const a = d.j0 * s.nx, b = (d.j1 + 1) * s.nx;
-    patch = { j0: d.j0, j1: d.j1, i0: d.i0, i1: d.i1, H: copy(s.H.subarray(a, b)), err: copy(s.err.subarray(a, b)), wallErr: copy(s.wallErr.subarray(a, b)), markS: copy(s.markS.subarray(a, b)), markF: copy(s.markF.subarray(a, b)) };
+    patch = { j0: d.j0, j1: d.j1, i0: d.i0, i1: d.i1, H: copy(s.H.subarray(a, b)), err: copy(s.err.subarray(a, b)), wallErr: copy(s.wallErr.subarray(a, b)), markS: copy(s.markS.subarray(a, b)), markF: copy(s.markF.subarray(a, b)), devIdeal: copy(s.devIdeal.subarray(a, b)), devTarget: copy(s.devTarget.subarray(a, b)) };
     s.clearDirty();
   }
   self.postMessage({
