@@ -16,6 +16,17 @@ import { MATERIALS } from './materials.js';
 import { wallAt, FN_CAP } from './wall.js';
 import { modeSet, staticK } from './frf.js';
 import { modesAt, speedDependent, tipFactor, SOFT_DEFAULT } from './spindle.js';
+
+// a material with its shearing coefficients replaced (predicted from its constants, or
+// identified); the same object for the same values, so per-material caches stay put
+const coefMats = new Map();
+function withCoefs(mat, c) {
+  if (!c) return mat;
+  const key = `${mat.name}|${c.Ktc}|${c.Krc}|${c.Kac}|${c.mc}`;
+  let m = coefMats.get(key);
+  if (!m) { m = { ...mat, Ktc: c.Ktc, Krc: c.Krc, Kac: c.Kac, mc: c.mc ?? mat.mc, coefSource: c.source }; coefMats.set(key, m); }
+  return m;
+}
 import { cuttingTemperature, wearRate, wornEdge, VB_LIMIT, T0 } from './thermal.js';
 
 // speed-dependent lobe diagram: an FRF every LOBE_NODE min⁻¹, the curve sampled every LOBE_STEP
@@ -191,7 +202,7 @@ export class Simulator {
     this.toolVersion = (this.toolVersion || 0) + 1;
     this.tm = toolModel(t);
     if (this.cfg.modal.auto) { this.cfg.modal.k = Math.round(this.tm.k); this.cfg.modal.fn = Math.round(this.tm.fn); }
-    this.mat = MATERIALS[this.cfg.material];
+    this.mat = withCoefs(MATERIALS[this.cfg.material], this.cfg.coefs?.[this.cfg.material]);
     this.lastS = -1;
     this.lobeCaches = null;
   }

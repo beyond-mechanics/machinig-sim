@@ -14,6 +14,7 @@ import { alimAt } from './sld.js';
 import { speedDependent } from './spindle.js';
 import { VB_LIMIT, T0 } from './thermal.js';
 import { LineReport } from './report.js';
+import { JC, predictCoefs } from './oxley.js';
 import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
 
 const $ = id => document.getElementById(id);
@@ -65,6 +66,7 @@ function loadProgram() {
   showWcs();
   syncModalInputs();
   updateMatHint();
+  showJc();
   document.querySelector('[data-color="devTarget"]').disabled = !targetSpec;
   if (!targetSpec && view.colorMode === 'devTarget') setColorMode('devIdeal');
 }
@@ -251,11 +253,59 @@ $('btnPocket').onclick = () => {
   setSpindle(r.S);
   $('pocketHint').textContent = `${cur} → ${r.S} min⁻¹(この切込み条件での安定限界 ${r.alim.toFixed(2)} mm)。`;
 };
-$('material').onchange = e => { sim.cfg.material = e.target.value; host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); };
+$('material').onchange = e => { sim.cfg.material = e.target.value; host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); showJc(); };
 function updateMatHint() {
   const m = sim.mat;
-  $('matHint').textContent = `Ktc ${m.Ktc} / Krc ${m.Krc} N/mm² · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.activeTool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.activeTool.D))} min⁻¹)`;
+  $('matHint').textContent = `Ktc ${Math.round(m.Ktc)} / Krc ${Math.round(m.Krc)} N/mm²${m.coefSource ? ` (${m.coefSource})` : ''} · 推奨切削速度の目安 ${m.vc} m/min(φ${sim.activeTool.D} で ${Math.round(m.vc * 1000 / (Math.PI * sim.activeTool.D))} min⁻¹)`;
 }
+// ---- cutting coefficients predicted from the material's constants (Oxley + Johnson–Cook) ----
+const JC_FIELDS = [['A', 'A [MPa]', 1], ['B', 'B [MPa]', 1], ['n', 'n', 0.01], ['C', 'C', 0.001], ['m', 'm', 0.01], ['Tm', '融点 [°C]', 1]];
+const jcEdit = {};   // edited constants per material
+let oxLast = null;
+function jcOf(key) { return jcEdit[key] || (jcEdit[key] = { ...(JC[key] || { A: 300, B: 500, n: 0.3, C: 0.01, m: 1, Tm: MATERIALS[key].Tm }) }); }
+function showJc() {
+  const key = sim.cfg.material, jc = jcOf(key), box = $('jcGrid');
+  box.innerHTML = '';
+  for (const [k, label, step] of JC_FIELDS) {
+    const l = document.createElement('label'), inp = document.createElement('input');
+    inp.type = 'number'; inp.step = step; inp.value = jc[k]; inp.id = `jc-${k}`;
+    inp.onchange = () => { const v = +inp.value; if (Number.isFinite(v) && v >= 0) jc[k] = v; };
+    l.append(label, inp); box.appendChild(l);
+  }
+  $('oxReset').disabled = !sim.cfg.coefs?.[key];
+  $('oxApply').disabled = !(oxLast && oxLast.key === key);
+  if (!(oxLast && oxLast.key === key)) $('oxOut').innerHTML = '';
+}
+$('oxRun').onclick = () => {
+  const key = sim.cfg.material, base = MATERIALS[key], t = sim.activeTool;
+  const S = +$('ovS').value || baseS, Vc = Math.PI * t.D * S / 1000;
+  const rakeDeg = sim.cfg.tool.rakeDeg ?? 10, helixDeg = t.helixDeg ?? 30;
+  $('oxOut').textContent = '計算中…';
+  setTimeout(() => {
+    const p = predictCoefs(jcOf(key), base, { Vc, rakeDeg, helixDeg });
+    if (!p) { $('oxOut').textContent = 'この条件では解が見つかりませんでした (定数か切削条件を見直してください)。'; oxLast = null; $('oxApply').disabled = true; return; }
+    oxLast = { key, p, Vc };
+    const a = p.at, f = v => Math.round(v).toLocaleString();
+    $('oxOut').innerHTML = `<table class="oxtable"><thead><tr><th></th><th>予測</th><th>表の値</th></tr></thead><tbody>
+      <tr><td>Ktc [N/mm²]</td><td>${f(p.Ktc)}</td><td>${f(base.Ktc)}</td></tr>
+      <tr><td>Krc [N/mm²]</td><td>${f(p.Krc)}</td><td>${f(base.Krc)}</td></tr>
+      <tr><td>Kac [N/mm²]</td><td>${f(p.Kac)}</td><td>${f(base.Kac)}</td></tr>
+      <tr><td>寸法効果 mc</td><td>${p.mc.toFixed(2)}</td><td>${base.mc.toFixed(2)}</td></tr></tbody></table>
+      <p class="hint">h = 0.05 mm、Vc ${Math.round(Vc)} m/min、すくい角 ${rakeDeg}°、ねじれ角 ${helixDeg}° での値。せん断角 ${(a.phi * 180 / Math.PI).toFixed(1)}°、切りくず厚さ比 ${(a.t2 / 0.05).toFixed(2)}、接触長さ ${a.h.toFixed(3)} mm、せん断面 ${Math.round(a.TAB)} °C、すくい面 ${Math.round(a.Tint)} °C。` +
+      ` 比切削抵抗 (h ごと): ${p.rows.map(q => `${q.h} mm → ${f(q.Ktc)}`).join('、')} N/mm²。工具を鋭利とみなすため、エッジ係数 (Kte/Kre) は表の値のままです。</p>`;
+    $('oxApply').disabled = false;
+  }, 20);
+};
+$('oxApply').onclick = () => {
+  if (!oxLast || oxLast.key !== sim.cfg.material) return;
+  const p = oxLast.p, r = v => Math.round(v);
+  sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [oxLast.key]: { Ktc: r(p.Ktc), Krc: r(p.Krc), Kac: r(p.Kac), mc: +p.mc.toFixed(3), source: 'Oxley 予測' } };
+  host.config(true); updateMatHint(); showJc();
+};
+$('oxReset').onclick = () => {
+  if (sim.cfg.coefs) delete sim.cfg.coefs[sim.cfg.material];
+  host.config(true); updateMatHint(); showJc();
+};
 document.querySelectorAll('[data-ttype]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-ttype]').forEach(x => x.setAttribute('aria-pressed', x === b));
   sim.cfg.tool.type = b.dataset.ttype;

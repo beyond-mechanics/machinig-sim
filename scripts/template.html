@@ -71,6 +71,14 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(-
 .row .unit { font: 11px var(--font-mono); color: var(--ink-mute); }
 .row input[type=number], .row select { width: 100%; }
 .row.wide { grid-template-columns: 1fr; }
+.oxbox summary { cursor: pointer; font-size: 13px; padding: 2px 0; }
+.oxbox[open] { display: grid; gap: 8px; }
+.jcgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.jcgrid label { display: grid; gap: 2px; font: 11px var(--font-mono); color: var(--ink-mute); }
+.jcgrid input { width: 100%; }
+.oxtable { width: 100%; border-collapse: collapse; font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
+.oxtable th, .oxtable td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--rule); }
+.oxtable th:first-child, .oxtable td:first-child { text-align: left; font-family: inherit; }
 .wcsrow { display: grid; grid-template-columns: 64px repeat(3, minmax(0, 1fr)); gap: 6px; align-items: center; }
 .wcsrow span { font: 12px var(--font-mono); }
 .wcsrow input { width: 100%; }
@@ -183,6 +191,13 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <legend>被削材</legend>
           <div class="row wide"><select id="material"></select></div>
           <p class="hint" id="matHint"></p>
+          <details id="oxBox" class="oxbox">
+            <summary>材料定数から切削係数を予測 (Oxley 理論)</summary>
+            <p class="hint">被削材の流動応力 (Johnson–Cook 式 σ = (A + Bεⁿ)(1 + C ln ε̇)(1 − T*ᵐ)) と熱物性から、せん断角・切りくず厚さ・せん断面と工具すくい面の温度を解き、切削係数 Ktc / Krc / Kac を予測します。切削試験のない新しい被削材の初期値に使えます。工具のすくい角・ねじれ角と、いまの主軸回転での切削速度で計算します。</p>
+            <div class="jcgrid" id="jcGrid"></div>
+            <div class="seg" style="grid-template-columns:1fr 1fr 1fr"><button id="oxRun" aria-pressed="false">予測する</button><button id="oxApply" aria-pressed="false" disabled>予測値を使う</button><button id="oxReset" aria-pressed="false" disabled>表の値に戻す</button></div>
+            <div id="oxOut" aria-live="polite"></div>
+          </details>
         </fieldset>
         <fieldset>
           <legend>工具</legend>
@@ -330,6 +345,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li>切削温度は二次元切削のエネルギー収支(Merchant のせん断角、Boothroyd の熱配分、Jaeger の移動熱源)による平均値で、FEM による温度場ではありません。断面図の温度分布は各熱源の温度を使った模式図です。工具摩耗は Usui 式を被削材ごとの代表寿命で校正しています。</li>
           <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。ドリル (固定サイクルの穴あけを含む) は先端角のないフラット工具として底刃のスラストとトルクを計算し、チゼルエッジの押し込み力は含みません。切粉は 1 粒子が数個分の切粉を代表し (最大 5000 粒子)、流体は CFD ではなく噴流・壁面噴流・浅水流の工学的な近似を重ねた速度場です。ポケット内の渦や、工具が噴流をさえぎる効果は入れていません。</li>
           <li><b>回転数で変わる動特性</b>: 高速回転では主軸軸受の予圧が抜けホルダーが緩み、工具先端の固有振動数が下がります。振動と安定限界線図はその回転数の動特性で計算し、静止時の線図を破線で重ねます。安定ポケットは低い回転数側へずれます。回転中に測った FRF を回転数別に読み込むこともできます。</li>
+          <li><b>切削係数の予測</b>: 被削材の欄で、材料の流動応力の式 (Johnson–Cook) と熱物性から Oxley の切削理論で切削係数を予測できます。切削試験のない材料の初期値として使い、試験データがあればそちらを優先してください。鋼はよく合い、アルミは高め・チタンは低めに出る傾向があります。</li>
           <li><b>工具の振れ</b>: 工具が回転軸から e ずれて回ると、刃ごとに切りくず厚さが変わり、側面は最も外へ出る刃が主に削るので、刃跡の間隔が 1 刃送りから 1 回転送りに近づきます (面粗さが大きくなる)。焼きばめでは数 µm、コレットでは 10 µm 程度が目安です。</li>
           <li><b>寸法誤差</b>: 同じ素材を指令どおり (たわみ・振動なし) にも削り、加工結果との差を「指令との差」で示します。壁の位置は格子より細かく µm 単位で比べます。目標形状 (STL) を読み込むと「目標との差」で削り残し (青) と削り過ぎ (赤) を示し、原因のプログラム行を出します。目標の壁の位置そのものは格子 (0.3 mm) 単位でしか分からないので、プログラムが目標と食い違う壁際は ± 半格子で表示します。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
