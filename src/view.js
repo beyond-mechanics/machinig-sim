@@ -1,5 +1,5 @@
 // Three.js rendering (global THREE, r128). Z is up, units mm.
-import { MAX_CHIPS } from './chips.js';
+import { MAX_CHIPS, nozzlePose, freeJet, COOLANTS } from './chips.js';
 
 export class View {
   constructor(canvas) {
@@ -27,6 +27,7 @@ export class View {
     this.buildChips();
     this.buildNozzle();
     this.buildSpray();
+    this.buildPool();
     this.bindControls();
   }
 
@@ -218,6 +219,7 @@ export class View {
         const f = fluteProfile(u);
         let rr = R * f.r;
         if (t.type === 'ball' && z < R) rr *= Math.sqrt(Math.max(0, 1 - ((R - z) / R) ** 2));
+        else if (t.rAt) rr *= Math.max(0.02, t.rAt(z)) / R;
         p.setXY(i, x * rr / r, y * rr / r);
         shade = f.shade;
       }
@@ -226,14 +228,37 @@ export class View {
     g.setAttribute('color', new T.BufferAttribute(col, 3));
     g.computeVertexNormals();
     const flute = new T.Mesh(g, this.fluteMat);
-    const shankLen = Math.max(1, t.stickout - fl);
-    const sg = new T.CylinderGeometry(R, R, shankLen, 48); sg.rotateX(Math.PI / 2); sg.translate(0, 0, fl + shankLen / 2);
-    const shank = new T.Mesh(sg, this.shankMat);
-    // collet nut + holder body above the stickout
-    const hg1 = new T.CylinderGeometry(R * 1.9, R * 2.3, 14, 40); hg1.rotateX(Math.PI / 2); hg1.translate(0, 0, t.stickout + 7);
-    const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
-    const hg3 = new T.CylinderGeometry(R * 4.4, R * 4.4, 30, 40); hg3.rotateX(Math.PI / 2); hg3.translate(0, 0, t.stickout + 51);
-    this.spin.add(flute, shank, new T.Mesh(hg1, this.holderMat), new T.Mesh(hg2, this.holderMat), new T.Mesh(hg3, this.holderMat));
+    this.holderMat.color.set(0x2f3338); this.holderMat.emissive.set(0x000000);
+    const bands = t.outline || [];
+    if (t.stlMesh) {
+      // imported cutter: the mesh itself (it spins, so its flutes show)
+      this.spin.add(new T.Mesh(meshGeometry(t.stlMesh, 0), this.fluteMat));
+    } else {
+      this.spin.add(flute);
+      // neck and shank from the outline (or a plain shank up to the stickout)
+      const body = bands.filter(b => b.part === 'shank');
+      if (!body.length) body.push({ z0: fl, z1: Math.max(fl + 1, t.stickout), r: R });
+      for (const b of body) {
+        const sg = new T.CylinderGeometry(b.r, b.r, b.z1 - b.z0, 48); sg.rotateX(Math.PI / 2); sg.translate(0, 0, (b.z0 + b.z1) / 2);
+        this.spin.add(new T.Mesh(sg, this.shankMat));
+      }
+    }
+    if (t.stlHolderMesh) this.spin.add(new T.Mesh(meshGeometry(t.stlHolderMesh, t.stickout), this.holderMat));
+    else if (bands.some(b => b.part === 'holder')) {
+      // holder as a lathe profile through its segments (tapers included)
+      const pts = [];
+      for (const b of bands) if (b.part === 'holder') { pts.push(new T.Vector2(b.r0 ?? b.r, b.z0), new T.Vector2(b.r1 ?? b.r, b.z1)); }
+      pts.unshift(new T.Vector2(Math.max(0.1, (t.shankD || t.D) / 2), pts[0].y));
+      pts.push(new T.Vector2(0.1, pts[pts.length - 1].y));
+      const lg = new T.LatheGeometry(pts, 64); lg.rotateX(Math.PI / 2);
+      this.spin.add(new T.Mesh(lg, this.holderMat));
+    } else {
+      // no holder chosen: the original stylised collet nut + holder body above the stickout
+      const hg1 = new T.CylinderGeometry(R * 1.9, R * 2.3, 14, 40); hg1.rotateX(Math.PI / 2); hg1.translate(0, 0, t.stickout + 7);
+      const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
+      const hg3 = new T.CylinderGeometry(R * 4.4, R * 4.4, 30, 40); hg3.rotateX(Math.PI / 2); hg3.translate(0, 0, t.stickout + 51);
+      this.spin.add(new T.Mesh(hg1, this.holderMat), new T.Mesh(hg2, this.holderMat), new T.Mesh(hg3, this.holderMat));
+    }
     this.spin.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // tool hangs from the pivot: children are offset by -stickout
     this.spin.position.set(0, 0, -t.stickout);
@@ -253,10 +278,31 @@ export class View {
     this.flute = flute;
   }
 
+  // red markers where the shank, holder or spindle touched the stock
+  setHits(hits) {
+    const T = THREE;
+    if (!this.hitPts) {
+      const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.BufferAttribute(new Float32Array(200 * 3), 3).setUsage(T.DynamicDrawUsage));
+      this.hitPts = new T.Points(g, new T.PointsMaterial({ color: 0xff3b30, size: 2.2, sizeAttenuation: true, depthTest: false, transparent: true, opacity: 0.9 }));
+      this.hitPts.renderOrder = 5; this.hitPts.frustumCulled = false;
+      this.scene.add(this.hitPts);
+    }
+    const n = Math.min(200, hits?.length || 0), P = this.hitPts.geometry.attributes.position;
+    for (let i = 0; i < n; i++) P.setXYZ(i, hits[i].x, hits[i].y, hits[i].z + 0.3);
+    this.hitPts.geometry.setDrawRange(0, n);
+    P.needsUpdate = true;
+  }
+
   // tool tip nominal position, deflection [mm] (already exaggerated), spin angle
   // blur: 0 (flutes visible) … 1 (spinning too fast for the eye: a translucent cylinder)
-  updateTool(pos, dx, dy, angle, blur = 0) {
+  updateTool(pos, dx, dy, angle, blur = 0, collide = null) {
     const L = this.toolCfg.stickout;
+    // interference: the colliding part glows red for a moment
+    if (collide) this.hitGlow = 1;
+    this.hitGlow = Math.max(0, (this.hitGlow || 0) - 0.04);
+    this.holderMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0);
+    this.shankMat.emissive.setRGB(0.5 * this.hitGlow, 0, 0);
     this.pivot.position.set(pos.x, pos.y, pos.z + L);
     const sx = Math.max(-0.9, Math.min(0.9, dy / L)), sy = Math.max(-0.9, Math.min(0.9, dx / L));
     this.pivot.rotation.set(Math.asin(sx), -Math.asin(sy), 0);
@@ -277,21 +323,22 @@ export class View {
     this.nozzle.add(body);
     this.scene.add(this.nozzle, this.jet);
   }
-  updateNozzle(coolant, tip) {
-    const T = THREE;
-    const on = coolant !== 'dry';
+  updateNozzle(coolant, tip, noz) {
+    const T = THREE, c = COOLANTS[coolant];
+    const on = !!c && c.jet === 'nozzle';
     this.nozzle.visible = on; this.jet.visible = on;
     if (!on) return;
-    const from = new T.Vector3(tip.x - 45, tip.y - 35, tip.z + 55), to = new T.Vector3(tip.x, tip.y, tip.z);
-    const dir = to.clone().sub(from); const L = dir.length(); dir.normalize();
+    const n = nozzlePose(tip, noz);
+    const from = new T.Vector3(n.x, n.y, n.z), dir = new T.Vector3(n.ex, n.ey, n.ez), L = n.L;
     this.nozzle.position.copy(from);
     this.nozzle.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), dir);
-    const w = coolant === 'flood' ? 6 + L * 0.25 : 3 + L * 0.12;
+    // cone out to the tool: the air jet spreads as a turbulent jet, the liquid stream barely
+    const w = c.liquid ? freeJet(L, c.U0, c.d0, true).b : freeJet(L, c.U0, c.d0).b;
     this.jet.scale.set(w, L, w);
     this.jet.quaternion.setFromUnitVectors(new T.Vector3(0, -1, 0), dir);
     this.jet.position.copy(from).addScaledVector(dir, L / 2);
-    this.jet.material.color.set(coolant === 'flood' ? 0x6fb7ff : 0xdcefff);
-    this.jet.material.opacity = coolant === 'flood' ? 0.1 : 0.05; // the spray particles carry the look
+    this.jet.material.color.set(c.liquid ? 0x6fb7ff : 0xdcefff);
+    this.jet.material.opacity = c.liquid ? 0.1 : 0.05; // the spray particles carry the look
   }
 
   // ---------- chips ----------
@@ -369,37 +416,52 @@ export class View {
     this.scene.add(this.sprayPts);
     this.sprayT = performance.now();
   }
-  updateSpray(coolant, tip, active) {
+  updateSpray(coolant, tip, active, R = 5) {
     const now = performance.now(), dt = Math.min(0.05, (now - this.sprayT) / 1000); this.sprayT = now;
-    const S = this.spray, P = S.p, V = S.v, L = S.life, flood = coolant === 'flood';
-    const on = active && coolant !== 'dry' && this.nozzle.visible;
+    const S = this.spray, P = S.p, V = S.v, L = S.life, c = COOLANTS[coolant], liquid = !!c?.liquid;
+    const through = c?.jet === 'tool';
+    const on = active && !!c && (through || this.nozzle.visible);
     this.sprayPts.visible = on || L.some(l => l > 0);
     if (!this.sprayPts.visible) return;
     const m = this.sprayPts.material;
-    m.size = flood ? 1.4 : 0.6; m.color.set(flood ? 0x7fc4ff : 0xf2f6fa); m.opacity = flood ? 0.6 : 0.3;
+    m.size = liquid ? 1.4 : 0.6; m.color.set(liquid ? 0x7fc4ff : 0xf2f6fa); m.opacity = liquid ? 0.6 : 0.3;
     if (on) {
+      S.acc += dt * (liquid ? 1800 : 900);
       const from = this.nozzle.position, dx = tip.x - from.x, dy = tip.y - from.y, dz = tip.z - from.z;
-      const len = Math.hypot(dx, dy, dz), sp = flood ? 900 : 1600, spread = flood ? 0.12 : 0.22;
-      S.acc += dt * (flood ? 1800 : 900);
+      const len = Math.hypot(dx, dy, dz), sp = liquid ? 900 : 1600, spread = liquid ? 0.12 : 0.22;
       while (S.acc >= 1) {
         S.acc -= 1;
-        const i = S.next; S.next = (S.next + 1) % S.n;
-        P[i * 3] = from.x; P[i * 3 + 1] = from.y; P[i * 3 + 2] = from.z;
-        V[i * 3] = (dx / len + (Math.random() - 0.5) * spread) * sp;
-        V[i * 3 + 1] = (dy / len + (Math.random() - 0.5) * spread) * sp;
-        V[i * 3 + 2] = (dz / len + (Math.random() - 0.5) * spread) * sp;
-        L[i] = flood ? 0.9 : 0.35;
+        const i = S.next, o = i * 3; S.next = (S.next + 1) % S.n;
+        if (through) {
+          // through-tool: leaves from under the cutter end as a radial sheet that splashes up
+          const a = Math.random() * 2 * Math.PI, ca = Math.cos(a), sa = Math.sin(a), u = 1500 + Math.random() * 1500;
+          P[o] = tip.x + ca * R; P[o + 1] = tip.y + sa * R; P[o + 2] = tip.z + 0.3;
+          V[o] = ca * u; V[o + 1] = sa * u; V[o + 2] = 300 + Math.random() * 900;
+          L[i] = 0.5;
+        } else {
+          P[o] = from.x; P[o + 1] = from.y; P[o + 2] = from.z;
+          V[o] = (dx / len + (Math.random() - 0.5) * spread) * sp;
+          V[o + 1] = (dy / len + (Math.random() - 0.5) * spread) * sp;
+          V[o + 2] = (dz / len + (Math.random() - 0.5) * spread) * sp;
+          L[i] = liquid ? 0.9 : 0.35;
+        }
       }
     }
-    const drag = flood ? 0.4 : 6; // mist slows quickly in air
+    const drag = liquid ? 0.4 : 6; // mist slows quickly in air
     for (let i = 0; i < S.n; i++) {
       if (L[i] <= 0) { P[i * 3 + 2] = -1e5; continue; }
       L[i] -= dt;
       const o = i * 3;
       V[o] -= V[o] * drag * dt; V[o + 1] -= V[o + 1] * drag * dt; V[o + 2] -= (9810 + V[o + 2] * drag) * dt;
+      const ox = P[o], oy = P[o + 1];
       P[o] += V[o] * dt; P[o + 1] += V[o + 1] * dt; P[o + 2] += V[o + 2] * dt;
       const fz = this.stock ? this.stock.floor(P[o], P[o + 1]) : 0;
       if (P[o + 2] < fz) {
+        if (this.stock && fz > this.stock.floor(ox, oy) + 0.5) {
+          // hit a wall: bounce back and run up it
+          P[o] = ox; P[o + 1] = oy; V[o] *= -0.3; V[o + 1] *= -0.3; V[o + 2] = Math.abs(V[o + 2]) * 0.3 + 400;
+          continue;
+        }
         // splash: lose most of the speed, scatter sideways, die soon after
         P[o + 2] = fz + 0.05; V[o + 2] = Math.abs(V[o + 2]) * 0.15;
         V[o] = V[o] * 0.3 + (Math.random() - 0.5) * 150; V[o + 1] = V[o + 1] * 0.3 + (Math.random() - 0.5) * 150;
@@ -407,6 +469,42 @@ export class View {
       }
     }
     this.sprayPts.geometry.attributes.position.needsUpdate = true;
+  }
+
+  // ---------- coolant pool ----------
+  // Free surface of the shallow coolant layer (chips.js Pool): one vertex per coarse cell. Dry
+  // cells sink below the stock surface, so the water edge is a shoreline cut by the depth test.
+  buildPool() {
+    const T = THREE;
+    this.poolMat = new T.MeshStandardMaterial({ color: 0x5aa2dc, transparent: true, opacity: 0.2, roughness: 0.12, metalness: 0.0, depthWrite: false });
+    this.poolMesh = null; this.poolKey = '';
+  }
+  updatePool(pool) {
+    const T = THREE;
+    if (!pool || !pool.depth) { if (this.poolMesh) this.poolMesh.visible = false; return; }
+    const { nx, ny, cx, cy, bed, depth } = pool, key = `${nx}x${ny}x${cx}x${cy}`;
+    if (key !== this.poolKey) {
+      if (this.poolMesh) { this.scene.remove(this.poolMesh); this.poolMesh.geometry.dispose(); }
+      const g = new T.BufferGeometry(), pos = new Float32Array(nx * ny * 3), idx = [];
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const k = (j * nx + i) * 3; pos[k] = (i + 0.5) * cx; pos[k + 1] = (j + 0.5) * cy; }
+      for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) { const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1; idx.push(a, b, d, a, d, c); }
+      g.setAttribute('position', new T.BufferAttribute(pos, 3).setUsage(T.DynamicDrawUsage));
+      g.setIndex(idx);
+      this.poolMesh = new T.Mesh(g, this.poolMat);
+      this.poolMesh.renderOrder = 2;
+      this.scene.add(this.poolMesh);
+      this.poolKey = key;
+    }
+    const P = this.poolMesh.geometry.attributes.position.array;
+    let wet = false;
+    for (let k = 0; k < nx * ny; k++) {
+      const d = depth[k];
+      if (d > 0.15) { P[k * 3 + 2] = bed[k] + d; wet = true; } else P[k * 3 + 2] = bed[k] - 3;
+    }
+    this.poolMesh.visible = wet;
+    if (!wet) return;
+    this.poolMesh.geometry.attributes.position.needsUpdate = true;
+    this.poolMesh.geometry.computeVertexNormals();
   }
 
   // ---------- tool path ----------
@@ -564,6 +662,19 @@ function ribbonHelix(turns, pitch, rad) {
 // against the rotation: cylindrical land (margin), primary and secondary clearance down to
 // the heel, the flute gullet around the core, and the rake face rising back to the edge.
 // Returns radius as a fraction of R and a shade (polished land/rake, duller gullet).
+// BufferGeometry from an STL triangle soup, centred on its vertical axis with its lowest point at z0
+function meshGeometry(mesh, z0) {
+  const T = THREE, { tris, min, max } = mesh;
+  const cx = (min[0] + max[0]) / 2, cy = (min[1] + max[1]) / 2;
+  const pos = new Float32Array(tris.length);
+  for (let i = 0; i < tris.length; i += 3) { pos[i] = tris[i] - cx; pos[i + 1] = tris[i + 1] - cy; pos[i + 2] = tris[i + 2] - min[2] + z0; }
+  const g = new T.BufferGeometry();
+  g.setAttribute('position', new T.BufferAttribute(pos, 3));
+  g.setAttribute('color', new T.BufferAttribute(new Float32Array(pos.length).fill(0.82), 3));
+  g.computeVertexNormals();
+  return g;
+}
+
 function fluteProfile(u) {
   const core = 0.62;
   if (u < 0.035) return { r: 1, shade: 1.05 };                                     // land

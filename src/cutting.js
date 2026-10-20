@@ -104,7 +104,12 @@ export class CuttingEngine {
       const zr = (k + 0.5) * this.dz;
       this.sliceZ[k] = tipZ + zr;
       let r = R, kap = 1;
-      if (this.tool.type === 'ball' && zr < R) { r = Math.sqrt(Math.max(1e-6, R * R - (R - zr) ** 2)); kap = r / R; }
+      if (this.tool.rAt) {
+        // general edge shape: radius from the profile, κ from its slope (90° on a straight side)
+        r = Math.max(1e-3, this.tool.rAt(zr));
+        const dr = (this.tool.rAt(zr + 0.05) - this.tool.rAt(Math.max(0, zr - 0.05))) / (zr < 0.05 ? 0.05 + zr : 0.1);
+        kap = 1 / Math.sqrt(1 + dr * dr);
+      } else if (this.tool.type === 'ball' && zr < R) { r = Math.sqrt(Math.max(1e-6, R * R - (R - zr) ** 2)); kap = r / R; }
       this.sliceR[k] = r; this.sliceKap[k] = kap;
       this.sliceLag[k] = zr * this.tanB / R;
     }
@@ -114,17 +119,18 @@ export class CuttingEngine {
   // rOut = outer radius of the end-face map [mm]. Eb filled by caller. Each end-edge element at
   // radius r cuts an axial chip min(fza, depth); on a ball nose the chip normal to the edge is
   // that times cosκ and the edge element is dr / cosκ (κ: angle of the edge normal from the axis).
-  setEndEngagement(fza, rOut) {
+  setEndEngagement(fza, rOut, zAt = () => 0) {
     this.fza = fza > 0 ? fza : 0; this.endR = rOut;
-    const R = this.R, dr = rOut / END_RINGS;
+    const dr = rOut / END_RINGS;
     this.ringR = new Float64Array(END_RINGS); this.ringCos = new Float64Array(END_RINGS); this.ringZ = new Float64Array(END_RINGS);
     this.ringDs = new Float64Array(END_RINGS);
     for (let j = 0; j < END_RINGS; j++) {
       const r = (j + 0.5) * dr;
-      const c = this.tool.type === 'ball' ? Math.sqrt(Math.max(0.05, R * R - r * r)) / R : 1;
+      // edge-normal angle from the slope of the tip profile z(r); steep flanks are capped (κ ≤ 77°)
+      const slope = (zAt(Math.min(rOut, r + 0.25 * dr)) - zAt(Math.max(0, r - 0.25 * dr))) / (0.5 * dr);
+      const c = Math.max(0.22, 1 / Math.sqrt(1 + slope * slope));
       this.ringR[j] = r; this.ringCos[j] = c; this.ringDs[j] = dr / c;
-      // height of the edge above the tip (ball surface)
-      this.ringZ[j] = this.tool.type === 'ball' ? R - c * R : 0;
+      this.ringZ[j] = zAt(r);
     }
   }
 

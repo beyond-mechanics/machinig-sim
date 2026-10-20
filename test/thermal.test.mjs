@@ -58,4 +58,35 @@ M30`);
   assert.ok(maxT > 300 && maxT < MATERIALS.SUS304.Tm, 'stainless slot runs hot');
   assert.ok(sim.VB > 0 && sim.VB < VB_LIMIT, 'wear accumulates');
 }
+// 5. wear belongs to each tool: a tool change starts from that tool's own wear
+{
+  const sim = new Simulator();
+  sim.cfg.material = 'SUS304';
+  sim.load(`(STOCK 80 40 20)
+(TOOL T1 D10 N3 FLAT L25)
+(TOOL T2 D6 N2 FLAT L15)
+G21 G90
+T1 M6
+S3000 M3
+G0 X-6 Y12 Z-2
+G1 X86 F360
+G0 Z5
+T2 M6
+S5000 M3
+G0 X-6 Y30 Z-1
+G1 X40 F300
+G0 Z5
+M30`);
+  let vbAtChange = null;
+  while (!sim.done) {
+    const before = sim.activeT;
+    sim.step(1 / 60);
+    if (before === 1 && sim.activeT === 2) vbAtChange = sim.VB;
+  }
+  const w1 = sim.wear.get(1), w2 = sim.wear.get(2);
+  console.log(`per-tool wear: T1 ${(w1 * 1000).toFixed(2)} µm, T2 ${(w2 * 1000).toFixed(2)} µm (T2 at its first move ${(vbAtChange * 1000).toFixed(2)} µm)`);
+  assert.ok(w1 > 0 && w2 > 0, 'both tools wear');
+  assert.ok(vbAtChange < 0.2 * w1, 'the new tool does not inherit the old tool\'s wear');
+  assert.equal(sim.display.VB, w2, 'display shows the active tool');
+}
 console.log('thermal tests passed');

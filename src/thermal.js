@@ -1,6 +1,6 @@
 // Cutting temperature and tool wear from the mean chip of the current cut.
 // Temperature: orthogonal-cutting energy balance on the equivalent chip (thickness h, speed Vc).
-//   shear angle  Merchant φ = π/4 + (α − β)/2, β = atan μ
+//   shear angle  Merchant φ = π/4 + (α − β)/2, β = atan μ (mat.muRake)
 //   shear zone   ΔTs = (1 − Γ)·Fs·Vs / (ρc·Vc·h), Γ = heat into the work (Boothroyd)
 //   rake face    ΔTf = 0.754·q·l / (k·√L), Jaeger's band source moving with the chip
 //                (q: friction heat flux over the contact length 2·hc, l: half length, L = Vch·l / 2κ)
@@ -21,7 +21,7 @@ const LAMBDA_LO = 5302, LAMBDA_HI = 21950, THETA_SW = 1150; // Usui [K]
 // h [mm], Vc [m/s], rakeDeg. Returns °C values and the chip geometry.
 export function cuttingTemperature(mat, h, Vc, rakeDeg = 10) {
   if (!(h > 0) || !(Vc > 0)) return { tool: T0, shear: T0, chip: T0, phi: 0, hc: 0, gamma: 0 };
-  const a = rakeDeg * Math.PI / 180, beta = Math.atan(mat.mu ?? 0.6);
+  const a = rakeDeg * Math.PI / 180, beta = Math.atan(mat.muRake ?? 0.6);
   const phi = Math.max(0.15, Math.PI / 4 + (a - beta) / 2);
   const hm = h * 1e-3;                                 // m
   const Fc = mat.Ktc * h * 1e3, Ft = mat.Krc * h * 1e3; // per unit width [N/m]

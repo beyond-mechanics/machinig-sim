@@ -5,7 +5,16 @@ const E_CARBIDE = 600000;    // MPa
 const RHO_CARBIDE = 14500;   // kg/m³
 export const ALLOWABLE_STRESS = 1500; // MPa, conservative working limit for carbide in bending (TRS ≈ 3500)
 
+import { assemblyModel } from './assembly.js';
+
+// a tool with a holder, a shank/neck different from the cutter, or an imported mesh is a
+// stepped beam; otherwise the original uniform beam (the defaults the tests are tuned to)
+export function isAssembly(t) {
+  return !!(t.holderSegs || t.stlTool || t.stlHolder || t.neckD || (t.shankD && Math.abs(t.shankD - t.D) > 1e-6));
+}
+
 export function toolModel(t) {
+  if (isAssembly(t)) return assemblyModel(t);
   const D = t.D, L = t.stickout;
   const De = 0.8 * D;                       // equivalent diameter of the fluted section
   const I = Math.PI * De ** 4 / 64;         // mm⁴
