@@ -208,6 +208,8 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <p class="hint" id="pinfo" data-shape="custom">ファイルを選んでください。</p>
         <canvas id="preview" class="preview" data-only="ortho mill" aria-label="刃先形状のプレビュー"></canvas>
         <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" min="0" max="1.5" step="0.05"></div>
+        <div class="row"><label for="fric">摩擦の速度依存</label><select id="fric"><option value="speed" selected>あり（速いほど滑る）</option><option value="const">なし（一定）</option></select></div>
+        <p class="hint">「あり」では μ は切りくずが材料の推奨速度の半分ですべるときの値で、すべりが速いほど（接触面が熱くなるほど）下がります。</p>
         <div class="row"><label>工具材種</label><span class="static">超硬（WC-Co）</span></div>
       </fieldset>
       <fieldset>
@@ -229,7 +231,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="btns" data-only="ortho"><button id="wear" type="button" disabled>摩耗した工具で再計算</button></div>
         <p class="hint" data-only="ortho">計算が終わると、工具表面の摩耗速度 × 時間だけ刃先を後退させた形（逃げ面摩耗とクレーター）に切り替えて、もう一度削ります。繰り返すと摩耗が進む様子を追えます。</p>
         <div class="btns" data-only="mill helix" hidden><button id="export" type="button" disabled>切削係数を書き出す（JSON）</button></div>
-        <p class="hint" data-only="mill helix" hidden id="exhint">計算が終わると、3軸加工シミュレーターと同じ形（Ktc, Krc, Kac, Kte, Kre, Kae）の切削係数を JSON で保存できます。3軸加工シミュレーターの「被削材」でこの JSON を読み込むと、その係数で加工を計算します。アルミは Johnson-Cook 定数のため、直交切削の kc が便覧の 0.7 倍（A6061）〜1.5 倍（A7075）とずれるので、絶対値は実測で確かめてください。実測の力があれば「流れ応力の倍率」で合わせられます。</p>
+        <p class="hint" data-only="mill helix" hidden id="exhint">計算が終わると、3軸加工シミュレーターと同じ形（Ktc, Krc, Kac, Kte, Kre, Kae）の切削係数を JSON で保存できます。3軸加工シミュレーターの「被削材」でこの JSON を読み込むと、その係数で加工を計算します。材料定数は直交切削の kc が便覧の目安に合うよう校正してあります（±7 %）。実測の力があれば「流れ応力の倍率」でさらに合わせられます。</p>
       </fieldset>
     </aside>
   </div>
@@ -281,7 +283,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
       <ul>
         <li>2次元平面ひずみ。被削材を粒子で表す SPH 法（更新ラグランジュ、陽解法）なので、要素のゆがみやリメッシュなしで切りくずが大変形します。</li>
         <li>材料は Johnson-Cook 則（ひずみ硬化、ひずみ速度、温度軟化）の弾塑性体。塑性仕事の 90 % が熱になり、熱伝導と連成します。</li>
-        <li>工具は剛体で、すくい角、逃げ角、刃先丸みを持ちます。摩擦はクーロン摩擦で、材料のせん断流れ応力が上限です。摩擦熱は半分ずつ切りくずと工具に入り、接触面では熱伝達（10⁸ W/m²K）で熱が行き来します。</li>
+        <li>工具は剛体で、すくい角、逃げ角、刃先丸みを持ちます。摩擦はクーロン摩擦で、材料のせん断流れ応力が上限です。摩擦係数はすべり速度で変わり（μ = μ0·(v/vref)^−0.3、vref は推奨切削速度の半分）、切削速度を上げると摩擦が下がって比切削抵抗も下がります。摩擦熱は半分ずつ切りくずと工具に入り、接触面では熱伝達（10⁸ W/m²K）で熱が行き来します。</li>
         <li>工具内部の温度は工具に固定した格子で計算します。直交切削では、切削後半の平均的な接触状態が続いたときの定常温度も推定します。</li>
         <li>工具摩耗は Usui 式（接触圧力 × すべり速度 × exp(−B/T)）で、工具表面の位置ごとの摩耗速度を出します。</li>
         <li>エンドミルは工具軸に垂直な断面で、1刃が前の刃の削り跡を削る様子を計算します（ねじれ角なし）。前の刃の跡は、回りながら送りで進むトロコイドです。「続けて削る刃の数」を増やすと、前の刃が残した面（加工硬化・残留応力）を次の刃が削ります。切削力から切削係数 Ktc、Kte、Krc、Kre を、切取り厚さが最大の 15〜90 % の区間で求めます（最大付近は刃が上面に出入りして力が乱れるため）。粒子は工具面から半粒子間隔離れて止まるので、最初の加工面も刃が残す面と同じく前の刃の跡から半粒子間隔外に並べます（1刃目の取り代が厚くならないように）。</li>

@@ -13,7 +13,7 @@
 //  - Mass scaling (density × ms for inertia only) keeps the explicit step affordable; the default
 //    keeps inertial stress ρ·ms·V² near 4 % of the yield stress so the cut stays quasi-static.
 // Units: SI internally (m, s, Pa, K-differences in °C). Forces are per metre of width.
-import { MATERIALS, TOOLS, flowStress } from './materials.js';
+import { MATERIALS, TOOLS, flowStress, frictionAt } from './materials.js';
 import { makeTool, toolSdf } from './tool.js';
 import { chamferProfile, breakerProfile, rakeOf } from './profile.js';
 import { ToolHeat } from './toolheat.js';
@@ -21,6 +21,9 @@ import { Ortho, Mill } from './process.js';
 
 export const DEFAULTS = {
   mode: 'ortho', mat: 'S45C', vc: 200, h: 0.1, rake: 5, clearance: 7, edgeRadius: 10, mu: null, mShear: 1.0,
+  // Friction: 'speed' lowers μ as the chip slides faster (μ = μ0·(v/vref)^−muExp, materials.js
+  // frictionAt), 'const' keeps μ0.
+  friction: 'speed', muExp: 0.3,
   nh: 8, massScale: 0, cutLen: 0.6, width: 1, T0: 20, beta: 0.9, heatToWork: 0.5,
   // End mill (mode 'mill'): diameter D, flutes z, feed per tooth fz, radial depth ae [mm].
   D: 6, z: 3, fz: 0.1, ae: 0.3, dir: 'up',
@@ -50,7 +53,9 @@ export class CuttingSim {
     const c = this.cfg = { ...DEFAULTS, ...cfg };
     if (c.residual && c.mode === 'ortho') { c.thermalExp = true; c.depth = Math.max(c.depth || 0, 0.8, 5 * c.h); }
     // flowScale: multiplier on the whole flow stress (A and B), to calibrate against a measured force.
-    const mat = this.mat = c.flowScale > 0 && c.flowScale !== 1 ? { ...MATERIALS[c.mat], A: MATERIALS[c.mat].A * c.flowScale, B: MATERIALS[c.mat].B * c.flowScale } : MATERIALS[c.mat];
+    // The material's own cal (Johnson-Cook A and B scaled to the handbook kc, see materials.js) times it.
+    const base = MATERIALS[c.mat], fsc = (c.flowScale > 0 ? c.flowScale : 1) * (base.cal ?? 1);
+    const mat = this.mat = fsc !== 1 ? { ...base, A: base.A * fsc, B: base.B * fsc } : base;
     if (c.mu == null) c.mu = mat.mu;
     if (c.avAlpha == null) c.avAlpha = mat.av ?? 1;
     if (c.avBeta == null) c.avBeta = mat.av ?? 1;
@@ -114,7 +119,7 @@ export class CuttingSim {
     this.head = new Int32Array(1); this.next = new Int32Array(N);
 
     this.t = 0; this.steps = 0; this.done = false; this.lastSample = 0;
-    this.impX = 0; this.impY = 0; this.impT = 0; this.qTool = 0; this.qToolT = 0;
+    this.impX = 0; this.impY = 0; this.impT = 0; this.qTool = 0; this.qToolT = 0; this.aTc = 0; this.aMu = 0; this.aJt = 0;
     this.workIn = 0; this.heatTool = 0;   // cumulative energy per unit width [J/m]
     // fc/ft: cutting and thrust force (ortho) or tangential and radial force (mill).
     this.hist = { axis: [], fc: [], ft: [], tmax: [], trake: [], ttool: [], hnom: [], pass: [] };
@@ -360,7 +365,8 @@ export class CuttingSim {
     // 4. Integrate, then enforce tool contact and supports.
     const tool = this.tool, proc = this.proc, heat = this.heat, dx = this.dx, d0 = 0.5 * dx, out = tool.out;
     if (!this.relax) proc.pose(this, this.t + dt);    // unloading: the tool stays where it ended, out of contact
-    const mu = cfg.mu, fw = cfg.heatToWork, cMat = mat.c, mReal = this.mReal, acc = proc.accumulate(this);
+    const mu0 = cfg.mu, fw = cfg.heatToWork, cMat = mat.c, mReal = this.mReal, acc = proc.accumulate(this);
+    const muV = cfg.friction === 'speed', mux = cfg.muExp;
     const tvx0 = tool.vx, tvy0 = tool.vy, om = tool.om, ox = tool.ox, oy = tool.oy;
     let ix = 0, iy = 0, qt = 0, work = 0, tRake = cfg.T0;
     const dead = this.dead, vEsc2 = 100 * this.V * this.V;
@@ -390,7 +396,9 @@ export class CuttingSim {
         tx /= vt; ty /= vt;
         const fsd = this.dmg[i] <= 1 ? 1 : Math.max(0, 3 - 2 * this.dmg[i]);
         const tauMax = cfg.mShear * flowStress(mat, ep[i], epd[i], T[i]) * fsd / Math.sqrt(3);
+        const mu = muV ? frictionAt(mat, mu0, vt, mux) : mu0;
         jt = Math.min(m * vt, mu * jn, tauMax * dx * dt);
+        if (acc) { this.aTc += T[i] * jt; this.aMu += mu * jt; this.aJt += jt; }   // friction-weighted means
         const e = jt * (vt - 0.5 * jt / m);
         T[i] += fw * e / (mReal * cMat);
         eTool = (1 - fw) * e;
@@ -632,6 +640,7 @@ export class CuttingSim {
     // still carrying 5 % of the peak mean pressure.
     if (pMax > 0) { contactLen = 0; for (const r of prof) if (r.s > 0 && r.p > 0.05 * pMax) contactLen = Math.max(contactLen, r.s * 1e-3); }
     base.wearCrater = wearCrater; base.wearFlank = wearFlank; base.contactLen = contactLen;
+    base.tContact = this.aJt > 0 ? this.aTc / this.aJt : null; base.muMean = this.aJt > 0 ? this.aMu / this.aJt : cfg.mu;
     if (this.proc instanceof Mill) {
       const pr = this.proc;
       // Least squares over samples with 15 % < h < 90 % of hmax. Near h = 0 the edge only ploughs;

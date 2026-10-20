@@ -22,13 +22,14 @@
 // along the edge, i.e. the mean section of the tool.
 // Units: SI. Axes: x cutting direction, y up, z across the strip (helix: x feed, y towards the
 // cutter centre from the work, z along the cutter axis).
-import { MATERIALS, TOOLS, flowStress } from './materials.js';
+import { MATERIALS, TOOLS, flowStress, frictionAt } from './materials.js';
 import { ToolHeat } from './toolheat.js';
 import { makeTool, localSdf, toolOutline } from './tool.js';
 import { Mill } from './process.js';
 
 export const DEFAULTS3D = {
   mat: 'S45C', vc: 200, h: 0.1, b: 0.3, lambda: 15, rake: 5, clearance: 7, edgeRadius: 10, mu: null,
+  friction: 'speed', muExp: 0.3,                       // as the 2D solver (sph.js)
   nh: 5, cutLen: 0.5, T0: 20, beta: 0.9, heatToWork: 0.5, avAlpha: null, avBeta: null, sides: 'periodic',
   fracture: true, efScale: 1, flowScale: 1, toolMat: 'WC', hc: 1e8,
   // Helical end mill (mode 'helix'): diameter, flutes, feed per tooth, radial and axial depth [mm],
@@ -42,7 +43,9 @@ export class Cutting3D {
   constructor(cfg = {}) {
     const c = this.cfg = { ...DEFAULTS3D, ...cfg };
     // flowScale: multiplier on the whole flow stress (A and B), to calibrate against a measured force.
-    const mat = this.mat = c.flowScale > 0 && c.flowScale !== 1 ? { ...MATERIALS[c.mat], A: MATERIALS[c.mat].A * c.flowScale, B: MATERIALS[c.mat].B * c.flowScale } : MATERIALS[c.mat];
+    // The material's own cal (see materials.js) times it, as in sph.js.
+    const base = MATERIALS[c.mat], fsc = (c.flowScale > 0 ? c.flowScale : 1) * (base.cal ?? 1);
+    const mat = this.mat = fsc !== 1 ? { ...base, A: base.A * fsc, B: base.B * fsc } : base;
     if (c.mu == null) c.mu = mat.mu;
     if (c.avAlpha == null) c.avAlpha = mat.av ?? 1;
     if (c.avBeta == null) c.avBeta = mat.av ?? 1;
@@ -509,7 +512,7 @@ export class Cutting3D {
 
     // 4. Integrate, tool contact, supports.
     this.pose(this.t + dt);
-    const tool = this.tool, dx = this.dx, d0 = 0.5 * dx, mu = cfg.mu, fw = cfg.heatToWork, V = this.V, tv = this.tv;
+    const tool = this.tool, dx = this.dx, d0 = 0.5 * dx, mu0 = cfg.mu, muV = cfg.friction === 'speed', fw = cfg.heatToWork, V = this.V, tv = this.tv;
     const per = this.periodic, P = this.bz, helix = this.helix, ml = this.mill;
     const freezeU = -this.h - tool.r, vEsc2 = 100 * V * V, area = dx * dx;
     const freezeA = helix ? (this.h + tool.r + 2 * dx) / ml.R : 0;
@@ -545,6 +548,7 @@ export class Cutting3D {
         tx /= vt; ty /= vt; tz /= vt;
         const fsd = this.dmg[i] <= 1 ? 1 : Math.max(0, 3 - 2 * this.dmg[i]);
         const tauMax = flowStress(mat, ep[i], epd[i], T[i]) * fsd / Math.sqrt(3);
+        const mu = muV ? frictionAt(mat, mu0, vt, cfg.muExp) : mu0;
         jt = Math.min(m * vt, mu * jn, tauMax * area * dt);
         const e = jt * (vt - 0.5 * jt / m);
         T[i] += fw * e / (this.mReal * cMat); eTool = (1 - fw) * e;

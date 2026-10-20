@@ -74,23 +74,23 @@ function readCfg() {
   const num = (id) => parseFloat($(id).value);
   const shape = $('shape').value;
   if (mode === 'helix') return {
-    mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'),
+    mode, mat: matSel.value, vc: num('vc'), rake: num('rake'), clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), friction: $('fric').value, nh: num('res'),
     D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), ap: num('ap'), helix: num('helix'), floor: $('floor').checked, dir: $('dir').value, track: num('track'), passes: num('passes'), fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
   };
   if (mode === '3d') return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), b: num('b3'), lambda: num('lambda'), rake: num('rake'),
-    clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), nh: num('res'), cutLen: num('len'), sides: $('sides').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
+    clearance: num('clear'), edgeRadius: num('edge'), mu: num('mu'), friction: $('fric').value, nh: num('res'), cutLen: num('len'), sides: $('sides').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
   };
   return {
     mode, mat: matSel.value, vc: num('vc'), h: num('h'), rake: num('rake'), clearance: num('clear'),
-    edgeRadius: num('edge'), mu: num('mu'), width: num('width'), cutLen: num('len'), nh: num('res'),
+    edgeRadius: num('edge'), mu: num('mu'), friction: $('fric').value, width: num('width'), cutLen: num('len'), nh: num('res'),
     D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'), passes: num('passes'),
     tool: shape === 'custom' && !custom.profile ? 'wedge' : shape, land: num('land'), landDeg: num('landDeg'),
     gw: num('gw'), gd: num('gd'), wallDeg: num('wallDeg'), wh: num('wh'), profile: shape === 'custom' ? custom.profile : null,
     fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'), residual: mode === 'ortho' && $('residual').checked,
   };
 }
-for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
+for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'fric', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
   'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual']) $(id).addEventListener('change', reset);
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
