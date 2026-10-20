@@ -392,4 +392,43 @@ M5
 M30
 `,
   },
+  macro: {
+    name: 'マクロと座標回転: 放射スロット (G10 G65 G68)',
+    // G10 writes G54 and G55 (the part centre), a WHILE loop turns a G65 slot macro by 60° steps
+    code: `(STOCK 90 90 15)
+(TOOL T1 D6 N3 FLAT L20 SO30)
+(G10 で座標系を書き、G55 = 部品の中心 [G54 から X+45 Y+45])
+(WHILE と G68 で 60 度ずつ回しながら、G65 のスロットマクロ O9010 を 6 回呼ぶ)
+(マクロの引数: X 中心半径 Y 中心の Y Z 深さ Q 長さ)
+G21 G90 G17
+G10 L2 P1 X-400. Y-250. Z-300.
+G10 L2 P2 X-355. Y-205. Z-300.
+T1 M6
+S10000 M3
+G55
+#1 = 0
+WHILE [#1 LT 6] DO1
+G68 X0 Y0 R[#1 * 60]
+G65 P9010 X25. Y0 Z-3. Q8.
+G69
+#1 = #1 + 1
+END1
+(中央の丸ポケット)
+G0 X0 Y0 Z5
+G1 Z-2 F300
+G1 X6 F800
+G3 X6 Y0 I-6 J0
+G1 X0
+G0 Z30
+G0 X-90 Y60
+M5
+M30
+O9010 (SLOT X=#24 Y=#25 Z=#26 L=#17)
+G0 X[#24 - #17 / 2] Y#25 Z2
+G1 Z#26 F300
+G1 X[#24 + #17 / 2] F900
+G0 Z5
+M99
+`,
+  },
 };

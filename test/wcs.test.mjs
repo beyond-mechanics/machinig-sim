@@ -69,3 +69,17 @@ console.log('wcs tests passed');
   assert.ok(b.warnings.some(w => /G10/.test(w)));
 }
 console.log('G10 offsets ok');
+
+// the program zero is fitted to where the moves really go: a part programmed about G55 (set by
+// G10 at the stock centre) keeps G54 at the stock corner and every slot inside the stock
+{
+  const { SAMPLES } = await import('../src/samples.js');
+  const sim = new Simulator();
+  sim.load(SAMPLES.macro.code, {});
+  assert.deepEqual(sim.origin, { x: 0, y: 0, z: 0 });
+  assert.deepEqual(sim.wcs.G55, { x: 45, y: 45, z: 0 });
+  const cut = sim.path.filter(p => p.z < 0);
+  assert.ok(cut.length && cut.every(p => p.x > 5 && p.x < 85 && p.y > 5 && p.y < 85), 'all cuts inside the 90 × 90 stock');
+  assert.equal(sim.warnings.length, 0, sim.warnings.join(' / '));
+}
+console.log('origin fit with G10 ok');

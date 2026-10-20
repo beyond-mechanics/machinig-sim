@@ -59,18 +59,26 @@ export class Simulator {
   // zero in the stock frame (stock top-left-front corner = 0,0,0).
   load(program, setup = {}) {
     this.program = program;
-    let parsed = parseGcode(program);
+    // a first reading with G54 at 0 and the other systems at their offsets from it, so that the
+    // stock and the origin are fitted to where the moves really go (G55, G10, G52 included)
+    const rel = { G54: { x: 0, y: 0, z: 0 } };
+    for (const [name, d] of Object.entries(setup.wcsDelta || {})) if (name !== 'G54' && d && [d.x, d.y, d.z].every(Number.isFinite)) rel[name] = { ...d };
+    let parsed = parseGcode(program, { wcs: rel });
+    const placed = step => discretize(parsed.moves, step).map(p => {
+      const z = p.zero || rel[p.wcs] || rel.G54, l = p.local || { x: 0, y: 0, z: 0 };
+      return { ...p, x: p.x + z.x + l.x, y: p.y + z.y + l.y, z: p.z + z.z + l.z };
+    });
     const warnings = [];
     let spec = setup.stock || parsed.meta.stock || null, origin = setup.origin && setup.origin !== 'auto' ? setup.origin : null;
     if (!spec) {
-      const auto = stockFromPath(discretize(parsed.moves, 2));
+      const auto = stockFromPath(placed(2));
       if (auto) { spec = auto.spec; origin = origin || auto.origin; warnings.push(`素材の指定が無いため、切削送りの範囲から ${spec.w}×${spec.l}×${spec.h} mm の直方体を仮定しました`); }
       else spec = { type: 'box', w: 120, l: 80, h: 30 };
     }
     if (typeof origin === 'string' && origin !== 'auto') origin = originPreset(spec, origin);
     if (!origin) {
       const R = Math.max(this.cfg.tool.D, ...Object.values(parsed.meta.tools).map(t => t.D)) / 2;
-      const fit = bestOrigin(spec, discretize(parsed.moves, 2), R);
+      const fit = bestOrigin(spec, placed(2), R);
       origin = fit.origin;
       if (fit.kind !== 'corner') warnings.push(`プログラム原点を「${ORIGIN_LABEL[fit.kind]}」に合わせました (切削送りが素材に最もよく収まる位置)`);
     }
