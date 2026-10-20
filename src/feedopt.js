@@ -78,6 +78,8 @@ export function rewriteFeeds(text, feedLines, factor) {
   let progF = null, outF = null;   // modal F as programmed and as written out
   src.forEach((line, i) => {
     const n = i + 1, code = stripComments(line), m = code.match(/F\s*([-+]?(?:\d+\.?\d*|\.\d+))/i); // F100, F100., F.5
+    // macro blocks (F[#3], #1 = …) are left as they are; the modal feed after one is unknown
+    if (/[#[]/.test(code)) { out.push(line); progF = outF = null; return; }
     if (m) progF = +m[1];
     if (!feedLines.has(n) || progF === null) {
       if (m) outF = progF;
@@ -126,6 +128,7 @@ export function rewriteSpindle(text, q) {
     // code between the comments: (…) anywhere on the line, ; to its end
     const parts = line.split(/(\([^)]*\)|;.*$)/);
     for (let i = 0; i < parts.length; i += 2) {
+      if (/[#[]/.test(parts[i])) continue; // macro: S#1, F[…] are left as they are
       const g = parts[i].match(/G\s*0*9([45])(?!\d)/i);
       if (g) perRev = g[1] === '5';
       parts[i] = parts[i].replace(/([SF])\s*([-+]?(?:\d+\.?\d*|\.\d+))/gi, (m, w, v) => (w.toUpperCase() === 'S' ? `${w}${Math.round(+v * q)}` : perRev ? m : `${w}${fmt(+v * q)}`));

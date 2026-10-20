@@ -111,4 +111,11 @@ import { MATERIALS } from '../src/materials.js';
   assert.ok(Math.abs(opt.time1 - (1 + 1 + 1)) < 1e-9);
   assert.ok(Math.abs(rep.summary().air - 5) < 1e-9);
 }
+// macro blocks are not rewritten (no duplicate F/S words)
+{
+  const { rewriteSpindle } = await import('../src/feedopt.js');
+  const t = 'G1 X10 F[#3]\nG1 X20\n#1 = 8000\nS#1 M3';
+  assert.equal(rewriteFeeds(t, new Set([1, 2]), new Map([[1, 1.5], [2, 1.5]])), t);
+  assert.equal(rewriteSpindle(t, 1.2), t);
+}
 console.log('feedopt tests passed');
