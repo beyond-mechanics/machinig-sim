@@ -635,7 +635,10 @@ export class Simulator {
       const T = cuttingTemperature(this.mat, st.sumHb / st.sumB, Vc, this.activeTool.rakeDeg ?? 10);
       // each edge is in the cut for `contact` of the revolution: the temperature cycle, and the
       // mean while cutting for the wear law (below the steady value when the contact is short)
-      const cyc = edgeCycle(T.tool, this.S || 0, contact, 2 * T.hc, this.cfg.coolant);
+      // a point of the edge is in the cut for the engagement arc only: with a deep cut and a
+      // helix the tooth as a whole cuts for longer than any one point of it
+      const arc = Math.max(0.01, ((d.phiEx ?? Math.PI) - (d.phiSt ?? 0)) / (2 * Math.PI));
+      const cyc = edgeCycle(T.tool, this.S || 0, Math.min(contact, arc), 2 * T.hc, this.cfg.coolant);
       const ease = (a, b) => a + (b - a) * 0.3;
       const pc = this.temp.cycle || cyc;
       this.temp = { tool: ease(this.temp.tool, T.tool), chip: ease(this.temp.chip, T.chip), shear: T.shear, phi: T.phi, hc: T.hc, h: st.sumHb / st.sumB,
