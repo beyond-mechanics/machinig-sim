@@ -100,7 +100,8 @@ function showWcs() {
   }
   if (used.length) { const hdr = document.createElement('div'); hdr.className = 'wcsrow'; hdr.innerHTML = '<span></span><span>ΔX</span><span>ΔY</span><span>ΔZ</span>'; box.prepend(hdr); }
   $('wcsBox').hidden = !used.length;
-  view.setWcs((sim.wcsUsed || ['G54']).map(n => ({ name: n, ...(sim.wcs[n] || sim.origin) })));
+  // axes at the work zeros only when the program switches between systems
+  view.setWcs((sim.wcsUsed || []).length > 1 ? sim.wcsUsed.map(n => ({ name: n, ...(sim.wcs[n] || sim.origin) })) : []);
 }
 function firstSpindle(path) { const p = path.find(q => !q.rapid); return p ? p.S : path[0]?.S; }
 
@@ -324,6 +325,8 @@ for (const [id, key] of Object.entries(toolInputs)) $(id).onchange = e => {
   if (sim.cfg.tool.stickout < sim.cfg.tool.fluteLen) { sim.cfg.tool.stickout = sim.cfg.tool.fluteLen + 2; $('tStick').value = sim.cfg.tool.stickout; }
   toolChanged();
 };
+// coating: the look of the flutes only (cutting coefficients and wear are the material's)
+$('tCoat').onchange = e => { sim.cfg.tool.coating = e.target.value; host.config(true); view.setCoating(e.target.value); };
 $('tRake').onchange = e => { const v = +e.target.value; if (!(v >= -10 && v <= 25)) return; sim.cfg.tool.rakeDeg = v; host.config(); };
 // initial wear applies from the start of the program
 $('tVB0').onchange = e => { const v = +e.target.value; if (!(v >= 0 && v <= 0.5)) return; sim.cfg.tool.VB0 = v; host.config(); restart(); };

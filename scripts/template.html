@@ -175,6 +175,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="tN">刃数</label><input type="number" id="tN" min="1" max="8" step="1" value="3"></div>
           <div class="row"><label for="tHelix">ねじれ角 <span class="unit">°</span></label><input type="number" id="tHelix" min="0" max="60" step="1" value="30"></div>
           <div class="row"><label for="tFlute">刃長 <span class="unit">mm</span></label><input type="number" id="tFlute" min="2" max="80" step="1" value="25"></div>
+          <div class="row"><label for="tCoat">コーティング</label><select id="tCoat"><option value="none">なし (超硬)</option><option value="AlTiN">AlTiN</option><option value="TiAlN">TiAlN</option><option value="TiN">TiN</option><option value="DLC">DLC</option></select></div>
           <div class="row"><label for="tRake">すくい角 <span class="unit">°</span></label><input type="number" id="tRake" min="-10" max="25" step="1" value="10"></div>
           <div class="row"><label for="tVB0">初期摩耗 VB <span class="unit">mm</span></label><input type="number" id="tVB0" min="0" max="0.5" step="0.05" value="0"></div>
           <div class="row"><label for="tStick">突出し長 <span class="unit">mm</span></label><input type="number" id="tStick" min="5" max="150" step="1" value="30"></div>
