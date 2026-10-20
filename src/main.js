@@ -7,7 +7,7 @@ import { MATERIALS } from './materials.js';
 import { COOLANTS } from './chips.js';
 import { SAMPLES } from './samples.js';
 import { decodeText } from './gcode.js';
-import { parseStl } from './workpiece.js';
+import { parseMesh, orientMesh } from './workpiece.js';
 import { HOLDERS, parseToolLibrary } from './assembly.js';
 import { ALLOWABLE_STRESS } from './tool.js';
 import { alimAt } from './sld.js';
@@ -58,7 +58,7 @@ function loadProgram() {
   // the origin actually used, in the inputs (they stay as typed in manual mode)
   if ($('orgSel').value !== 'manual') for (const k of ['x', 'y', 'z']) $('o' + k.toUpperCase()).value = +sim.origin[k].toFixed(3);
   const sz = sim.stockSize, sp = sim.stockSpec;
-  const shape = sp.type === 'cyl' ? `丸棒 φ${sp.d} × ${sp.h} mm` : sp.type === 'stl' ? `STL ${sp.name || ''} ${sz.w.toFixed(1)} × ${sz.l.toFixed(1)} × ${sz.h.toFixed(1)} mm (${sp.count.toLocaleString()} 三角形)` : `直方体 ${sz.w} × ${sz.l} × ${sz.h} mm`;
+  const shape = sp.type === 'cyl' ? `丸棒 φ${sp.d} × ${sp.h} mm` : sp.type === 'stl' ? `${/\.obj$/i.test(sp.name || '') ? 'OBJ' : 'STL'} ${sp.name || ''} ${sz.w.toFixed(1)} × ${sz.l.toFixed(1)} × ${sz.h.toFixed(1)} mm (${sp.count.toLocaleString()} 三角形${sp.scale && sp.scale !== 1 ? `、×${sp.scale} で mm に換算` : ''})` : `直方体 ${sz.w} × ${sz.l} × ${sz.h} mm`;
   $('stockInfo').textContent = `${shape} · 格子 ${sim.stockCell} mm`;
   showTools();
   showWcs();
@@ -126,7 +126,7 @@ $('sample').onchange = e => {
   for (const k of Object.keys(wcsDelta)) delete wcsDelta[k];
   Object.assign(wcsDelta, JSON.parse(JSON.stringify(sm.wcsDelta || {})));
   // a sample brings its own target shape (or none)
-  targetSpec = sm.target ? sm.target() : null;
+  targetSpec = sm.target ? sm.target() : null; targetRaw = null;
   $('tgClear').disabled = !targetSpec;
   $('tgInfo').textContent = targetSpec ? `${targetSpec.name} · ${targetSpec.count} 三角形` : '目標形状なし';
   loadProgram();
@@ -145,16 +145,23 @@ async function openProgram(file) {
   loadProgram();
   setSpindle(baseS);
 }
+// imported meshes as read (before units / up axis / rotation), so a change of those re-applies
+let stlRaw = null, targetRaw = null;
+const meshOpts = (rot = true) => ({ unit: $('stlUnit').value, up: $('stlUp').value, rotZ: rot ? +$('stlRot').value : 0 });
+function applyStlOrientation() {
+  if (!stlRaw) return;
+  const m = orientMesh(stlRaw.mesh, meshOpts());
+  stlSpec = { type: 'stl', ...m, name: stlRaw.name };
+}
 async function openStl(file) {
   try {
-    const m = parseStl(await file.arrayBuffer());
-    stlSpec = { type: 'stl', ...m, name: file.name };
+    stlRaw = { mesh: parseMesh(await file.arrayBuffer(), file.name), name: file.name };
+    applyStlOrientation();
     setStockMode('stl');
-    const size = m.max.map((v, k) => v - m.min[k]);
-    if (Math.max(...size) < 2) $('gcInfo').textContent = `${file.name}: 大きさが ${size.map(v => v.toFixed(3)).join(' × ')} です。STL の単位は mm として読みます (m や inch で保存されていないか確認してください)。`;
     loadProgram();
   } catch (err) { $('stockInfo').textContent = `${file.name} を読み込めませんでした: ${err.message}`; }
 }
+for (const id of ['stlUnit', 'stlUp', 'stlRot']) $(id).onchange = () => { applyStlOrientation(); applyTargetOrientation(); if (stlRaw || targetRaw) loadProgram(); };
 function setStockMode(mode) {
   stockMode = mode;
   document.querySelectorAll('[data-stock]').forEach(b => b.setAttribute('aria-pressed', b.dataset.stock === mode));
@@ -170,10 +177,15 @@ $('gcOpen').onclick = () => $('gcFile').click();
 $('gcFile').onchange = e => { const f = e.target.files[0]; if (f) openProgram(f); e.target.value = ''; };
 $('stlOpen').onclick = () => $('stlFile').click();
 // target (finished) shape for the deviation map
+function applyTargetOrientation() {
+  if (!targetRaw) return;
+  targetSpec = { ...orientMesh(targetRaw.mesh, meshOpts(false)), name: targetRaw.name };
+}
 async function openTarget(file) {
   try {
-    const m = parseStl(await file.arrayBuffer());
-    targetSpec = { ...m, name: file.name };
+    targetRaw = { mesh: parseMesh(await file.arrayBuffer(), file.name), name: file.name };
+    applyTargetOrientation();
+    const m = targetSpec;
     $('tgInfo').textContent = `${file.name} · ${m.count.toLocaleString()} 三角形 · X ${m.min[0].toFixed(1)}〜${m.max[0].toFixed(1)} Y ${m.min[1].toFixed(1)}〜${m.max[1].toFixed(1)} Z ${m.min[2].toFixed(1)}〜${m.max[2].toFixed(1)} mm (プログラム座標)`;
     $('tgClear').disabled = false;
     loadProgram();
@@ -183,7 +195,7 @@ async function openTarget(file) {
 $('tgOpen').onclick = () => $('tgFile').click();
 $('tgFile').onchange = e => { const f = e.target.files[0]; if (f) openTarget(f); e.target.value = ''; };
 $('tgClear').onclick = () => {
-  targetSpec = null; $('tgClear').disabled = true;
+  targetSpec = null; targetRaw = null; $('tgClear').disabled = true;
   $('tgInfo').textContent = '目標形状を外しました。';
   if (view.colorMode === 'devTarget') setColorMode('devIdeal');
   loadProgram();
@@ -214,7 +226,7 @@ addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $('dropzone').hidden = true;
   const files = [...e.dataTransfer.files];
-  const stl = files.find(f => /\.stl$/i.test(f.name)), prog = files.find(f => !/\.stl$/i.test(f.name));
+  const stl = files.find(f => /\.(stl|obj)$/i.test(f.name)), prog = files.find(f => !/\.(stl|obj)$/i.test(f.name));
   (async () => {
     if (stl) await openStl(stl);
     if (prog) await openProgram(prog);
@@ -274,7 +286,7 @@ function applyAssets(msg) {
   if (assets.stlTool) $('tD').value = +sim.activeTool.D.toFixed(3); else $('tD').value = sim.cfg.tool.D;
   showTools(); syncModalInputs(); updateMatHint();
 }
-async function readStl(file) { const m = parseStl(await file.arrayBuffer()); return { ...m, name: file.name }; }
+async function readStl(file) { const m = parseMesh(await file.arrayBuffer(), file.name); return { ...m, name: file.name }; }
 $('stlToolBtn').onclick = () => $('stlToolFile').click();
 $('stlHolderBtn').onclick = () => $('stlHolderFile').click();
 $('libBtn').onclick = () => $('libFile').click();

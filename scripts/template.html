@@ -183,7 +183,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="tNeckL">首下長さ <span class="unit">mm</span></label><input type="number" id="tNeckL" min="0" max="300" step="1" placeholder="なし"></div>
           <div class="row"><label for="tHolder">ホルダー</label><select id="tHolder"></select></div>
           <div class="seg"><button id="stlToolBtn" aria-pressed="false">工具 STL</button><button id="stlHolderBtn" aria-pressed="false">ホルダー STL</button><button id="libBtn" aria-pressed="false">工具ライブラリ</button></div>
-          <input type="file" id="stlToolFile" accept=".stl" hidden><input type="file" id="stlHolderFile" accept=".stl" hidden><input type="file" id="libFile" accept=".json,application/json" hidden>
+          <input type="file" id="stlToolFile" accept=".stl,.obj" hidden><input type="file" id="stlHolderFile" accept=".stl,.obj" hidden><input type="file" id="libFile" accept=".json,application/json" hidden>
           <button id="assetClear" hidden>読み込んだ工具・ホルダーを外す</button>
           <p class="hint" id="toolInfo" style="white-space:pre-line">ホルダーを選ぶと、シャンク・ホルダー・主軸端が素材に当たらないかを調べ、工具とホルダーを段付きのはりとして剛性を計算します。STL は工具の軸を Z、刃先を下にして書き出してください (寸法は mm)。工具ライブラリは Autodesk Fusion の JSON を読み、T 番号ごとの工具とホルダーを使います。</p>
           <p class="hint">プログラムのコメントに工具寸法があれば、その工具番号ではそちらを使います (直径・形状・刃数など、書かれている項目だけ)。</p>
@@ -249,8 +249,11 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
             <div class="row"><label for="cH">高さ Z <span class="unit">mm</span></label><input type="number" id="cH" min="1" max="500" step="1" value="30"></div>
           </div>
           <div style="display:grid;gap:8px" data-for="stl" hidden>
-            <button id="stlOpen" style="width:100%">STL ファイルを開く</button>
-            <input type="file" id="stlFile" accept=".stl,model/stl,application/sla" hidden>
+            <button id="stlOpen" style="width:100%">STL / OBJ ファイルを開く</button>
+            <input type="file" id="stlFile" accept=".stl,.obj,model/stl,model/obj,application/sla" hidden>
+            <div class="row"><label for="stlUnit">単位</label><select id="stlUnit"><option value="auto">自動</option><option value="mm">mm</option><option value="inch">inch</option><option value="m">m</option></select></div>
+            <div class="row"><label for="stlUp">上方向の軸</label><select id="stlUp"><option value="Z">Z (CAM の標準)</option><option value="Y">Y (多くの CAD の書き出し)</option><option value="-Y">−Y</option><option value="X">X</option></select></div>
+            <div class="row"><label for="stlRot">Z 軸まわりの回転</label><select id="stlRot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></div>
           </div>
           <p class="hint" id="stockInfo">「プログラム」はコメント <code>(STOCK 幅 奥行 高さ)</code> か <code>(STOCK CYL 直径 高さ)</code> を使い、無ければ切削送りの範囲から直方体を仮定します。</p>
           <div class="row"><label for="orgSel">プログラム原点</label><select id="orgSel">
@@ -268,10 +271,10 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         </fieldset>
         <fieldset>
           <legend>目標形状 (仕上がり)</legend>
-          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="tgOpen" aria-pressed="false">目標 STL を開く</button><button id="tgClear" aria-pressed="false" disabled>外す</button></div>
-          <input type="file" id="tgFile" accept=".stl,model/stl,application/sla" hidden>
+          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="tgOpen" aria-pressed="false">目標 STL / OBJ を開く</button><button id="tgClear" aria-pressed="false" disabled>外す</button></div>
+          <input type="file" id="tgFile" accept=".stl,.obj,model/stl,model/obj,application/sla" hidden>
           <div class="row"><label for="tol">公差 ± <span class="unit">mm</span></label><input type="number" id="tol" min="0.001" max="5" step="0.005" value="0.05"></div>
-          <p class="hint" id="tgInfo">CAM で使った仕上がり形状の STL を読み込むと、加工結果と比べて削り残し (青) と削り過ぎ (赤) を色で示します。STL はプログラムと同じ座標 (CAM のモデル座標) で置きます。上から見えるのは上面だけなので、張り出しの下は比べません。</p>
+          <p class="hint" id="tgInfo">CAM で使った仕上がり形状の STL を読み込むと、加工結果と比べて削り残し (青) と削り過ぎ (赤) を色で示します。STL はプログラムと同じ座標 (CAM のモデル座標) で置きます。単位と上方向の軸は素材の STL と同じ設定を使います (Z 軸まわりの回転はしません)。上から見えるのは上面だけなので、張り出しの下は比べません。</p>
         </fieldset>
         <button class="primary" id="btnLoad">この設定で再シミュレーション</button>
         <ul class="warnings" id="warnings"></ul>
