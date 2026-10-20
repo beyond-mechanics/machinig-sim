@@ -31,6 +31,9 @@ export const JC = {
   S50C: { A: 553.1, B: 600.8, n: 0.234, C: 0.0134, m: 1, Tm: 1460 }, // AISI 1045 (Jaspers & Dautzenberg)
   SUS304: { A: 310, B: 1000, n: 0.65, C: 0.07, m: 1, Tm: 1400 },     // AISI 304
   Ti64: { A: 862, B: 331, n: 0.34, C: 0.012, m: 0.8, Tm: 1604 },     // Ti-6Al-4V (Lee & Lin)
+  SCM440: { A: 598, B: 768, n: 0.2092, C: 0.0137, m: 0.807, Tm: 1520 }, // AISI 4140
+  SKD61: { A: 908.5, B: 321.3, n: 0.278, C: 0.028, m: 1.18, Tm: 1480 }, // AISI H13, hardened
+  IN718: { A: 1241, B: 622, n: 0.6522, C: 0.0134, m: 1.3, Tm: 1336 },   // Inconel 718
 };
 
 export function flowStress(jc, eps, epsDot, T) {
