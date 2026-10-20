@@ -940,7 +940,7 @@ function updateReport() {
   const lineOf = n => (codeLines[n - 1] || '').trim();
   const at = rec => rec ? ` (${rec.line}行)` : '';
   const items = [
-    ['加工時間', `${r.time.toFixed(1)} s`], ['うち切削', `${r.cut.toFixed(1)} s`],
+    ['加工時間', `${r.time.toFixed(1)} s`], ['うち切削', `${r.cut.toFixed(1)} s`], ['空送り (削らない送り)', `${r.air.toFixed(1)} s`],
     ['びびりの時間', `${(r.chatterShare * 100).toFixed(0)} %`],
     ['最大切削抵抗', r.peakF ? `${r.peakF.F.toFixed(0)} N${at(r.peakF)}` : '—'],
     ['最大振動', r.peakVib ? `${r.peakVib.vib.toFixed(1)} µm${at(r.peakVib)}` : '—'],
@@ -951,7 +951,7 @@ function updateReport() {
     ...r.tools.map(([T, [VB, VB0]]) => [`摩耗 ${T === '-' ? '工具' : 'T' + T}`, `VB ${(VB * 1000).toFixed(1)} µm${sim.done && VB - VB0 > 1e-6 ? ` · 約 ${partsPerTool(VB, VB0)} 個/本` : ''}`]),
   ];
   // numbers to compare against a saved run (all better when lower)
-  const nums = { 加工時間: r.time, うち切削: r.cut, びびりの時間: r.chatterShare * 100, 最大切削抵抗: r.peakF?.F, 最大振動: r.peakVib?.vib, 最高刃先温度: r.peakTemp?.temp, 最大工具応力: r.peakStress?.stress };
+  const nums = { 加工時間: r.time, うち切削: r.cut, '空送り (削らない送り)': r.air, びびりの時間: r.chatterShare * 100, 最大切削抵抗: r.peakF?.F, 最大振動: r.peakVib?.vib, 最高刃先温度: r.peakTemp?.temp, 最大工具応力: r.peakStress?.stress };
   for (const [T, [VB, VB0]] of r.tools) nums[`摩耗 ${T === '-' ? '工具' : 'T' + T}`] = (VB - VB0) * 1000;
   lastNums = { nums, name: `${$('gcInfo').dataset.file || SAMPLES[$('sample').value]?.name || 'プログラム'} · ${Math.round(sim.display.S || +$('ovS').value)} min⁻¹`.slice(0, 48), mat: sim.mat.name };
   const dl = $('rSum'); dl.innerHTML = '';
@@ -1073,14 +1073,16 @@ $('foRun').onclick = () => {
   foText = null; $('foLoad').disabled = $('foSave').disabled = true;
   if (!rep || !rep.lines.size || !sim.done) { $('foOut').innerHTML = '<p class="hint">プログラムを最後まで計算してから最適化してください (再生して最後まで、または進行バーで End キー)。</p>'; return; }
   const target = +$('foTarget').value > 0 ? +$('foTarget').value : defaultTarget(rep);
-  const opt = optimizeFeeds(rep, sim.mat, { Ftarget: target, maxUp: +$('foUp').value, maxDown: +$('foDown').value, stressLimit: 0.8 * ALLOWABLE_STRESS, nonlinear: sim.cfg.cuttingNonlinear });
   const feedLines = new Set(sim.path.filter(p => !p.rapid).map(p => p.line));
+  const lineF = new Map(); for (const p of sim.path) if (!p.rapid && !lineF.has(p.line)) lineF.set(p.line, p.F * (sim.cfg.feedOverride ?? 1));
+  const air = $('foAir').checked ? { lines: feedLines, k: 3, Fmax: 5000, F: l => lineF.get(l) || 0 } : null;
+  const opt = optimizeFeeds(rep, sim.mat, { Ftarget: target, maxUp: +$('foUp').value, maxDown: +$('foDown').value, stressLimit: 0.8 * ALLOWABLE_STRESS, nonlinear: sim.cfg.cuttingNonlinear, air });
   const factor = new Map([...opt.lines].map(([l, o]) => [l, o.k]));
   foText = rewriteFeeds(codeLines.join('\n'), feedLines, factor); foQ = 1; // the program that was run, not later edits
   const changed = [...opt.lines].filter(([, o]) => o.k !== 1).sort((a, b) => a[0] - b[0]);
   const up = changed.filter(([, o]) => o.k > 1).length, down = changed.length - up;
   const dt = opt.time1 - opt.time0;
-  const rows = changed.slice(0, 40).map(([l, o]) => `<tr><td>${l}</td><td class="code">${(codeLines[l - 1] || '').trim().replace(/[<&]/g, c => c === '<' ? '&lt;' : '&amp;')}</td><td class="n">×${o.k.toFixed(2)}</td><td class="n">${o.F0.toFixed(0)} → ${o.F1.toFixed(0)}</td><td>${o.why}</td></tr>`).join('');
+  const rows = changed.slice(0, 40).map(([l, o]) => `<tr><td>${l}</td><td class="code">${(codeLines[l - 1] || '').trim().replace(/[<&]/g, c => c === '<' ? '&lt;' : '&amp;')}</td><td class="n">×${o.k.toFixed(2)}</td><td class="n">${o.why === '空送り' ? '—' : `${o.F0.toFixed(0)} → ${o.F1.toFixed(0)}`}</td><td>${o.why}</td></tr>`).join('');
   $('foOut').innerHTML = `<p class="hint">目標 ${target.toFixed(0)} N で、送りを上げる行 ${up}・下げる行 ${down}。加工時間の見込み ${opt.time0.toFixed(1)} s → <b>${opt.time1.toFixed(1)} s</b> (${dt <= 0 ? '' : '+'}${(dt / Math.max(opt.time0, 1e-9) * 100).toFixed(0)} %)。読み込んで計算し直すと、実際の切削抵抗と時間を確かめられます。</p>` +
     (changed.length ? `<div class="rtable-wrap"><table class="rtable" aria-label="送りを変える行"><thead><tr><th>行</th><th>Gコード</th><th class="n">送り</th><th class="n">最大切削抵抗 N</th><th>備考</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="hint">変える行はありません。</p>');
   $('foLoad').disabled = $('foSave').disabled = !changed.length;

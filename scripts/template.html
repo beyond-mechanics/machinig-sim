@@ -442,6 +442,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <label>目標の切削抵抗 <span class="unit">N</span><input type="number" id="foTarget" min="1" step="10" placeholder="自動"></label>
           <label>送りの上限 <select id="foUp"><option value="1.25">×1.25</option><option value="1.5" selected>×1.5</option><option value="2">×2</option><option value="3">×3</option></select></label>
           <label>送りの下限 <select id="foDown"><option value="0.5" selected>×0.5</option><option value="0.7">×0.7</option><option value="1">下げない</option></select></label>
+          <label class="check" style="align-self:center"><input type="checkbox" id="foAir"> 空送りも速く (×3、最大 5000 mm/min)</label>
           <button id="foRun">送りを最適化する</button>
           <button id="soRun">回転数を最適化 (びびり回避)</button>
         </div>

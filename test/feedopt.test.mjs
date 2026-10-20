@@ -99,4 +99,16 @@ import { MATERIALS } from '../src/materials.js';
   assert.ok(r.worst < 1, JSON.stringify(r));
   assert.equal(rewriteSpindle('N30 (ROUGH) S8000 M03 (S1)\nG1 X1 F100 ; F2', 1.5), 'N30 (ROUGH) S12000 M03 (S1)\nG1 X1 F150 ; F2');
 }
+// air cutting: feed moves that cut nothing go faster, up to the air-feed limit; cutting lines and
+// rapids are not touched by it
+{
+  const rep = new LineReport();
+  const a = rep.rec(20); Object.assign(a, { t: 3, cut: 0, feedT: 3 });
+  const b = rep.rec(21); Object.assign(b, { t: 2, cut: 0, feedT: 2 });
+  const c = rep.rec(22); Object.assign(c, { t: 1, cut: 0 }); // a rapid
+  const opt = optimizeFeeds(rep, MATERIALS.S50C, { Ftarget: 300, air: { lines: new Set([20, 21]), k: 3, Fmax: 5000, F: l => (l === 20 ? 1000 : 2500) } });
+  assert.equal(opt.lines.get(20).k, 3); assert.equal(opt.lines.get(21).k, 2); assert.ok(!opt.lines.has(22));
+  assert.ok(Math.abs(opt.time1 - (1 + 1 + 1)) < 1e-9);
+  assert.ok(Math.abs(rep.summary().air - 5) < 1e-9);
+}
 console.log('feedopt tests passed');

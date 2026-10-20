@@ -18,14 +18,21 @@ export function forceRatio(mat, h, k, nonlinear = true) {
   return g(k * h) / g(h);
 }
 
-// report: LineReport; opts: { Ftarget [N], maxUp, maxDown, stressLimit [MPa], nonlinear }
+// report: LineReport; opts: { Ftarget [N], maxUp, maxDown, stressLimit [MPa], nonlinear,
+// air: { lines: Set of feed-move lines, k, Fmax [mm/min], F: line → feed } to speed up feed moves
+// that cut nothing (approaches, links in the air) }
 // Returns { lines: Map(line → {k, F0, F1, why}), time0, time1 }
 export function optimizeFeeds(report, mat, opts) {
-  const { Ftarget, maxUp = 1.5, maxDown = 0.5, stressLimit = Infinity, nonlinear = true } = opts;
+  const { Ftarget, maxUp = 1.5, maxDown = 0.5, stressLimit = Infinity, nonlinear = true, air = null } = opts;
   const lines = new Map();
   let time0 = 0, time1 = 0;
   for (const r of report.lines.values()) {
     time0 += r.t;
+    if (air && !(r.cut > 0) && air.lines.has(r.line) && r.t > 0) {
+      // a feed move that never touched the material: faster, up to the air-feed limit
+      const F = air.F(r.line), k = Math.round(Math.max(1, Math.min(air.k, F > 0 ? air.Fmax / F : air.k)) * 100) / 100;
+      if (k > 1) { lines.set(r.line, { k, F0: 0, F1: 0, why: '空送り' }); time1 += r.t / k; continue; }
+    }
     if (!(r.cut > 0) || !(r.F > 1) || !(r.h > 0)) { time1 += r.t; continue; }
     // the force this line may reach: the target, and the stress limit scaled back to a force
     let Fmax = Ftarget;

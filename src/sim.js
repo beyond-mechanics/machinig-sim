@@ -428,7 +428,7 @@ export class Simulator {
       if (this.wall && e.wk) this.stock.markWall(p.x + dx, p.y + dy, R, e.wnx, e.wny, Math.max(0, e.runMeanW * 1e6));
       this.pos = p;
       const cutNow = (ap > 0.01 || endCut) && !b.rapid;
-      this.report.time(b.line, dtm, cutNow);
+      this.report.time(b.line, dtm, cutNow, !b.rapid);
       if (cutNow) this.lastCutLine = b.line;
       if (this.segS >= segLen - 1e-9) this.nextSeg();
     }

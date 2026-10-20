@@ -4,17 +4,18 @@
 // to the line being worked on at the end of the frame (at high playback speeds a frame spans
 // several lines).
 
-const FIELDS = ['t', 'cut', 'F', 'vib', 'defl', 'temp', 'stress', 'chatter', 'marginal', 'swing', 'h', 'hw', 'pst', 'pex', 'ap'];
+const FIELDS = ['t', 'cut', 'feedT', 'F', 'vib', 'defl', 'temp', 'stress', 'chatter', 'marginal', 'swing', 'h', 'hw', 'pst', 'pex', 'ap'];
 
 export class LineReport {
   constructor() { this.lines = new Map(); this.tools = new Map(); }
   rec(line) {
     let r = this.lines.get(line);
-    if (!r) { r = { line, t: 0, cut: 0, F: 0, vib: 0, defl: 0, temp: 0, stress: 0, chatter: 0, marginal: 0, swing: 0, h: 0, hw: 0, pst: 0, pex: Math.PI, ap: 0 }; this.lines.set(line, r); }
+    if (!r) { r = { line, t: 0, cut: 0, feedT: 0, F: 0, vib: 0, defl: 0, temp: 0, stress: 0, chatter: 0, marginal: 0, swing: 0, h: 0, hw: 0, pst: 0, pex: Math.PI, ap: 0 }; this.lines.set(line, r); }
     return r;
   }
   // machine time on a line (cutting or not)
-  time(line, dt, cutting) { const r = this.rec(line); r.t += dt; if (cutting) r.cut += dt; }
+  // machine time on a line (cutting or not; feed: a feed move, not a rapid)
+  time(line, dt, cutting, feed = false) { const r = this.rec(line); r.t += dt; if (cutting) r.cut += dt; if (feed) r.feedT += dt; }
   // one frame's peaks for the line; state 'chatter' | 'marginal' | …, dt: machine time of the frame
   sample(line, v, state, dt) {
     const r = this.rec(line);
@@ -61,7 +62,7 @@ export class LineReport {
     issues.sort((a, b) => b.score - a.score);
     const cut = sum('cut');
     return {
-      time: sum('t'), cut, chatterShare: cut > 0 ? sum('chatter') / cut : 0,
+      time: sum('t'), cut, air: rows.reduce((a, r) => a + (r.cut > 0 ? 0 : r.feedT || 0), 0), chatterShare: cut > 0 ? sum('chatter') / cut : 0,
       peakF: top('F'), peakTemp: top('temp'), peakStress: top('stress'), peakVib: top('vib'),
       tools: [...this.tools], issues,
     };
