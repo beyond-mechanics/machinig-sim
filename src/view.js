@@ -78,7 +78,7 @@ export class View {
     wg.setIndex(wi);
     this.wallGeo = wg;
     const base = new T.Color(...(mat.surf || mat.chip)).multiplyScalar(0.8).convertSRGBToLinear();
-    this.walls = new T.Mesh(wg, new T.MeshStandardMaterial({ color: base, metalness: 0.45, roughness: 0.62, side: T.DoubleSide }));
+    this.walls = new T.Mesh(wg, sideMaterial(base));
     this.walls.castShadow = this.walls.receiveShadow = true;
     // machine table under the stock: cast iron with T-slots along X (18 mm slots at 63 mm pitch,
     // as on a vertical machining centre); ground lands, dark slot floors
@@ -218,7 +218,8 @@ export class View {
     // ground carbide: polished land and rake face, duller flute gullet (vertex shade)
     this.fluteMat = new T.MeshStandardMaterial({ color: lin(0xc4cad2), vertexColors: true, metalness: 0.9, roughness: 0.24, transparent: true });
     this.shankMat = new T.MeshStandardMaterial({ color: lin(0xaeb5bd), metalness: 0.85, roughness: 0.35 });
-    this.holderMat = new T.MeshStandardMaterial({ color: lin(0x2f3338), metalness: 0.7, roughness: 0.35 });
+    this.holderMat = new T.MeshStandardMaterial({ color: lin(0x2f3338), metalness: 0.8, roughness: 0.3 });  // black-oxide steel
+    this.nutMat = new T.MeshStandardMaterial({ color: lin(0xb9bfc7), metalness: 0.92, roughness: 0.18 });   // polished nut
   }
 
   // coating of the fluted part (the look only): uncoated carbide, AlTiN, TiAlN, TiN, DLC
@@ -258,14 +259,12 @@ export class View {
       for (const b of bands) if (b.part === 'holder') { pts.push(new T.Vector2(b.r0 ?? b.r, b.z0), new T.Vector2(b.r1 ?? b.r, b.z1)); }
       pts.unshift(new T.Vector2(Math.max(0.1, (t.shankD || t.D) / 2), pts[0].y));
       pts.push(new T.Vector2(0.1, pts[pts.length - 1].y));
-      const lg = new T.LatheGeometry(pts, 64); lg.rotateX(Math.PI / 2);
+      const lg = new T.LatheGeometry(pts, 96); lg.rotateX(Math.PI / 2);
       this.spin.add(new T.Mesh(lg, this.holderMat));
     } else {
-      // no holder chosen: the original stylised collet nut + holder body above the stickout
-      const hg1 = new T.CylinderGeometry(R * 1.9, R * 2.3, 14, 40); hg1.rotateX(Math.PI / 2); hg1.translate(0, 0, t.stickout + 7);
-      const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
-      const hg3 = new T.CylinderGeometry(R * 4.4, R * 4.4, 30, 40); hg3.rotateX(Math.PI / 2); hg3.translate(0, 0, t.stickout + 51);
-      this.spin.add(new T.Mesh(hg1, this.holderMat), new T.Mesh(hg2, this.holderMat), new T.Mesh(hg3, this.holderMat));
+      // no holder chosen (the tool alone is checked for interference): drawn as an ER collet
+      // chuck on a BT40 flange so the picture reads as a machine, not as interference geometry
+      this.addDefaultHolder(t, R);
     }
     this.spin.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // tool hangs from the pivot: children are offset by -stickout
@@ -284,6 +283,20 @@ export class View {
     this.blurGroup.visible = false;
     this.pivot.add(this.blurGroup);
     this.flute = flute;
+  }
+
+  // ER-style collet chuck: polished nut with chamfers and a spanner groove, dark body tapering
+  // up to a BT40 flange (Ø63, with its 60° V-groove)
+  addDefaultHolder(t, R) {
+    const T = THREE, z = t.stickout, rIn = Math.max(R, (t.shankD || t.D) / 2) + 0.4;
+    const nr = Math.max(R * 2.6, 15), nh = Math.max(16, nr * 1.1);
+    const lathe = (pts, mat) => { const g = new T.LatheGeometry(pts.map(([r, h]) => new T.Vector2(r, z + h)), 96); g.rotateX(Math.PI / 2); const m = new T.Mesh(g, mat); this.spin.add(m); return m; };
+    // collet visible below the nut
+    lathe([[rIn, -0.01], [rIn + 1.6, 0.6], [rIn + 2.4, 3], [rIn + 2.4, 3.2], [0.1, 3.2]], this.shankMat);
+    lathe([[rIn + 2.4, 2.5], [nr - 1.4, 2.5], [nr, 3.9], [nr, nh * 0.42], [nr - 0.9, nh * 0.47], [nr - 0.9, nh * 0.56], [nr, nh * 0.61], [nr, nh - 1.2], [nr - 1.2, nh], [0.1, nh]], this.nutMat);
+    const b0 = nh, b1 = nh + 34, fr = 31.5, fh = 15.9;
+    lathe([[nr * 0.92, b0], [Math.min(fr - 6, nr * 1.25), b1 - 4], [fr - 4, b1], [fr, b1 + 1.2], [fr, b1 + fh * 0.3], [fr - 3.2, b1 + fh * 0.5], [fr, b1 + fh * 0.7], [fr, b1 + fh - 1], [fr - 1, b1 + fh], [0.1, b1 + fh]], this.holderMat);
+    // (the spindle nose above is not drawn: at its real Ø150 it hides the cut from above)
   }
 
   // red markers where the shank, holder or spindle touched the stock
@@ -309,7 +322,7 @@ export class View {
     // interference: the colliding part glows red for a moment
     if (collide) this.hitGlow = 1;
     this.hitGlow = Math.max(0, (this.hitGlow || 0) - 0.04);
-    this.holderMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0);
+    this.holderMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0); this.nutMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0);
     this.shankMat.emissive.setRGB(0.5 * this.hitGlow, 0, 0);
     this.pivot.position.set(pos.x, pos.y, pos.z + L);
     const sx = Math.max(-0.9, Math.min(0.9, dy / L)), sy = Math.max(-0.9, Math.min(0.9, dx / L));
@@ -736,6 +749,27 @@ export class View {
 }
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// Outer faces of the stock: a sawn / face-milled plate, fine horizontal marks and mottling
+function sideMaterial(color) {
+  const T = THREE, m = new T.MeshStandardMaterial({ color, metalness: 0.5, roughness: 0.55, side: T.DoubleSide });
+  m.extensions = { derivatives: true };
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vWP;
+        float h1(float x) { return fract(sin(x * 91.17) * 43758.5); }
+        float n1(float x) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(h1(i), h1(i + 1.0), f); }`)
+      .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
+        float ph = vWP.z * 6.0 + 0.3 * n1((vWP.x + vWP.y) * 0.4);
+        float fw = fwidth(ph), amp = smoothstep(0.5, 0.15, fw);
+        float mark = n1(ph * 3.0) * amp;
+        diffuseColor.rgb *= 0.88 + 0.12 * mark + 0.05 * n1((vWP.x + vWP.y) * 0.07 + vWP.z * 0.2);
+        roughnessFactor += 0.12 * (mark - 0.5);`);
+  };
+  return m;
+}
 
 // screen-space backdrop: the darker upper enclosure fading to the lit floor area
 function backdropTexture() {
