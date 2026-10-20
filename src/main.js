@@ -36,7 +36,7 @@ for (const [k, s] of Object.entries(SAMPLES)) $('sample').add(new Option(s.name,
 $('sample').value = 'demo';
 $('code').value = SAMPLES.demo.code;
 
-let stockMode = 'prog', stlSpec = null, targetSpec = null, codeLines = [];
+let stockShape = '', stockMode = 'prog', stlSpec = null, targetSpec = null, codeLines = [];
 // work coordinate systems other than G54: offset from G54 [mm], kept across reloads
 const wcsDelta = {};
 function stockSetup() {
@@ -69,7 +69,7 @@ function loadProgram() {
   if ($('orgSel').value !== 'manual') for (const k of ['x', 'y', 'z']) $('o' + k.toUpperCase()).value = +sim.origin[k].toFixed(3);
   const sz = sim.stockSize, sp = sim.stockSpec;
   const shape = sp.type === 'cyl' ? `丸棒 φ${sp.d} × ${sp.h} mm` : sp.type === 'stl' ? `${/\.obj$/i.test(sp.name || '') ? 'OBJ' : CAD_RE.test(sp.name || '') ? 'STEP' : 'STL'} ${sp.name || ''} ${sz.w.toFixed(1)} × ${sz.l.toFixed(1)} × ${sz.h.toFixed(1)} mm (${sp.count.toLocaleString()} 三角形${sp.scale && sp.scale !== 1 ? `、×${sp.scale} で mm に換算` : ''})` : `直方体 ${sz.w} × ${sz.l} × ${sz.h} mm`;
-  $('stockInfo').textContent = `${shape} · 格子 ${sim.stockCell} mm`;
+  $('stockInfo').textContent = `${shape} · 格子 ${sim.stockCell} mm`; stockShape = shape;
   showTools();
   showWcs();
   syncModalInputs();
@@ -897,6 +897,46 @@ $('rBase').onclick = () => {
   else if (lastNums && sim.done) { baseline = JSON.parse(JSON.stringify(lastNums)); $('rBase').textContent = `比較の基準を外す (${baseline.name})`; }
   else { $('rHint').textContent = 'プログラムを最後まで計算してから基準にしてください。'; return; }
   reportShown = ''; updateReport();
+};
+// ---------- setup sheet: one printable page for the shop floor ----------
+const COOL_NAME = { dry: 'ドライ', air: 'エアブロー', flood: 'クーラント', through: 'スルースピンドル' };
+function setupSheet() {
+  const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const rep = currentReport(), sum = rep?.lines.size ? rep.summary({ stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK }) : null;
+  const name = $('gcInfo').dataset.file || SAMPLES[$('sample').value]?.name || 'プログラム';
+  const o = sim.origin, feeds = sim.path.filter(p => !p.rapid);
+  const Ss = feeds.map(p => p.S * (sim.cfg.spindleOverride ?? 1)), Fs = feeds.map(p => p.F * (sim.cfg.feedOverride ?? 1));
+  const range = (a, u) => { if (!a.length) return '—'; const lo = Math.round(Math.min(...a)), hi = Math.round(Math.max(...a)); return `${lo.toLocaleString()}${hi > lo ? `〜${hi.toLocaleString()}` : ''} ${u}`; };
+  const wcsRows = (sim.wcsUsed || ['G54']).map(n => { const p = n === 'G54' ? o : sim.wcs?.[n] || o; return `<tr><td>${esc(n)}</td><td>${p.x.toFixed(3)}</td><td>${p.y.toFixed(3)}</td><td>${p.z.toFixed(3)}</td><td>${n === 'G54' ? '' : `Δ ${(p.x - o.x).toFixed(3)} ${(p.y - o.y).toFixed(3)} ${(p.z - o.z).toFixed(3)}`}</td></tr>`; }).join('');
+  const usedT = [...new Set(sim.path.map(p => p.tool))];
+  const wear = new Map(sum?.tools || []);
+  const toolRows = usedT.map(T => { const t = sim.toolFor(T ?? null), w = wear.get(T ?? '-'); return `<tr><td>${T == null ? '(T 番号なし)' : 'T' + T}</td><td>φ${+t.D.toFixed(3)} ${t.type === 'ball' ? 'ボール' : t.type === 'bull' ? 'ラジアス' : 'フラット'} ${t.N} 枚刃</td><td>${+t.stickout.toFixed(1)}</td><td>${esc(t.holderName || '')}</td><td>${w ? `${(w[1] * 1000).toFixed(1)} → ${(w[0] * 1000).toFixed(1)} µm${w[0] - w[1] > 1e-6 ? ` (約 ${partsPerTool(w[0], w[1])} 個/本)` : ''}` : '—'}</td></tr>`; }).join('');
+  const issues = (sum?.issues || []).slice(0, 12).map(it => `<tr><td>${it.line}</td><td class="code">${esc((codeLines[it.line - 1] || '').trim())}</td><td>${esc(it.why.join('・'))}</td><td>${esc(adviceFor(it, { mat: sim.mat, nonlinear: sim.cfg.cuttingNonlinear, S: 0, F: 0, D: sim.activeTool.D, limits: { stress: ALLOWABLE_STRESS, temp: 900, swing: SWING_CRACK } })[0] || '')}</td></tr>`).join('');
+  view.render();
+  let img = '';
+  try { img = view.canvas.toDataURL('image/jpeg', 0.85); } catch { /* tainted or lost context */ }
+  const kv = (k, v) => `<tr><th>${k}</th><td>${v}</td></tr>`;
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>段取りシート ${esc(name)}</title>
+<style>body{font:13px/1.5 system-ui,sans-serif;color:#111;margin:24px;max-width:900px}h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #999}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:3px 6px;text-align:left;vertical-align:top}th{background:#f2f2f2;width:9em}td.code{font-family:ui-monospace,monospace}
+img{max-width:100%;border:1px solid #bbb;margin-top:6px}.meta{color:#555}@media print{body{margin:10mm}}</style></head><body>
+<h1>段取りシート</h1><p class="meta">${esc(name)} · ${new Date().toLocaleString('ja-JP')} · 3軸加工シミュレーターで作成 (計算値は目安です)</p>
+<h2>概要</h2><table>${kv('被削材', esc(sim.mat.name) + (sim.mat.coefSource ? `(切削係数: ${esc(sim.mat.coefSource)})` : ''))}${kv('素材', esc(stockShape))}${kv('クーラント', COOL_NAME[sim.cfg.coolant] || esc(sim.cfg.coolant))}
+${kv('主軸回転', range(Ss, 'min⁻¹'))}${kv('送り速度', range(Fs, 'mm/min'))}${kv('加工時間', sum ? `${sum.time.toFixed(1)} s (うち切削 ${sum.cut.toFixed(1)} s)${sim.done ? '' : ' ※途中まで'}` : `${sim.totalTime.toFixed(1)} s (見込み)`)}
+${sum ? kv('最大切削抵抗', sum.peakF ? `${sum.peakF.F.toFixed(0)} N (${sum.peakF.line} 行)` : '—') + kv('びびり', `切削時間の ${(sum.chatterShare * 100).toFixed(0)} %`) : ''}</table>
+<h2>ワーク座標系 (素材上面の左手前の角から mm)</h2><table><tr><th>座標系</th><th>X</th><th>Y</th><th>Z</th><th>G54 からのずれ</th></tr>${wcsRows}</table>
+<h2>工具</h2><table><tr><th>工具</th><th>形状</th><th>突出し mm</th><th>ホルダー</th><th>摩耗 VB (この加工)</th></tr>${toolRows}</table>
+${issues ? `<h2>注意が必要な行</h2><table><tr><th>行</th><th>Gコード</th><th>状態</th><th>対策の目安</th></tr>${issues}</table>` : ''}
+${img ? `<h2>加工結果</h2><img src="${img}" alt="加工結果の 3D 表示">` : ''}
+</body></html>`;
+}
+$('rSheet').onclick = async () => {
+  const text = setupSheet(), name = ($('gcInfo').dataset.file || 'program').replace(/(_opt)?\.[^.]+$/, '') + '_setup.html';
+  if (downloads) { try { await downloads.save({ filename: name, data: text }); } catch { /* declined */ } return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/html' }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 $('rCsv').onclick = async () => {
   const rep = currentReport(); if (!rep) return;
