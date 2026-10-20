@@ -2,6 +2,9 @@
 // Supported: G0 G1 G2 G3 (I/J/K or R, helical) in G17/G18/G19, G20 G21 G90 G91 G94 G95,
 // canned cycles G73 G81-G89 with G98/G99 and K/L repeats, G28/G53 (to the home height),
 // tool changes (T.. M6) with tool definitions read from comments, F S M3 M4 M5 M30.
+// Work coordinate systems G54-G59 and G54.1 P1-P48: each move records its system (mv.wcs);
+// opts.wcs gives every system's zero in a common frame, so a change of system re-expresses the
+// current position (incremental moves stay right). G52 shifts the local zero of the system.
 // Cutter compensation G41/G42/G40 is recorded on each move (mv.comp, mv.compD) and applied by
 // cuttercomp.js once the tool radii are known. Macros and subprograms are ignored with a warning.
 
@@ -47,10 +50,14 @@ export function parseToolComment(text) {
 
 // opts.start: position before the first move (program coordinates); opts.homeZ: height that
 // G28/G53 Z moves go to (the machine's Z home is unknown, so it is taken as a safe height)
+// opts.wcs: { G54: {x,y,z}, G55: … } zero of each system in one common frame (missing ones
+// coincide with G54)
 export function parseGcode(text, opts = {}) {
   const start = opts.start || { x: 0, y: 0, z: 50 };
+  const W = opts.wcs || {};
+  const zeroOf = name => W[name] || W.G54 || { x: 0, y: 0, z: 0 };
   const homeZ = opts.homeZ ?? start.z;
-  const st = { x: start.x, y: start.y, z: start.z, abs: true, unit: 1, motion: 0, plane: 17, perRev: false, F: 1000, S: 10000, spindle: false, T: null, pendingT: null, cycle: null, retractR: false, comp: null, compD: null };
+  const st = { x: start.x, y: start.y, z: start.z, abs: true, unit: 1, motion: 0, plane: 17, perRev: false, F: 1000, S: 10000, spindle: false, T: null, pendingT: null, cycle: null, retractR: false, comp: null, compD: null, wcs: 'G54', local: { x: 0, y: 0, z: 0 } };
   const moves = [];
   const warnings = [];
   const meta = { tools: {}, workOffsets: new Set(), toolOrder: [] };
@@ -60,7 +67,7 @@ export function parseGcode(text, opts = {}) {
   const push = (ln, to, rapid, extra) => {
     const from = { x: st.x, y: st.y, z: st.z };
     if (to.x === from.x && to.y === from.y && to.z === from.z && !extra?.arc) return;
-    const mv = { rapid, from, to: { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, ...extra };
+    const mv = { rapid, from, to: { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, wcs: st.wcs, local: st.local, ...extra };
     if (!st.spindle && !rapid) warn(ln, '主軸停止中の切削送り');
     moves.push(mv);
     st.x = to.x; st.y = to.y; st.z = to.z;
@@ -81,7 +88,7 @@ export function parseGcode(text, opts = {}) {
     const words = [...line.matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)].map(m => [m[1], parseFloat(m[2]), m[2]]);
     if (!words.length) continue;
     const w = {};
-    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false;
+    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false;
     for (const [k, v, s] of words) {
       if (k === 'G') {
         if ([0, 1, 2, 3].includes(v)) { st.motion = v; hasMotionWord = true; st.cycle = null; }
@@ -101,8 +108,9 @@ export function parseGcode(text, opts = {}) {
           st.cycle = { g: v, initZ: st.cycle ? st.cycle.initZ : st.z, R: st.cycle?.R, Z: st.cycle?.Z, Q: st.cycle?.Q, P: st.cycle?.P };
           cycleWord = true;
         }
-        else if (v >= 54 && v <= 59) meta.workOffsets.add(`G${v}`);
-        else if (Math.floor(v) === 54) meta.workOffsets.add(`G${v}`);
+        else if (v >= 54 && v <= 59 && Number.isInteger(v)) newWcs = `G${v}`;
+        else if (Math.abs(v - 54.1) < 1e-6) newWcs = 'G54.1';
+        else if (v === 52) local = true;
         else if (v === 41 || v === 42) { if (st.plane !== 17) warn(ln, `工具径補正 G${v} は G17 平面のみ対応`); else st.comp = v; }
         else if (v === 40) st.comp = null;
         else if (v === 68 || v === 51 || v === 16) warn(ln, `座標変換 G${v} は未対応`);
@@ -119,6 +127,25 @@ export function parseGcode(text, opts = {}) {
         w[k] = v;
         if ('XYZ'.includes(k) && !s.includes('.') && Math.abs(v) >= 1000) noDecimal = true;
       }
+    }
+    if (newWcs) {
+      // G54.1 P n: the extended systems; the P word belongs to it on this block
+      if (newWcs === 'G54.1') { newWcs = w.P !== undefined ? `G54.1P${Math.round(w.P)}` : 'G54.1P1'; delete w.P; }
+      if (newWcs !== st.wcs) {
+        // the tool stays where it is: express its position in the new system
+        const a = zeroOf(st.wcs), b = zeroOf(newWcs);
+        st.x += a.x - b.x; st.y += a.y - b.y; st.z += a.z - b.z;
+        st.wcs = newWcs;
+      }
+      meta.workOffsets.add(newWcs);
+    }
+    if (local) {
+      // G52: local zero inside the current system (absolute shift; G52 X0 Y0 Z0 cancels)
+      const u0 = st.unit, nl = { x: w.X !== undefined ? w.X * u0 : st.local.x, y: w.Y !== undefined ? w.Y * u0 : st.local.y, z: w.Z !== undefined ? w.Z * u0 : st.local.z };
+      st.x -= nl.x - st.local.x; st.y -= nl.y - st.local.y; st.z -= nl.z - st.local.z;
+      st.local = nl;
+      delete w.X; delete w.Y; delete w.Z;
+      meta.localShift = true;
     }
     if (m6 && st.pendingT !== null) {
       st.T = st.pendingT;
@@ -138,7 +165,7 @@ export function parseGcode(text, opts = {}) {
     const F0 = st.F; st.F = feed();
     if (home) {
       // G28/G30/G53: only the Z part is meaningful without the machine's coordinate system
-      if (w.Z !== undefined) push(ln, { x: st.x, y: st.y, z: homeZ }, true);
+      if (w.Z !== undefined) push(ln, { x: st.x, y: st.y, z: homeZ + zeroOf('G54').z - zeroOf(st.wcs).z - st.local.z }, true);
       if (w.X !== undefined || w.Y !== undefined) warn(ln, '原点復帰の X/Y は無視 (機械座標が不明なため)');
     } else if (st.cycle && (cycleWord || hasAxis || w.R !== undefined)) {
       runCycle(ln, w, u);
@@ -155,7 +182,8 @@ export function parseGcode(text, opts = {}) {
     if (end) break;
   }
   if (noDecimal) warnings.push('小数点のない座標値を mm として扱いました (最小設定単位 0.001 mm の機械では値が1000倍になります)');
-  if (meta.workOffsets.size > 1) warnings.push(`複数のワーク座標系 (${[...meta.workOffsets].join(' ')}) は同じ原点として扱います`);
+  const unset = [...meta.workOffsets].filter(n => n !== 'G54' && !W[n]);
+  if (unset.length) warnings.push(`ワーク座標系 ${unset.join(' ')} の原点が未設定のため G54 と同じ位置として扱います (プログラムタブで設定できます)`);
   const undefinedTools = meta.toolOrder.filter(t => !meta.tools[t]);
   if (undefinedTools.length && Object.keys(meta.tools).length) warnings.push(`工具 ${undefinedTools.map(t => 'T' + t).join(' ')} の寸法がコメントに無いため「加工条件」の工具で計算します`);
   meta.workOffsets = [...meta.workOffsets];
@@ -216,9 +244,9 @@ const CHORD_TOL = 0.001; // largest chord error of an arc [mm]
 // Convert moves into a polyline. Each point carries the attributes of the segment ending at it.
 export function discretize(moves, maxSeg = 0.5) {
   if (!moves.length) return [];
-  const pts = [{ ...moves[0].from, rapid: true, F: moves[0].F, S: moves[0].S, line: moves[0].line, tool: moves[0].tool }];
+  const pts = [{ ...moves[0].from, rapid: true, F: moves[0].F, S: moves[0].S, line: moves[0].line, tool: moves[0].tool, wcs: moves[0].wcs, local: moves[0].local }];
   for (const mv of moves) {
-    const attr = { rapid: mv.rapid, F: mv.F, S: mv.S, line: mv.line, tool: mv.tool };
+    const attr = { rapid: mv.rapid, F: mv.F, S: mv.S, line: mv.line, tool: mv.tool, wcs: mv.wcs, local: mv.local };
     if (mv.arc) {
       const { ca, cb, cw } = mv.arc;
       const [a, b, n] = mv.arc.axes || ['x', 'y', 'z'];

@@ -29,6 +29,8 @@ $('sample').value = 'demo';
 $('code').value = SAMPLES.demo.code;
 
 let stockMode = 'prog', stlSpec = null, targetSpec = null, codeLines = [];
+// work coordinate systems other than G54: offset from G54 [mm], kept across reloads
+const wcsDelta = {};
 function stockSetup() {
   const num = id => +$(id).value;
   let stock = null;
@@ -37,7 +39,7 @@ function stockSetup() {
   else if (stockMode === 'stl' && stlSpec) stock = stlSpec;
   const kind = $('orgSel').value;
   const origin = kind === 'manual' ? { x: num('oX'), y: num('oY'), z: num('oZ') } : kind;
-  return { stock, origin, target: targetSpec };
+  return { stock, origin, target: targetSpec, wcsDelta };
 }
 function loadProgram() {
   const setup = stockSetup();
@@ -59,6 +61,7 @@ function loadProgram() {
   const shape = sp.type === 'cyl' ? `丸棒 φ${sp.d} × ${sp.h} mm` : sp.type === 'stl' ? `STL ${sp.name || ''} ${sz.w.toFixed(1)} × ${sz.l.toFixed(1)} × ${sz.h.toFixed(1)} mm (${sp.count.toLocaleString()} 三角形)` : `直方体 ${sz.w} × ${sz.l} × ${sz.h} mm`;
   $('stockInfo').textContent = `${shape} · 格子 ${sim.stockCell} mm`;
   showTools();
+  showWcs();
   syncModalInputs();
   updateMatHint();
   document.querySelector('[data-color="devTarget"]').disabled = !targetSpec;
@@ -77,6 +80,27 @@ function showTools() {
       : `T${T}: 寸法の記載なし → 加工条件の工具 φ${t.D}`;
     ul.appendChild(li);
   }
+}
+// one row per work coordinate system the program uses (besides G54): its offset from G54
+function showWcs() {
+  const used = (sim.wcsUsed || []).filter(n => n !== 'G54'), box = $('wcsRows');
+  box.innerHTML = '';
+  for (const name of used) {
+    // an entry exists only once a value was typed (until then the program warns it is unset)
+    const d = wcsDelta[name] || { x: 0, y: 0, z: 0 };
+    const row = document.createElement('div'); row.className = 'wcsrow';
+    const lab = document.createElement('span'); lab.textContent = name; row.appendChild(lab);
+    for (const k of ['x', 'y', 'z']) {
+      const inp = document.createElement('input'); inp.type = 'number'; inp.step = '0.1'; inp.value = d[k];
+      inp.id = `wcs-${name}-${k}`; inp.setAttribute('aria-label', `${name} の Δ${k.toUpperCase()} [mm]`); inp.title = `G54 からの Δ${k.toUpperCase()} [mm]`;
+      inp.onchange = () => { const v = +inp.value; if (Number.isFinite(v)) { d[k] = v; wcsDelta[name] = d; loadProgram(); } };
+      row.appendChild(inp);
+    }
+    box.appendChild(row);
+  }
+  if (used.length) { const hdr = document.createElement('div'); hdr.className = 'wcsrow'; hdr.innerHTML = '<span></span><span>ΔX</span><span>ΔY</span><span>ΔZ</span>'; box.prepend(hdr); }
+  $('wcsBox').hidden = !used.length;
+  view.setWcs((sim.wcsUsed || ['G54']).map(n => ({ name: n, ...(sim.wcs[n] || sim.origin) })));
 }
 function firstSpindle(path) { const p = path.find(q => !q.rapid); return p ? p.S : path[0]?.S; }
 
@@ -98,6 +122,9 @@ $('sample').onchange = e => {
   const sm = SAMPLES[e.target.value];
   $('gcInfo').textContent = sm.name;
   $('code').value = sm.code;
+  // a sample brings its own work offsets (or none)
+  for (const k of Object.keys(wcsDelta)) delete wcsDelta[k];
+  Object.assign(wcsDelta, JSON.parse(JSON.stringify(sm.wcsDelta || {})));
   // a sample brings its own target shape (or none)
   targetSpec = sm.target ? sm.target() : null;
   $('tgClear').disabled = !targetSpec;

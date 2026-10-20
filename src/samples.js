@@ -330,4 +330,43 @@ M30
       return { tris, count: tris.length / 9, min: [0, 0, -5], max: [60, 60, 0], name: '角ボス (組み込み)' };
     },
   },
+  twin: {
+    name: 'ワーク座標系: 2個取り (G54 と G55)',
+    // G55 sits 60 mm to the right of G54 (as a setup sheet would give it)
+    wcsDelta: { G55: { x: 60, y: 0, z: 0 } },
+    code: `(STOCK 120 60 15)
+(TOOL T1 D8 N3 FLAT L20 SO30)
+(同じ部品を 2 個取りする。1 個目は G54、2 個目は G55 [G54 から X+60])
+(部品のプログラムは同じで、座標系だけを替える。G55 の位置はプログラムタブで変えられる)
+G21 G90 G17
+T1 M6
+S12000 M3
+G54
+G0 X10 Y15 Z5
+G1 Z-3 F500
+G1 X50 F1500
+G1 Y45
+G1 X10
+G1 Y15
+G0 Z5
+G0 X30 Y30
+G1 Z-6 F300
+G2 X30 Y30 I-6 J0 F1000
+G0 Z5
+G55
+G0 X10 Y15 Z5
+G1 Z-3 F500
+G1 X50 F1500
+G1 Y45
+G1 X10
+G1 Y15
+G0 Z5
+G0 X30 Y30
+G1 Z-6 F300
+G2 X30 Y30 I-6 J0 F1000
+G0 Z5
+M5
+M30
+`,
+  },
 };

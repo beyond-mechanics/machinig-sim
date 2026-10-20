@@ -58,8 +58,16 @@ export class Simulator {
       origin = fit.origin;
       if (fit.kind !== 'corner') warnings.push(`プログラム原点を「${ORIGIN_LABEL[fit.kind]}」に合わせました (切削送りが素材に最もよく収まる位置)`);
     }
+    // work coordinate systems: G54 is the program zero above, the others come from the setup
+    // (their zero in the stock frame); a system the setup does not give coincides with G54
+    const wcs = { G54: origin };
+    for (const [name, z] of Object.entries(setup.wcs || {})) if (name !== 'G54' && z && [z.x, z.y, z.z].every(Number.isFinite)) wcs[name] = z;
+    // or as offsets from G54 (the setup sheet's way of putting it)
+    for (const [name, d] of Object.entries(setup.wcsDelta || {})) if (name !== 'G54' && d && [d.x, d.y, d.z].every(Number.isFinite)) wcs[name] = { x: origin.x + d.x, y: origin.y + d.y, z: origin.z + d.z };
+    this.wcs = wcs;
     // start and home 50 mm above the stock top, which is at program Z = -origin.z
-    if (origin.z !== 0) parsed = parseGcode(program, { start: { x: 0, y: 0, z: 50 - origin.z } });
+    parsed = parseGcode(program, { start: { x: 0, y: 0, z: 50 - origin.z }, wcs });
+    this.wcsUsed = parsed.meta.workOffsets.length ? parsed.meta.workOffsets : ['G54'];
     this.warnings = [...warnings, ...parsed.warnings];
     this.stockSpec = spec; this.origin = origin;
     this.stockSize = stockExtents(spec);
@@ -85,7 +93,11 @@ export class Simulator {
       this.warnings.push(...c.warnings);
     }
     this.path = discretize(moves, 0.5);
-    for (const p of this.path) { p.x += origin.x; p.y += origin.y; p.z += origin.z; }
+    // each point into the stock frame through its own system's zero and the G52 local shift
+    for (const p of this.path) {
+      const z = wcs[p.wcs] || origin, l = p.local || { x: 0, y: 0, z: 0 };
+      p.x += z.x + l.x; p.y += z.y + l.y; p.z += z.z + l.z;
+    }
     this.times = [0];
     for (let i = 1; i < this.path.length; i++) this.times.push(this.times[i - 1] + segmentTime(this.path[i - 1], this.path[i]));
     this.totalTime = this.times[this.times.length - 1] || 0;

@@ -71,6 +71,9 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(-
 .row .unit { font: 11px var(--font-mono); color: var(--ink-mute); }
 .row input[type=number], .row select { width: 100%; }
 .row.wide { grid-template-columns: 1fr; }
+.wcsrow { display: grid; grid-template-columns: 64px repeat(3, minmax(0, 1fr)); gap: 6px; align-items: center; }
+.wcsrow span { font: 12px var(--font-mono); }
+.wcsrow input { width: 100%; }
 .slider { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
 .slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
 .slider output { font: 12px var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -256,7 +259,12 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="oX">原点の位置 X <span class="unit">mm</span></label><input type="number" id="oX" step="0.1" value="0"></div>
           <div class="row"><label for="oY">原点の位置 Y <span class="unit">mm</span></label><input type="number" id="oY" step="0.1" value="0"></div>
           <div class="row"><label for="oZ">原点の位置 Z <span class="unit">mm</span></label><input type="number" id="oZ" step="0.1" value="0"></div>
-          <p class="hint">原点の位置は、素材上面の左手前の角から測ったプログラム原点 (X0 Y0 Z0) の位置です。素材の下面は Z = −高さ です。</p>
+          <p class="hint">原点の位置は、素材上面の左手前の角から測ったプログラム原点 (X0 Y0 Z0) の位置です。素材の下面は Z = −高さ です。この原点が G54 です。</p>
+        </fieldset>
+        <fieldset id="wcsBox">
+          <legend>ワーク座標系</legend>
+          <div id="wcsRows" style="display:grid;gap:6px"></div>
+          <p class="hint" id="wcsInfo">プログラムが G55〜G59 や G54.1 P□ を使うと、ここに並びます。各原点を G54 からのずれ (ΔX ΔY ΔZ) で入れてください。G52 (ローカル座標系) にも対応します。</p>
         </fieldset>
         <fieldset>
           <legend>目標形状 (仕上がり)</legend>
@@ -271,7 +279,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <legend>プログラムの工具</legend>
           <ul class="hint" id="toolList" style="padding-left:18px;margin:0"></ul>
         </fieldset>
-        <p class="hint">対応: G0 G1 G2 G3 (I J K / R、ヘリカル)、G17 G18 G19、G20 G21 G90 G91 G94 G95、固定サイクル G73 G81〜G89 (G98 G99、K/L 繰返し)、G28 G53 (Z の退避のみ)、T□ M6 の工具交換、F S M3 M4 M5 M30。工具の寸法はコメントから読み取ります: Fusion 形式 <code>(T1 D=10. CR=0. - flat end mill)</code>、または <code>(TOOL T1 D10 N3 FLAT L25 SO35)</code> (N 刃数、L 刃長、SO 突出し長、BALL でボール)。寸法の無い工具は「加工条件」タブの工具で計算します。工具径補正 G41 G42 G40 は工具の半径 (D 番号ではなく工具の寸法) で経路をずらします (G17 のみ)。マクロとサブプログラムは未対応です。</p>
+        <p class="hint">対応: G0 G1 G2 G3 (I J K / R、ヘリカル)、G17 G18 G19、G20 G21 G90 G91 G94 G95、固定サイクル G73 G81〜G89 (G98 G99、K/L 繰返し)、G28 G53 (Z の退避のみ)、T□ M6 の工具交換、ワーク座標系 G54〜G59・G54.1 P□・G52、F S M3 M4 M5 M30。工具の寸法はコメントから読み取ります: Fusion 形式 <code>(T1 D=10. CR=0. - flat end mill)</code>、または <code>(TOOL T1 D10 N3 FLAT L25 SO35)</code> (N 刃数、L 刃長、SO 突出し長、BALL でボール)。寸法の無い工具は「加工条件」タブの工具で計算します。工具径補正 G41 G42 G40 は工具の半径 (D 番号ではなく工具の寸法) で経路をずらします (G17 のみ)。マクロとサブプログラムは未対応です。</p>
       </div>
       <div class="tabpane prose" data-pane="about" hidden>
         <h3>何を計算しているか</h3>

@@ -572,6 +572,32 @@ export class View {
     this.poolMesh.geometry.computeVertexNormals();
   }
 
+  // ---------- work coordinate systems ----------
+  // a small axis triad (X red, Y green, Z blue) and the name at each work zero
+  setWcs(list) {
+    const T = THREE;
+    if (this.wcsGroup) { this.scene.remove(this.wcsGroup); this.wcsGroup.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); }
+    this.wcsGroup = new T.Group();
+    const L = 12;
+    for (const w of list) {
+      const g = new T.Group(); g.position.set(w.x, w.y, w.z);
+      for (const [dir, col] of [[[1, 0, 0], 0xe5484d], [[0, 1, 0], 0x46a758], [[0, 0, 1], 0x3e7bd6]]) {
+        const a = new T.ArrowHelper(new T.Vector3(...dir), new T.Vector3(0, 0, 0), L, col, 2.6, 1.4);
+        a.line.material.depthTest = false; a.cone.material.depthTest = false; a.renderOrder = 6;
+        g.add(a);
+      }
+      // name tag (canvas sprite, fixed size on screen)
+      const c = document.createElement('canvas'); c.width = 128; c.height = 48;
+      const x = c.getContext('2d'); x.font = '600 26px ui-monospace, monospace'; x.fillStyle = 'rgba(20,24,28,0.75)';
+      const tw = x.measureText(w.name).width + 16; x.fillRect(0, 6, tw, 36); x.fillStyle = '#f2f4f6'; x.textBaseline = 'middle'; x.fillText(w.name, 8, 25);
+      const sp = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(c), depthTest: false, sizeAttenuation: false }));
+      sp.scale.set(0.11, 0.041, 1); sp.center.set(0, 0); sp.position.set(2, 2, L * 0.4); sp.renderOrder = 7;
+      g.add(sp);
+      this.wcsGroup.add(g);
+    }
+    this.scene.add(this.wcsGroup);
+  }
+
   // ---------- tool path ----------
   setPath(path) {
     const T = THREE;
