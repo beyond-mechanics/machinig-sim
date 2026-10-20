@@ -107,10 +107,13 @@ test('larger rake angle lowers the cutting force and thickens the shear angle', 
   assert.ok(b.phi > a.phi, `φ ${a.phi.toFixed(1)} → ${b.phi.toFixed(1)}`);
 });
 
-test('higher cutting speed raises the cutting temperature', () => {
+test('higher cutting speed raises the cutting temperature and, with sliding friction, lowers kc', () => {
   const lo = run({ mat: 'S45C', vc: 80, nh: 6, cutLen: 0.35 }).summary();
   const hi = run({ mat: 'S45C', vc: 300, nh: 6, cutLen: 0.35 }).summary();
   assert.ok(hi.trake > lo.trake + 50, `rake T ${lo.trake.toFixed(0)} → ${hi.trake.toFixed(0)}`);
+  // The chip slides faster, μ falls (0.3 power): kc 8–30 % lower (Kienzle's carbide factor: 12 %).
+  assert.ok(hi.muMean < 0.85 * lo.muMean, `μ ${lo.muMean.toFixed(2)} → ${hi.muMean.toFixed(2)}`);
+  assert.ok(hi.kc < 0.92 * lo.kc && hi.kc > 0.7 * lo.kc, `kc ${lo.kc.toFixed(0)} → ${hi.kc.toFixed(0)}`);
 });
 
 test('end mill, A7075: force follows the chip thickness; up and down milling mirror each other', () => {
