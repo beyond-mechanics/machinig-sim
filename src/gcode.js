@@ -80,11 +80,46 @@ export function parseGcode(text, opts = {}) {
   const lines = text.split(/\r?\n/);
   const warn = (ln, msg) => warnings.push(`${ln + 1}行: ${msg}`);
   let noDecimal = false;
+  // G68 rotation (G17: about Z) and G51.1 mirror images: the program's coordinates (st) are
+  // turned into the coordinates the machine moves in, mirror outermost (a rotation programmed
+  // inside a mirror image turns the other way, as on Fanuc)
+  const xf = { on: false, rot: null, mir: {} };   // rot: { cx, cy, deg, c, s }; mir: axis → centre
+  const fwd = p => {
+    let { x, y, z } = p;
+    if (xf.rot) { const r = xf.rot, dx = x - r.cx, dy = y - r.cy; x = r.cx + r.c * dx - r.s * dy; y = r.cy + r.s * dx + r.c * dy; }
+    if (xf.mir.x !== undefined) x = 2 * xf.mir.x - x;
+    if (xf.mir.y !== undefined) y = 2 * xf.mir.y - y;
+    if (xf.mir.z !== undefined) z = 2 * xf.mir.z - z;
+    return { x, y, z };
+  };
+  const inv = p => {
+    let { x, y, z } = p;
+    if (xf.mir.x !== undefined) x = 2 * xf.mir.x - x;
+    if (xf.mir.y !== undefined) y = 2 * xf.mir.y - y;
+    if (xf.mir.z !== undefined) z = 2 * xf.mir.z - z;
+    if (xf.rot) { const r = xf.rot, dx = x - r.cx, dy = y - r.cy; x = r.cx + r.c * dx + r.s * dy; y = r.cy - r.s * dx + r.c * dy; }
+    return { x, y, z };
+  };
+  // change the transformation keeping the tool where it is
+  const retransform = change => { const at = fwd(st); change(); xf.on = !!xf.rot || Object.keys(xf.mir).length > 0; Object.assign(st, inv(at)); };
   const push = (ln, to, rapid, extra) => {
     const from = { x: st.x, y: st.y, z: st.z };
     if (to.x === from.x && to.y === from.y && to.z === from.z && !extra?.arc) return;
-    const mv = { rapid, from, to: { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, wcs: st.wcs, local: st.local, ...extra };
+    const mv = { rapid, from: xf.on ? fwd(from) : from, to: xf.on ? fwd(to) : { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, wcs: st.wcs, local: st.local, ...extra };
     if (meta.g10) mv.zero = zeroOf(st.wcs);
+    if (xf.on) {
+      // a mirror in an odd number of the arc's axes turns its direction (and the compensation side)
+      const flips = ax => ax.filter(k => xf.mir[k] !== undefined).length % 2 === 1;
+      if (mv.arc) {
+        const ax = mv.arc.axes || ['x', 'y', 'z'];
+        if (xf.rot && ax[2] !== 'z') { warn(ln, 'G17 以外の平面の円弧は座標回転 G68 中は未対応 (直線で結びます)'); delete mv.arc; }
+        else {
+          const c = fwd({ x: from.x, y: from.y, z: from.z, [ax[0]]: mv.arc.ca, [ax[1]]: mv.arc.cb });
+          mv.arc = { ...mv.arc, ca: c[ax[0]], cb: c[ax[1]], cw: flips(ax.slice(0, 2)) ? !mv.arc.cw : mv.arc.cw };
+        }
+      }
+      if (mv.comp && flips(['x', 'y'])) mv.comp = mv.comp === 41 ? 42 : 41;
+    }
     if (!st.spindle && !rapid) warn(ln, '主軸停止中の切削送り');
     moves.push(mv);
     st.x = to.x; st.y = to.y; st.z = to.z;
@@ -163,7 +198,7 @@ export function parseGcode(text, opts = {}) {
     const words = [...line.matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)].map(m => [m[1], parseFloat(m[2]), m[2]]);
     if (!words.length) continue;
     const w = {};
-    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false, sub = null, g10 = false;
+    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false, sub = null, g10 = false, xfCmd = null;
     for (const [k, v, s] of words) {
       if (k === 'G') {
         if ([0, 1, 2, 3].includes(v)) { st.motion = v; hasMotionWord = true; st.cycle = null; }
@@ -188,7 +223,11 @@ export function parseGcode(text, opts = {}) {
         else if (v === 52) local = true;
         else if (v === 41 || v === 42) { if (st.plane !== 17) warn(ln, `工具径補正 G${v} は G17 平面のみ対応`); else st.comp = v; }
         else if (v === 40) st.comp = null;
-        else if (v === 68 || v === 51 || v === 16) warn(ln, `座標変換 G${v} は未対応`);
+        else if (v === 68) xfCmd = 'rot';
+        else if (v === 69) xfCmd = 'unrot';
+        else if (Math.abs(v - 51.1) < 1e-6) xfCmd = 'mir';
+        else if (Math.abs(v - 50.1) < 1e-6) xfCmd = 'unmir';
+        else if (v === 51 || v === 16) warn(ln, `座標変換 G${v} は未対応`);
         else if (v === 10) g10 = true;
         else if (v === 4 || v === 65) { /* dwell, data setting, macro call: no motion */ }
         else if (!IGNORED_G.has(v)) warn(ln, `G${v} は無視`);
@@ -204,6 +243,22 @@ export function parseGcode(text, opts = {}) {
         w[k] = v;
         if ('XYZ'.includes(k) && !s.includes('.') && Math.abs(v) >= 1000) noDecimal = true;
       }
+    }
+    if (xfCmd) {
+      // G68 X Y R (centre, angle; G91: R added to the angle in effect) / G69, G51.1 X Y Z (mirror
+      // about these positions) / G50.1 X Y Z (cancel those axes; no axis: all). No motion here.
+      const u0 = st.unit, val = k => (st.abs ? w[k] * u0 : st[k.toLowerCase()] + w[k] * u0);
+      if (xfCmd === 'rot') {
+        if (st.plane !== 17) warn(ln, '座標回転 G68 は G17 平面のみ対応 (この行は無視)');
+        else retransform(() => {
+          const deg = (w.R ?? 0) + (!st.abs && xf.rot ? xf.rot.deg : 0), a = deg * Math.PI / 180;
+          xf.rot = { cx: w.X !== undefined ? val('X') : st.x, cy: w.Y !== undefined ? val('Y') : st.y, deg, c: Math.cos(a), s: Math.sin(a) };
+        });
+        meta.transform = true;
+      } else if (xfCmd === 'unrot') retransform(() => { xf.rot = null; });
+      else if (xfCmd === 'mir') { retransform(() => { for (const k of 'XYZ') if (w[k] !== undefined) xf.mir[k.toLowerCase()] = val(k); }); meta.transform = true; }
+      else retransform(() => { const ks = [...'XYZ'].filter(k => w[k] !== undefined); for (const k of ks.length ? ks : ['X', 'Y', 'Z']) delete xf.mir[k.toLowerCase()]; });
+      continue;
     }
     if (g10) {
       // G10 L2 P1–6 (G54–G59) / L20 P n (G54.1 P n) X Y Z: write a work offset; G91 adds to it.
