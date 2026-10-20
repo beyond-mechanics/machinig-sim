@@ -1,13 +1,15 @@
 {
   "name": "machining-sim",
   "version": "1.0.0",
-  "description": "",
+  "description": "ブラウザで動く 3 軸フライス加工シミュレーター",
   "main": "index.js",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test-all.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "keywords": [],
   "author": "",

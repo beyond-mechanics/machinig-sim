@@ -19,7 +19,10 @@
 
 ```sh
 npm install
-node scripts/build.mjs        # src/ を dist/index.html に束ねる
+npm run build                 # src/ を dist/index.html に束ねる (node scripts/build.mjs)
+npm test                      # test/*.test.mjs を全部実行して要約 (下の各テストを個別にも実行できる)
+npm run smoke                 # ブラウザでの通し確認 (デモを最後まで計算し、主なパネルを開いてエラーが無いこと)
+                              # Chromium の場所は PLAYWRIGHT_CHROMIUM で指定できる
 node test/dyn.test.mjs        # 時間領域のびびり判定と安定限界線図の照合
 node test/sim.test.mjs        # サンプルプログラムを通しで実行
 node test/plunge.test.mjs     # 底刃 (プランジ・ランプ) のスラストとトルク
