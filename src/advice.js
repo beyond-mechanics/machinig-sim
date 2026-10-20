@@ -22,6 +22,9 @@ export function adviceFor(r, ctx) {
   const out = [];
   const { mat, limits } = ctx;
   const has = w => r.why.includes(w);
+  // chatter first: it is set by the depth of cut and the speed, and it drives the other peaks
+  if (has('びびり')) out.push('切込みを減らすか、安定限界線図の山 (安定ポケット) へ主軸回転を移す (加工条件タブの「安定ポケットに合わせる」)');
+  else if (has('振動注意')) out.push('安定限界に近い: 切込みを 1〜2 割減らすか、安定ポケットへ主軸回転を移す');
   if (has('応力超過') || has('応力高め')) {
     const target = 0.8 * limits.stress;
     const k = r.h > 0 ? lowest(q => r.stress * forceRatio(mat, r.h, q, ctx.nonlinear) - target) : null;
@@ -43,8 +46,6 @@ export function adviceFor(r, ctx) {
     else if (!q) out.push('切削速度を大きく下げる必要がある: 被削材に合った工具 (コーティング) か条件を見直す');
     if (crack) out.push('断続切削の熱亀裂: 刃先が冷える時間を減らす (径方向切込みを大きく、刃数を減らす) か、クーラントの断続的な当たりを避ける (エアブロー)');
   }
-  if (has('びびり')) out.push('切込みを減らすか、安定限界線図の山 (安定ポケット) へ主軸回転を移す (加工条件タブの「安定ポケットに合わせる」)');
-  else if (has('振動注意')) out.push('安定限界に近い: 切込みを 1〜2 割減らすか、安定ポケットへ主軸回転を移す');
   if (has('振動大') && !has('びびり')) out.push('強制振動が大きい: 突出しを短く、工具の振れを確認、送りを下げる');
   return out;
 }
