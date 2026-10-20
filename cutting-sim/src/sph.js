@@ -32,6 +32,8 @@ export const DEFAULTS = {
   // Tool preheat (orthogonal cutting, worker.js): cut again this many times, each starting from the
   // steady tool temperature of the cut before; toolT is that field (ToolHeat cells).
   preheat: 0, toolT: null,
+  // Imported workpiece cross-section (orthogonal cutting): loops [[[x, y] m]], see profile.js importWorkpiece.
+  work: null,
   // Artificial viscosity coefficients (Monaghan α, β); default 1, or the material's av.
   avAlpha: null, avBeta: null,
   // Tool shape: 'wedge' (rake, clearance, edge radius), 'chamfer' (negative land of width land [mm]

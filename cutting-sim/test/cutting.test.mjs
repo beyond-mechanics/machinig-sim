@@ -238,3 +238,19 @@ test('preheat: cutting again from the steady tool temperature heats the tool and
   assert.ok(mb.tContact > ma.tContact + 30, `contact ${ma.tContact.toFixed(0)} → ${mb.tContact.toFixed(0)} °C`);
   assert.ok(Math.abs(mb.kc / ma.kc - 1) < 0.06, `kc ${ma.kc.toFixed(0)} → ${mb.kc.toFixed(0)}`);
 });
+
+test('imported workpiece: closed outlines fill even-odd (a circle is a hole), top at y = 0, supports at the bottom and far end', async () => {
+  const { importWorkpiece } = await import('../src/profile.js');
+  const { Ortho } = await import('../src/process.js');
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 H0.7 V0.04 H1.6 V0.6 H0 Z"/><circle cx="1.1" cy="0.17" r="0.07"/></svg>';
+  const { loops, info } = importWorkpiece(svg, { name: 'w.svg', unit: 'mm' });
+  assert.equal(loops.length, 2);
+  assert.ok(Math.abs(info.width - 1.6e-3) < 1e-9 && Math.abs(info.height - 0.6e-3) < 1e-9);
+  const dx = 0.01e-3, o = new Ortho({ h: 0.1, work: loops }), pts = o.build(dx);
+  const solid = 1.6 * 0.6 - 0.9 * 0.04 - Math.PI * 0.07 ** 2;   // mm²
+  assert.ok(Math.abs(pts.length * (dx * 1e3) ** 2 / solid - 1) < 0.01, `${pts.length} particles for ${solid.toFixed(3)} mm²`);
+  assert.ok(!pts.some(([x, y]) => Math.hypot(x - 1.1e-3, y + 0.17e-3) < 0.06e-3), 'the hole is empty');
+  assert.ok(!pts.some(([x, y]) => x > 0.71e-3 && y > -0.035e-3), 'the step is cut away');
+  assert.ok(pts.some(([x, y, f]) => f === 1 && y < -0.58e-3) && pts.some(([x, y, f]) => f === 1 && x > 1.58e-3));
+  assert.ok(!pts.some(([x, y, f]) => f === 1 && y > -0.1e-3 && x > 0.05e-3 && x < 1.5e-3), 'no supports in the cut layer');
+});

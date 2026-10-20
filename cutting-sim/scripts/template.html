@@ -81,6 +81,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .hint { margin: 0; font-size: 12px; color: var(--ink-mute); }
 .static { font-size: 13px; text-align: right; }
 .meta { font: 11px/1.6 var(--font-mono); color: var(--ink-mute); }
+.preview[hidden] { display: none; }
 .preview { width: 100%; height: 150px; display: block; border: 1px solid var(--rule); border-radius: 6px; background: var(--bg); }
 .btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .btns button { flex: 1 1 auto; padding: 5px 8px; font-size: 12px; }
@@ -174,6 +175,13 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row" data-only="ortho 3d"><label for="h">切取り厚さ h<small>mm</small></label><input id="h" type="number" min="0.02" max="0.3" step="0.01" value="0.1"></div>
         <div class="row" data-only="ortho mill"><label for="width">切削幅 b<small>mm</small></label><input id="width" type="number" min="0.1" max="20" step="0.1" value="1"></div>
         <div class="row" data-only="3d" hidden><label for="b3">被削材の幅 b<small>mm</small></label><input id="b3" type="number" min="0.1" max="1" step="0.05" value="0.3"></div>
+        <div class="row" data-only="ortho"><label for="wshape">ワークの断面</label><select id="wshape"><option value="block">平らなブロック</option><option value="custom">ファイルから取り込み</option></select></div>
+        <div class="row wide" data-only="ortho" data-wshape="custom" hidden><input id="wfile" class="file" type="file" accept=".dxf,.svg,.csv,.txt" aria-label="ワーク断面のファイル"></div>
+        <div class="row" data-only="ortho" data-wshape="custom" hidden><label for="wunit">ファイルの単位</label><select id="wunit"><option value="auto">自動（DXF の設定、なければ mm）</option><option value="mm">mm</option><option value="um">µm</option><option value="in">inch</option></select></div>
+        <div class="btns" data-only="ortho" data-wshape="custom" hidden><button id="wrot" type="button">90° 回転</button><button id="wflip" type="button">左右反転</button></div>
+        <p class="hint" data-only="ortho" data-wshape="custom" hidden>閉じた輪郭を DXF（LINE、ARC、CIRCLE、LWPOLYLINE、POLYLINE）、SVG（path、rect、circle など）、CSV（x, y の列）で読み込みます。外形の内側にある輪郭は穴になります（横穴やスリットで断続切削）。一番高い点を y = 0、左端を x = 0 に置き、刃先は y = −h を右へ進みます。段差や面取り、傾いた面もそのまま削れます。下の面と右端を固定します。</p>
+        <p class="hint" id="winfo" data-only="ortho" data-wshape="custom" hidden>ファイルを選んでください。</p>
+        <canvas id="wpreview" class="preview" data-only="ortho" data-wshape="custom" hidden aria-label="ワーク断面のプレビュー"></canvas>
       </fieldset>
       <fieldset data-only="3d" hidden>
         <legend>傾斜切削（3D）</legend>
@@ -210,7 +218,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row wide" data-shape="custom"><input id="pfile" class="file" type="file" accept=".dxf,.svg,.csv,.txt" aria-label="工具断面のファイル"></div>
         <div class="row" data-shape="custom"><label for="punit">ファイルの単位</label><select id="punit"><option value="auto">自動（DXF の設定、なければ mm）</option><option value="mm">mm</option><option value="um">µm</option><option value="in">inch</option></select></div>
         <div class="btns" data-shape="custom"><button id="prot" type="button">90° 回転</button><button id="pflip" type="button">左右反転</button></div>
-        <p class="hint" data-shape="custom">DXF（LINE、ARC、LWPOLYLINE、POLYLINE）、SVG、CSV（x, y の列）を読み込めます。刃先が一番下に来て、右（+x）へ切削する向きにしてください。開いた線（逃げ面 → 刃先 → すくい面）なら工具本体を自動で足します。</p>
+        <p class="hint" data-shape="custom">DXF（LINE、ARC、CIRCLE、LWPOLYLINE、POLYLINE）、SVG、CSV（x, y の列）を読み込めます。刃先が一番下に来て、右（+x）へ切削する向きにしてください。開いた線（逃げ面 → 刃先 → すくい面）なら工具本体を自動で足します。</p>
         <p class="hint" id="pinfo" data-shape="custom">ファイルを選んでください。</p>
         <canvas id="preview" class="preview" data-only="ortho mill" aria-label="刃先形状のプレビュー"></canvas>
         <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" min="0" max="1.5" step="0.05"></div>

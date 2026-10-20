@@ -1,7 +1,7 @@
 // UI: condition form, particle field view (Canvas 2D), charts and readouts.
 import { MATERIALS } from './materials.js';
 import { DEFAULTS } from './sph.js';
-import { chamferProfile, breakerProfile, importProfile, wornProfile } from './profile.js';
+import { chamferProfile, breakerProfile, importProfile, wornProfile, importWorkpiece } from './profile.js';
 import { makeTool, toolOutline } from './tool.js';
 import { View3D } from './view3d.js';
 import { renderField, legendGradient, bandsOf } from './fieldview.js';
@@ -91,11 +91,72 @@ function readCfg() {
     D: num('dia'), z: num('flutes'), fz: num('fz'), ae: num('ae'), dir: $('dir').value, track: num('track'), passes: num('passes'),
     tool: shape === 'custom' && !custom.profile ? 'wedge' : shape, land: num('land'), landDeg: num('landDeg'),
     gw: num('gw'), gd: num('gd'), wallDeg: num('wallDeg'), wh: num('wh'), profile: shape === 'custom' ? custom.profile : null,
-    fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'), residual: mode === 'ortho' && $('residual').checked, preheat: mode === 'ortho' && $('preheat').checked ? 2 : 0,
+    fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'), work: useWork() ? work.loops : null,
+    residual: mode === 'ortho' && $('residual').checked && !useWork(), preheat: mode === 'ortho' && $('preheat').checked ? 2 : 0,
   };
 }
 for (const id of ['vc', 'h', 'rake', 'clear', 'edge', 'mu', 'fric', 'width', 'len', 'res', 'dia', 'flutes', 'fz', 'ae', 'dir', 'track', 'passes',
   'land', 'landDeg', 'gw', 'gd', 'wallDeg', 'wh', 'fracture', 'efs', 'fls', 'b3', 'lambda', 'sides', 'ap', 'helix', 'floor', 'residual', 'preheat']) $(id).addEventListener('change', reset);
+
+// ---- Workpiece cross-section (orthogonal cutting): a flat block or an imported outline ----
+const work = { text: null, name: '', rot: 0, flip: false, loops: null, info: null };
+const WORK_MAX = 60000;   // particles
+const useWork = () => mode === 'ortho' && $('wshape').value === 'custom' && !!work.loops && workCount() <= WORK_MAX;
+function workCount() {
+  if (!work.info) return 0;
+  const dx = parseFloat($('h').value) / parseFloat($('res').value);
+  return Math.round(work.info.area * 1e6 / (dx * dx));
+}
+function loadWork() {
+  const info = $('winfo');
+  info.classList.remove('err');
+  if (work.text == null) { work.loops = null; work.info = null; info.textContent = 'ファイルを選んでください。'; drawWork(); return; }
+  try {
+    const r = importWorkpiece(work.text, { name: work.name, unit: $('wunit').value, rot: work.rot, flip: work.flip });
+    work.loops = r.loops; work.info = r.info;
+    const i = r.info, n = workCount();
+    info.textContent = `${work.name}：輪郭 ${i.loops} 本${i.loops > 1 ? '（内側は穴）' : ''}、幅 ${(i.width * 1e3).toFixed(2)} × 高さ ${(i.height * 1e3).toFixed(2)} mm、粒子 約 ${n.toLocaleString()} 個` +
+      (n > WORK_MAX ? `。${WORK_MAX.toLocaleString()} 個を超えるので計算できません（解像度を下げるか、ワークを小さく）` : '');
+    if (n > WORK_MAX) info.classList.add('err');
+  } catch (err) {
+    work.loops = null; work.info = null; info.textContent = err.message; info.classList.add('err');
+  }
+  drawWork();
+}
+// Section with the tool path (y = −h) and the cut length.
+function drawWork() {
+  const cv = $('wpreview'), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || cv.hidden) return;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const c = cv.getContext('2d'), css = getComputedStyle(document.documentElement);
+  c.scale(dpr, dpr); c.clearRect(0, 0, W, H);
+  if (!work.loops) return;
+  const i = work.info, h = parseFloat($('h').value) * 1e-3, L = parseFloat($('len').value) * 1e-3;
+  const spanX = Math.max(i.width, L) * 1.1, spanY = i.height * 1.25 + 2 * h;
+  const s = Math.min((W - 12) / spanX, (H - 22) / spanY), X = (x) => 6 + x * s, Y = (y) => 16 + (h * 1.2 - y) * s;
+  c.beginPath();
+  for (const l of work.loops) l.forEach(([x, y], k) => (k ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y))));
+  c.closePath(); c.fillStyle = css.getPropertyValue('--rule'); c.fill('evenodd');
+  c.strokeStyle = css.getPropertyValue('--ink-mute'); c.lineWidth = 1; c.stroke();
+  c.setLineDash([4, 3]); c.strokeStyle = css.getPropertyValue('--accent') || '#c33'; c.lineWidth = 1.5;
+  c.beginPath(); c.moveTo(X(0), Y(-h)); c.lineTo(X(L), Y(-h)); c.stroke(); c.setLineDash([]);
+  c.fillStyle = css.getPropertyValue('--ink-mute'); c.font = `11px ${css.getPropertyValue('--font-mono')}`;
+  c.textAlign = 'left'; c.fillText(`刃先の通り道（y = −h、${(L * 1e3).toFixed(1)} mm）→`, 6, 11);
+}
+$('wshape').addEventListener('change', () => { showShapeRows(); loadWork(); reset(); });
+$('wfile').addEventListener('change', async () => {
+  const f = $('wfile').files[0];
+  if (!f) return;
+  work.text = await f.text(); work.name = f.name; work.rot = 0; work.flip = false;
+  loadWork();
+  // Cut across the part by default: its width less a little run-out.
+  if (work.info) $('len').value = Math.min(4, Math.max(0.2, Math.floor((work.info.width * 1e3 - 0.1) * 10) / 10));
+  reset();
+});
+$('wunit').addEventListener('change', () => { loadWork(); reset(); });
+$('wrot').addEventListener('click', () => { work.rot = (work.rot + 1) % 4; loadWork(); reset(); });
+$('wflip').addEventListener('click', () => { work.flip = !work.flip; loadWork(); reset(); });
+for (const id of ['h', 'res', 'len']) $(id).addEventListener('change', () => { if (work.loops) loadWork(); });
 
 // ---- Tool shape: built-in edge preparations or an imported outline, with a preview ----
 const custom = { text: null, name: '', rot: 0, flip: false, profile: null, wornMin: 0 };
@@ -103,10 +164,12 @@ const custom = { text: null, name: '', rot: 0, flip: false, profile: null, wornM
 // (3D supports only the standard wedge).
 function showShapeRows() {
   const sh = is3() ? 'wedge' : $('shape').value;
-  for (const el of document.querySelectorAll('[data-only], [data-shape]')) {
+  const ws = $('wshape').value;
+  for (const el of document.querySelectorAll('[data-only], [data-shape], [data-wshape]')) {
     const okMode = !el.dataset.only || el.dataset.only.split(' ').includes(mode);
     const okShape = !el.dataset.shape || el.dataset.shape.split(' ').includes(sh);
-    el.hidden = !(okMode && okShape);
+    const okWork = !el.dataset.wshape || el.dataset.wshape === ws;
+    el.hidden = !(okMode && okShape && okWork);
   }
   view.hidden = is3(); $('view3d').hidden = !is3();
   if (is3()) view3d();
@@ -173,7 +236,7 @@ let prev = null;
 function reset() {
   if (frame && frame.summary && frame.summary.done) prev = { mode: cfg.mode, hist: frame.hist };
   cfg = readCfg();
-  drawPreview();
+  drawPreview(); drawWork();
   status = 'idle'; frame = null;
   worker.postMessage({ type: 'init', cfg });
   buildCells();
@@ -391,6 +454,7 @@ function draw3d() {
   $('lg-name').textContent = (f.unit ? `${f.label} [${f.unit}]` : f.label) + (section ? '・中央断面' : '') + '・ドラッグで回転';
 }
 new ResizeObserver(() => { if (cfg) drawPreview(); }).observe($('preview'));
+new ResizeObserver(() => drawWork()).observe($('wpreview'));
 
 // Probe: nearest particle under the pointer.
 view.addEventListener('pointermove', (e) => {

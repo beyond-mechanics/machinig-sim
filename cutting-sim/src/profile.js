@@ -84,12 +84,12 @@ export function parseCSV(text) {
   return { lines: out, unit: null };
 }
 
-// SVG: path (M L H V C S Q T A Z), polygon, polyline, line, rect. Transforms are not applied.
+// SVG: path (M L H V C S Q T A Z), polygon, polyline, line, rect, circle, ellipse. Transforms are not applied.
 export function parseSVG(text) {
   const lines = [];
   const attr = (tag, name) => { const m = tag.match(new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`)); return m ? m[1] : null; };
   const nums = (s) => (s.match(/[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g) || []).map(Number);
-  for (const m of text.matchAll(/<(path|polygon|polyline|line|rect)\b[^>]*>/gi)) {
+  for (const m of text.matchAll(/<(path|polygon|polyline|line|rect|circle|ellipse)\b[^>]*>/gi)) {
     const tag = m[0], kind = m[1].toLowerCase();
     if (kind === 'path') lines.push(...svgPath(attr(tag, 'd') || ''));
     else if (kind === 'polygon' || kind === 'polyline') {
@@ -100,6 +100,11 @@ export function parseSVG(text) {
     } else if (kind === 'line') {
       const g = (k) => parseFloat(attr(tag, k) || '0');
       lines.push([[g('x1'), g('y1')], [g('x2'), g('y2')]]);
+    } else if (kind === 'circle' || kind === 'ellipse') {
+      const g = (k) => parseFloat(attr(tag, k) || '0'), cx = g('cx'), cy = g('cy');
+      const rx = kind === 'circle' ? g('r') : g('rx'), ry = kind === 'circle' ? rx : g('ry'), p = [];
+      for (let k = 0; k <= 60; k++) { const a = 2 * Math.PI * k / 60; p.push([cx + rx * Math.cos(a), cy + ry * Math.sin(a)]); }
+      if (rx > 0 && ry > 0) lines.push(p);
     } else {
       const g = (k) => parseFloat(attr(tag, k) || '0'), x = g('x'), y = g('y'), w = g('width'), h = g('height');
       if (w > 0 && h > 0) lines.push([[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]]);
@@ -184,6 +189,10 @@ export function parseDXF(text) {
       const n = Math.max(4, Math.ceil((a1 - a0) / (6 * DEG))), p = [];
       for (let k = 0; k <= n; k++) { const a = a0 + (a1 - a0) * k / n; p.push([e[10] + e[40] * Math.cos(a), e[20] + e[40] * Math.sin(a)]); }
       lines.push(p);
+    } else if (e.type === 'CIRCLE') {
+      const p = [];
+      for (let k = 0; k <= 60; k++) { const a = 2 * Math.PI * k / 60; p.push([e[10] + e[40] * Math.cos(a), e[20] + e[40] * Math.sin(a)]); }
+      if (e[40] > 0) lines.push(p);
     } else if (e.type === 'LWPOLYLINE' || e.type === 'SPLINE') {
       const p = bulged(e.v, (e[70] & 1) === 1 && e.type === 'LWPOLYLINE');
       if (p.length >= 2) lines.push(p);
@@ -195,7 +204,7 @@ export function parseDXF(text) {
       if (val === 'VERTEX' && poly) { ent = null; poly.v.push({ x: 0, y: 0, b: 0 }); poly.cur = poly.v[poly.v.length - 1]; continue; }
       if (val === 'SEQEND' && poly) { const p = bulged(poly.v, (poly.flags & 1) === 1); if (p.length >= 2) lines.push(p); poly = null; continue; }
       if (val === 'POLYLINE') { poly = { v: [], flags: 0, cur: null }; continue; }
-      ent = ['LINE', 'ARC', 'LWPOLYLINE', 'SPLINE'].includes(val) ? { type: val, v: [], 10: 0, 20: 0, 11: 0, 21: 0, 40: 0, 50: 0, 51: 0, 70: 0 } : null;
+      ent = ['LINE', 'ARC', 'CIRCLE', 'LWPOLYLINE', 'SPLINE'].includes(val) ? { type: val, v: [], 10: 0, 20: 0, 11: 0, 21: 0, 40: 0, 50: 0, 51: 0, 70: 0 } : null;
       continue;
     }
     const num = parseFloat(val);
@@ -374,4 +383,40 @@ export function rakeOf(tool, h) {
   };
   const p = at(0.3 * h), q = at(1.0 * h);
   return Math.atan2(-(q[0] - p[0]), q[1] - p[1]);
+}
+
+// Workpiece cross-section from a file: every closed outline is kept and filled even-odd, so an
+// inner outline is a hole (a cross hole or a slot gives an interrupted cut). Placed with its top
+// (highest point) at y = 0 and its left end at x = 0, cutting toward +x; the tool runs at y = −h.
+// Returns { loops: [[[x, y] m]], info } or throws an Error with a message for the user.
+export function importWorkpiece(text, { name = '', unit = 'auto', rot = 0, flip = false } = {}) {
+  const ext = name.toLowerCase().split('.').pop();
+  const parsed = ext === 'dxf' || /^\s*0\s*\r?\n\s*SECTION/.test(text) ? parseDXF(text)
+    : ext === 'svg' || /<svg[\s>]/i.test(text) ? parseSVG(text) : parseCSV(text);
+  if (!parsed.lines.length) throw new Error('線や点が見つかりませんでした。');
+  const u = unit === 'auto' ? parsed.unit || 'mm' : unit, sc = UNIT[u];
+  // A CSV is one outline: close it.
+  const chains = chain(parsed.lines).map((c) => (!c.closed && ext !== 'dxf' && ext !== 'svg' && c.pts.length > 2 ? { pts: c.pts, closed: true } : c));
+  let loops = chains.filter((c) => c.closed).map((c) => c.pts.map(([x, y]) => [x * sc, y * sc]));
+  if (!loops.length) throw new Error('閉じた輪郭が見つかりませんでした。ワークの断面は閉じた線で描いてください。');
+  for (let k = 0; k < ((rot % 4) + 4) % 4; k++) loops = loops.map((l) => l.map(([x, y]) => [-y, x]));
+  if (flip) loops = loops.map((l) => l.map(([x, y]) => [-x, y]));
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const l of loops) for (const [x, y] of l) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  loops = loops.map((l) => l.map(([x, y]) => [x - minX, y - maxY]));
+  const n = loops.reduce((a, l) => a + l.length, 0);
+  if (n > 20000) throw new Error(`点が多すぎます（${n} 点）。20,000 点以下にしてください。`);
+  const W = maxX - minX, H = maxY - minY;
+  const solid = loops.reduce((a, l) => a + Math.abs(area(l)), 0);
+  return { loops, info: { unit: u, loops: loops.length, points: n, width: W, height: H, area: solid } };
+}
+
+// Even-odd point-in-polygon over all loops.
+export function insideLoops(loops, x, y) {
+  let c = false;
+  for (const l of loops) for (let i = 0, j = l.length - 1; i < l.length; j = i++) {
+    const [xi, yi] = l[i], [xj, yj] = l[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
 }

@@ -7,6 +7,7 @@
 //    down milling the reverse. With passes > 1 the next teeth follow, each one fz further on,
 //    cutting the surface the previous one left (work-hardened, residual stress, real shape).
 import { setPose } from './tool.js';
+import { insideLoops } from './profile.js';
 
 const DEG = Math.PI / 180;
 
@@ -17,6 +18,7 @@ export class Ortho {
     this.hRef = this.h;                       // thickness that sets the particle size
   }
   build(dx) {
+    if (this.c.work) return this.buildWork(dx);
     const c = this.c, h = this.h;
     const L = c.cutLen * 1e-3 + Math.max(3 * h, 0.2e-3);
     const H = Math.max(3.5 * h, h + 12 * dx, (c.depth || 0) * 1e-3);
@@ -29,6 +31,23 @@ export class Ortho {
       const fixed = j >= ny - 3 || i >= nx - 3 || (i < 3 && y < -h - 1.5 * dx);
       pts.push([x, y, fixed ? 1 : 0]);
     }
+    this.view = { x0: -0.15e-3, x1: this.L + 0.02e-3, y0: -this.H - 0.02e-3, y1: Math.max(0.5e-3, 6 * h) };
+    return pts;
+  }
+  // Imported cross-section (c.work: loops [m], top at y = 0, left end at x = 0), filled on the
+  // lattice even-odd; supports along the bottom, the far end and the entry face below the cut.
+  buildWork(dx) {
+    const loops = this.c.work, h = this.h;
+    let xmax = 0, ymin = 0;
+    for (const l of loops) for (const [x, y] of l) { xmax = Math.max(xmax, x); ymin = Math.min(ymin, y); }
+    const nx = Math.ceil(xmax / dx), ny = Math.ceil(-ymin / dx), pts = [];
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const x = (i + 0.5) * dx, y = -(j + 0.5) * dx;
+      if (!insideLoops(loops, x, y)) continue;
+      const fixed = y < ymin + 3 * dx || x > xmax - 3 * dx || (x < 3 * dx && y < -h - 1.5 * dx);
+      pts.push([x, y, fixed ? 1 : 0]);
+    }
+    this.L = xmax; this.H = -ymin;
     this.view = { x0: -0.15e-3, x1: this.L + 0.02e-3, y0: -this.H - 0.02e-3, y1: Math.max(0.5e-3, 6 * h) };
     return pts;
   }
