@@ -73,13 +73,25 @@ const fmt = v => (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v
 
 // text: the program; feedLines: Set of line numbers (1-based) that make feed moves;
 // factor: line → k. Returns the rewritten program text.
+// The modal F is followed in text order. Where the order the control runs the blocks in differs
+// (calls M98 G65, returns M99, jumps GOTO WHILE END, the start of an O block) the programmed feed is
+// put back first, on a block of its own, and nothing is assumed about the feed after it.
+const FLOW = /^(N\s*\d+\s*)?(IF\s*\[|GOTO|WHILE\s*\[|END\s*\d|[O:]\s*\d)|\bM\s*0*9[89](?!\d)|\bG\s*0*65(?!\d)/i;
 export function rewriteFeeds(text, feedLines, factor) {
   const src = text.split('\n'), out = [];
   let progF = null, outF = null;   // modal F as programmed and as written out
+  const restore = () => { if (progF !== null && outF !== null && Math.abs(outF - progF) > 1e-9) out.push(`F${fmt(progF)}`); outF = progF; };
   src.forEach((line, i) => {
     const n = i + 1, code = stripComments(line), m = code.match(/F\s*([-+]?(?:\d+\.?\d*|\.\d+))/i); // F100, F100., F.5
-    // macro blocks (F[#3], #1 = …) are left as they are; the modal feed after one is unknown
-    if (/[#[]/.test(code)) { out.push(line); progF = outF = null; return; }
+    const flow = FLOW.test(code.trim());
+    if (flow) { restore(); out.push(line); progF = outF = null; return; }
+    // other macro blocks (F[#3], #1 = …, X#1) are left as they are: the programmed feed comes back
+    // before them, and after an F of their own (F#3) the feed is unknown
+    if (/[#[]/.test(code)) {
+      restore(); out.push(line);
+      if (/F\s*[#[]/i.test(code)) progF = outF = null; else if (m) progF = outF = +m[1];
+      return;
+    }
     if (m) progF = +m[1];
     if (!feedLines.has(n) || progF === null) {
       if (m) outF = progF;

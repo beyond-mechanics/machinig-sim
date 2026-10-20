@@ -118,4 +118,12 @@ import { MATERIALS } from '../src/materials.js';
   assert.equal(rewriteFeeds(t, new Set([1, 2]), new Map([[1, 1.5], [2, 1.5]])), t);
   assert.equal(rewriteSpindle(t, 1.2), t);
 }
+// the programmed feed comes back before macro blocks and calls (text order ≠ run order there)
+{
+  const a = rewriteFeeds('G1 X10 F100\n#1=5\nG1 X20\nG1 X#1', new Set([1, 3, 4]), new Map([[1, 1.5]]));
+  assert.equal(a, 'G1 X10 F150\nF100\n#1=5\nG1 X20\nG1 X#1');
+  const b = rewriteFeeds('G1 X1 F500\nM98 P100\nG1 X2 F200\nM98 P100\nM30\nO100\nG1 Y5\nM99', new Set([1, 3, 7]), new Map([[7, 1.2], [1, 1.1]]));
+  assert.equal(b.split('\n').slice(0, 3).join('|'), 'G1 X1 F550|F500|M98 P100');
+  assert.ok(b.includes('\nG1 Y5\n'), 'a subprogram line with no F of its own is left alone');
+}
 console.log('feedopt tests passed');

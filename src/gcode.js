@@ -85,8 +85,17 @@ export function parseGcode(text, opts = {}) {
   // custom macro: variables, N-number jump targets, WHILE loops by DO number
   const clean = l => { let c = l.replace(/\([^)]*\)/g, '').replace(/;.*$/, '').toUpperCase().trim(); if (c.startsWith('/')) c = c.slice(1).trim(); return c; };
   const vars = new Map(Object.entries(opts.vars || {}).map(([k, v]) => [+k, v]));
-  const nLabels = new Map(), loops = new Map();
-  lines.forEach((l, i) => { const m = clean(l).match(/^N\s*(\d+)/); if (m && !nLabels.has(+m[1])) nLabels.set(+m[1], i); });
+  // N numbers are looked up within the program (O block) a line belongs to: CAM output repeats
+  // N10, N20 … in every program. progOf[i]: the line index of the O label above line i (-1: none)
+  const progOf = [], nLabels = new Map();
+  let loops = new Map();   // WHILE … DO m start lines, per call level
+  lines.forEach((l, i) => {
+    progOf[i] = i && progOf[i - 1] !== undefined ? progOf[i - 1] : -1;
+    if ([...labels.values()].includes(i)) progOf[i] = i;
+    const m = clean(l).match(/^N\s*(\d+)/), key = `${progOf[i]}:${m?.[1] ? +m[1] : ''}`;
+    if (m && !nLabels.has(key)) nLabels.set(key, i);
+  });
+  const nLabel = (ln, n) => nLabels.get(`${progOf[ln]}:${n}`);
   let executed = 0;
   for (let ln = 0; ln < lines.length; ln++) {
     if (++executed > 2e6) { warn(ln, 'サブプログラムの呼び出しが多すぎるため打ち切り'); break; }
@@ -107,8 +116,8 @@ export function parseGcode(text, opts = {}) {
         const r = macroStatement(line, vars);
         if (r) {
           if (r.goto !== undefined) {
-            const at = nLabels.get(r.goto);
-            if (at === undefined) { warn(ln, `GOTO ${r.goto} の飛び先 N${r.goto} がありません (ここで終了)`); break; }
+            const at = nLabel(ln, r.goto);
+            if (at === undefined) { warn(ln, `GOTO ${r.goto} の飛び先 N${r.goto} がこのプログラム内にありません (ここで終了)`); break; }
             ln = at - 1;
           } else if (r.whileFalse !== undefined) {
             // past the matching END
@@ -123,18 +132,20 @@ export function parseGcode(text, opts = {}) {
         line = substitute(line, vars);
       } catch (err) { warn(ln, `マクロ: ${err.message} (この行は無視)`); continue; }
     }
-    if (/^G\s*0*65(?!\d)/.test(line)) {
+    const g65 = line.replace(/^N\s*\d+\s*/, '');
+    if (/^G\s*0*65(?!\d)/.test(g65)) {
       // G65 P<program> L<times> <arguments>: a subprogram with its own local variables #1–#33,
       // the arguments set by address (A → #1, B → #2, … Z → #26)
       const args = {};
-      for (const m of line.slice(line.search(/65/) + 2).matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)) args[m[1]] = parseFloat(m[2]);
+      for (const m of g65.replace(/^G\s*0*65/, '').matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)) args[m[1]] = parseFloat(m[2]);
       const at = args.P === undefined ? undefined : labels.get(Math.round(args.P));
       if (at === undefined) { warn(ln, `G65 のマクロ O${args.P ?? '?'} が見つかりません (この呼び出しは無視)`); continue; }
       if (calls.length >= 8) { warn(ln, 'マクロ呼び出しの入れ子が深すぎます (8 段まで)'); continue; }
       const saved = [];
       for (let n = 1; n <= 33; n++) { saved.push(vars.get(n)); vars.delete(n); }
       for (const [k, v] of Object.entries(args)) if (ARG_VAR[k]) vars.set(ARG_VAR[k], v);
-      calls.push({ ret: ln, left: Math.max(1, Math.round(args.L ?? 1)) - 1, start: at, locals: saved, args });
+      calls.push({ ret: ln, left: Math.max(1, Math.round(args.L ?? 1)) - 1, start: at, locals: saved, args, loops });
+      loops = new Map();
       ln = at;
       continue;
     }
@@ -241,15 +252,20 @@ export function parseGcode(text, opts = {}) {
       const at = P === undefined ? undefined : labels.get(Math.round(P));
       if (at === undefined) warn(ln, `サブプログラム O${P ?? '?'} が見つかりません (この呼び出しは無視)`);
       else if (calls.length >= 8) warn(ln, 'サブプログラムの入れ子が深すぎます (8 段まで)');
-      else if (L >= 1) { calls.push({ ret: ln, left: Math.round(L) - 1, start: at }); ln = at; }
+      else if (L >= 1) { calls.push({ ret: ln, left: Math.round(L) - 1, start: at, loops }); loops = new Map(); ln = at; }
     } else if (sub === 'return') {
       const c = calls[calls.length - 1];
-      if (!c) break; // M99 in the main program: the end (its loop back to the start is not run)
-      if (c.left > 0) {
-        c.left--; ln = c.start;
+      if (!c) { if (w.P !== undefined) warn(ln, 'メインプログラムの M99 P□ (飛び越し) は未対応 (ここで終了)'); break; } // M99 in the main program: the end (its loop back to the start is not run)
+      if (c.left > 0 && w.P === undefined) {
+        c.left--; ln = c.start; loops = new Map();
         if (c.locals) { for (let n = 1; n <= 33; n++) vars.delete(n); for (const [k, v] of Object.entries(c.args)) if (ARG_VAR[k]) vars.set(ARG_VAR[k], v); }
       } else {
-        calls.pop(); ln = c.ret;
+        calls.pop(); ln = c.ret; loops = c.loops;
+        // M99 P<n>: back to N<n> of the caller instead of the block after the call
+        if (w.P !== undefined) {
+          const at = nLabel(c.ret, Math.round(w.P));
+          if (at === undefined) warn(ln, `M99 P${w.P} の戻り先 N${w.P} がありません (呼び出しの次の行へ戻ります)`); else ln = at - 1;
+        }
         // a G65 call gives the caller its local variables back
         if (c.locals) c.locals.forEach((v, i) => (v === undefined ? vars.delete(i + 1) : vars.set(i + 1, v)));
       }

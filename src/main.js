@@ -180,6 +180,8 @@ function openProject(text) {
   for (const k of Object.keys(wcsDelta)) delete wcsDelta[k];
   Object.assign(wcsDelta, pj.wcsDelta || {});
   for (const [id, v] of Object.entries(pj.inputs || {})) if ($(id)) $(id).value = v;
+  // the stock grid as the configuration has it (a project from before the selector, or a size it lacks)
+  { const cs = $('cellSel'), v = String(sim.cfg.cell); if (![...cs.options].some(o => o.value === v)) cs.add(new Option(`${v} mm`, v)); cs.value = v; }
   // the panel controls that mirror cfg
   const t = sim.cfg.tool;
   $('material').value = sim.cfg.material;
