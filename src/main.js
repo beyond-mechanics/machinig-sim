@@ -270,7 +270,15 @@ $('orgPick').onclick = () => {
   }, $('orgPick'));
   if (on) $('orgPick').textContent = 'クリック待ち… (もう一度押すと取り消し)';
 };
-addEventListener('keydown', e => { if (e.key === 'Escape' && view.onPick) endPick(); });
+addEventListener('keydown', e => {
+  if (e.key === 'Escape' && view.onPick) { endPick(); return; }
+  // shortcuts while no field has the focus: Space play / pause, Home / End to the start / end
+  const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName) || t.getAttribute?.('role') === 'slider');
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === ' ') { e.preventDefault(); $('btnPlay').click(); }
+  else if (e.key === 'Home') { e.preventDefault(); seekTo(0); }
+  else if (e.key === 'End') { e.preventDefault(); seekTo(sim.totalTime || 0); }
+});
 $('orgSel').onchange = () => { const manual = $('orgSel').value === 'manual'; for (const id of ['oX', 'oY', 'oZ']) $(id).readOnly = !manual; };
 for (const id of ['oX', 'oY', 'oZ']) $(id).addEventListener('input', () => { $('orgSel').value = 'manual'; });
 // drop a program or an STL anywhere on the page
