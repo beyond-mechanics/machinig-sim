@@ -127,8 +127,12 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .notes ul { padding-left: 18px; display: grid; gap: 4px; }
 .notes code { font-family: var(--font-mono); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .progress > i { transition: none; } }
+.fatal { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--warn); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 13px; }
+.fatal code { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
 </style>
 <div class="wrap">
+  <noscript><div class="fatal">このページは JavaScript で動きます。プレビュー画面（メール・Teams・OneDrive など）では動かないので、ファイルを保存してから Edge や Chrome で直接開いてください。</div></noscript>
+  <div id="fatal" class="fatal" role="alert" hidden></div>
   <header class="bar">
     <div class="brand">
       <h1>切削シミュレーター（2D・3D）</h1>
@@ -351,4 +355,20 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
     </div>
   </section>
 </div>
+<script>
+// Errors show on the page (most people never open the console): what failed, and what to try.
+(function () {
+  var shown = {};
+  window.cutFatal = function (msg) {
+    var el = document.getElementById('fatal');
+    if (!el || shown[msg] || Object.keys(shown).length >= 3) return;
+    shown[msg] = 1; el.hidden = false;
+    if (!el.firstChild) el.appendChild(document.createTextNode('表示か計算でエラーが出ました。ブラウザを最新にするか、ファイルを保存して Edge や Chrome で直接開き直してください。直らないときは下の内容を知らせてください。'));
+    var c = document.createElement('div'), code = document.createElement('code');
+    code.textContent = msg; c.appendChild(code); el.appendChild(c);
+  };
+  window.addEventListener('error', function (e) { window.cutFatal((e.message || 'エラー') + (e.filename ? ' (' + e.lineno + ':' + e.colno + ')' : '')); });
+  window.addEventListener('unhandledrejection', function (e) { window.cutFatal(String(e.reason && e.reason.message || e.reason)); });
+})();
+</script>
 <script>/*APP*/</script>

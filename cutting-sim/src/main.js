@@ -4,6 +4,7 @@ import { DEFAULTS } from './sph.js';
 import { chamferProfile, breakerProfile, importProfile, wornProfile, importWorkpiece } from './profile.js';
 import { makeTool, toolOutline } from './tool.js';
 import { View3D } from './view3d.js';
+import { View3DCanvas } from './view3dcanvas.js';
 import { renderField, legendGradient, bandsOf } from './fieldview.js';
 import { parseSTL, bounds, volume, weld } from './mesh.js';
 import { EXAMPLES } from './examples3d.js';
@@ -276,7 +277,15 @@ function showShapeRows() {
   if (is3()) view3d();
 }
 let v3 = null;
-const view3d = () => v3 || (v3 = new View3D($('view3d')));
+// WebGL can be off (no GPU driver, hardware acceleration off, a company policy): fall back to a
+// plain-canvas particle view rather than a blank panel.
+const hasWebGL = () => { try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; } };
+const view3d = () => {
+  if (v3) return v3;
+  const el = $('view3d');
+  if (hasWebGL()) try { return (v3 = new View3D(el)); } catch (e) { console.warn('WebGL view failed, using the canvas view', e); el.replaceChildren(); }
+  return (v3 = new View3DCanvas(el));
+};
 $('shape').addEventListener('change', () => { showShapeRows(); reset(); });
 function loadCustom() {
   const info = $('pinfo');
@@ -390,6 +399,8 @@ for (const b of document.querySelectorAll('[data-render]')) {
 let section = false, meshTris = null;
 $('section').addEventListener('click', () => { section = !section; $('section').setAttribute('aria-pressed', section); draw(); });
 
+// An error in the solver thread (or a policy that blocks it) would otherwise just leave the view empty.
+worker.onerror = (e) => { if (window.cutFatal) window.cutFatal(`計算スレッド: ${e.message || '起動できませんでした'}`); };
 worker.onmessage = (e) => {
   if (e.data.type !== 'frame') return;
   frame = e.data;
@@ -715,7 +726,8 @@ function drawCharts() {
 }
 
 // ---- Readouts ----
-const f0 = (v) => v.toFixed(0), f1 = (v) => v.toFixed(1), f3 = (v) => v.toFixed(3);
+// A frame from the previous mode can still arrive just after a switch: blank rather than throw.
+const fx = (k) => (v) => (typeof v === 'number' && isFinite(v) ? v.toFixed(k) : '—'), f0 = fx(0), f1 = fx(1), f3 = fx(3);
 const CELLS = {
   mesh: [
     ['Fx の平均', (s) => f1(s.fx), 'N', (s) => `最大 ${f1(s.fxMax)} N。工具が受ける力（ファイルの x 軸）`],

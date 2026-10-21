@@ -63,7 +63,7 @@ export function renderField(ctx, frame, t, vals, lo, hi, lut, style, smooth = 1)
       const wv = Swv === Sw ? w : a * Swv[r0 + k] + b * Swv[r0 + k + 1] + c * Swv[r1 + k] + d * Swv[r1 + k + 1];
       const v = (a * Sv[r0 + k] + b * Sv[r0 + k + 1] + c * Sv[r1 + k] + d * Sv[r1 + k + 1]) / wv;
       const f = (a * Sf[r0 + k] + b * Sf[r0 + k + 1] + c * Sf[r1 + k] + d * Sf[r1 + k + 1]) / w;
-      let u = (v - lo) * inv; u = u < 0 ? 0 : u > 1 ? 1 : u;
+      let u = (v - lo) * inv; u = u > 0 ? (u > 1 ? 1 : u) : 0;   // NaN (an empty or stale frame) → 0
       let ti;
       if (nb) { const bi = Math.min(nb - 1, Math.floor(u * nb)); band[Y * W + X] = bi; ti = Math.round(bi / (nb - 1) * 255); }
       else { ti = Math.round(u * 255); band[Y * W + X] = 0; }
