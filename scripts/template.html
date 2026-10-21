@@ -229,6 +229,16 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
             <div class="seg" style="grid-template-columns:1fr 1fr 1fr"><button id="idExample" aria-pressed="false">例を入れる</button><button id="idRun" aria-pressed="false">同定する</button><button id="idApply" aria-pressed="false" disabled>同定値を使う</button></div>
             <div id="idOut" aria-live="polite"></div>
           </details>
+          <details id="vaBox" class="oxbox">
+            <summary>実測の切削抵抗波形と比べる (検証)</summary>
+            <p class="hint">動力計で記録した切削抵抗の波形 (CSV) を、同じ条件のシミュレーションと 1 回転の形で比べます。記録は主軸 1 回転ごとに重ねて平均するのでノイズが消え、回転に同期しない成分 (びびり・共振) は別に周波数を出します。波形の形から 6 つの係数と工具の振れ (量と向き) を求められます (送り 1 種類で可)。CSV は <code>t,Fx,Fy,Fz</code> (秒, N) で、条件を <code># S=3000 fz=0.05 ap=2 ae=3 mode=down</code> の行に書きます (mode は slot / down / up)。座標と符号は上の「切削試験から係数を同定」と同じ。工具は今の工具 (D N ねじれ角を CSV に書けばそちらを使います)。</p>
+            <input type="file" id="vaFile" accept=".csv,.txt,text/csv,text/plain" hidden>
+            <div class="seg" style="grid-template-columns:1fr 1fr 1fr"><button id="vaOpen" aria-pressed="false">CSV を開く</button><button id="vaSynth" aria-pressed="false">合成データで試す</button><button id="vaTemplate" aria-pressed="false">ひな形を保存</button></div>
+            <div id="vaInfo" class="hint" aria-live="polite"></div>
+            <canvas id="cvVa" style="width:100%;height:190px;display:block" hidden aria-label="1 回転の切削抵抗: 実測 (実線) とシミュレーション (破線)"></canvas>
+            <div class="seg" style="grid-template-columns:1fr 1fr"><button id="vaFit" aria-pressed="false" disabled>波形から係数と振れを同定</button><button id="vaApply" aria-pressed="false" disabled>同定値を使う</button></div>
+            <div id="vaOut" aria-live="polite"></div>
+          </details>
         </fieldset>
         <fieldset>
           <legend>工具</legend>

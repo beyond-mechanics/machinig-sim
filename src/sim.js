@@ -252,7 +252,7 @@ export class Simulator {
   ensureEngine(S) {
     if (Math.abs(S - this.lastS) < 1) return;
     const t = this.activeTool;
-    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, rAt: t.rAt, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear, runout: (t.runout ?? 0) / 1000 }, this.modalNow(S), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
+    this.engine.configure({ N: t.N, R: t.R, helixDeg: t.helixDeg, type: t.type, rAt: t.rAt, fluteLen: t.fluteLen, nonlinear: this.cfg.cuttingNonlinear, runout: (t.runout ?? 0) / 1000, runoutPhase: t.runoutPhase ?? 0 }, this.modalNow(S), this.mat, S, this.cfg.workpieceFlex ? FN_CAP : 0);
     this.lastS = S;
   }
 

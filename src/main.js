@@ -21,7 +21,8 @@ import { optimizeFeeds, rewriteFeeds, defaultTarget, optimizeSpindle, rewriteSpi
 import { adviceFor } from './advice.js';
 import { startConditions, arcOf } from './conditions.js';
 import { timeDomainLimit } from './stabtd.js';
-import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe } from './charts.js';
+import { refreshTheme, drawForces, drawOrbit, drawSpectrum, drawLobes, drawRoughness, drawSection, sectionProbe, drawRevolution } from './charts.js';
+import { parseRecord, syncAverage, simRevolution, align, shifted, compare, fitRecord, syntheticRecord, asyncPeak } from './validate.js';
 
 const $ = id => document.getElementById(id);
 const sim = new Simulator();
@@ -537,6 +538,95 @@ $('idApply').onclick = () => {
   const c = idLast.r.coefs, r1 = v => Math.round(v * 10) / 10;
   sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [idLast.key]: { Ktc: Math.round(c.Ktc), Krc: Math.round(c.Krc), Kac: Math.round(c.Kac), Kte: r1(c.Kte), Kre: r1(c.Kre), Kae: r1(c.Kae), mc: idMc(), source: '試験から同定' } };
   host.config(true); updateMatHint(); showJc();
+};
+// ---- validation against a measured force record ----
+let vaRec = null, vaFitRes = null;
+const saveText = async (name, text, type = 'text/plain') => {
+  if (downloads) { try { await downloads.save({ filename: name, data: text }); } catch { /* declined */ } return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+// the tool of the test: the panel tool, with what the record's header says
+const vaTool = () => {
+  const t = idTool(), h = vaRec?.rec.test || {};
+  return { ...t, D: h.D ?? t.D, N: h.N ?? t.N, helixDeg: h.helix ?? t.helixDeg, runout: h.runout ?? t.runout, runoutPhase: sim.cfg.tool.runoutPhase ?? 0 };
+};
+const vaTest = () => { const h = vaRec.rec.test; return { S: h.S, fz: h.fz, ap: h.ap, ae: h.ae ?? (h.mode === 'slot' ? vaTool().D : undefined), mode: h.mode }; };
+function vaLoad(text, label) {
+  const rec = parseRecord(text), h = rec.test;
+  vaFitRes = null; $('vaApply').disabled = true; $('vaOut').innerHTML = '';
+  const missing = ['S', 'fz', 'ap'].filter(k => !(h[k] > 0)).concat(h.mode !== 'slot' && !(h.ae > 0) ? ['ae'] : []);
+  if (rec.t.length < 32 || missing.length) {
+    vaRec = null; $('cvVa').hidden = true; $('vaFit').disabled = true;
+    $('vaInfo').textContent = rec.t.length < 32 ? `データの行が足りません (${rec.t.length} 行)。1 行に t,Fx,Fy,Fz。` : `条件が足りません: ${missing.join(' ')} を「# S=3000 fz=0.05 ap=2 ae=3 mode=down」の形で書いてください。`;
+    return;
+  }
+  const sa = syncAverage(rec.t, rec.F, h.S);
+  vaRec = { rec, sa, label };
+  vaShow();
+}
+// the record against the simulator with the present coefficients and tool (or the fitted ones)
+function vaShow() {
+  const { rec, sa, label } = vaRec, test = vaTest(), tool = vaTool(), comps = rec.hasZ ? [0, 1, 2] : [0, 1];
+  let simRev, cmp;
+  if (vaFitRes) { simRev = vaFitRes.sim; cmp = vaFitRes.cmp; }
+  else { const s0 = simRevolution(tool, sim.mat, test); simRev = shifted(s0, align(sa.avg, s0)); cmp = compare(sa.avg, simRev, comps); }
+  $('cvVa').hidden = false; drawRevolution($('cvVa'), sa.avg, simRev, comps);
+  const fs = (rec.t.length - 1) / (rec.t[rec.t.length - 1] - rec.t[0]), ftp = test.S / 60 * tool.N;
+  const pk = asyncPeak(rec.t, rec.F, test.S, tool.N, sa.avg), ppAll = Math.max(...cmp.map(c => c.ppM));
+  const asyncR = Math.hypot(sa.asyncRms[0], sa.asyncRms[1]) / Math.SQRT2;
+  const m = sim.modalNow(test.S), fn = m?.modesX?.[0]?.fn ?? m?.fn;
+  let asyncTxt = `回転に同期しない成分 ${asyncR.toFixed(1)} N RMS (波形の山谷の ${(asyncR / ppAll * 100).toFixed(0)}%)`;
+  if (pk && pk.share > 0.1) asyncTxt += `、${Math.round(pk.f)} Hz に山 (振幅 ${pk.amp.toFixed(1)} N、非同期成分の ${(pk.share * 100).toFixed(0)}%): びびりか機械の共振の疑い${fn && Math.abs(pk.f - fn) < 0.15 * fn ? ` — 工具の固有振動数 ${Math.round(fn)} Hz に近いので再生びびりの可能性が高い` : ''}`;
+  else asyncTxt += '、目立つ周波数の山なし (ノイズ程度)';
+  $('vaInfo').innerHTML = `${label.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])}: ${rec.t.length.toLocaleString()} 点、${fs.toFixed(0)} Hz サンプリング、${sa.revs.toFixed(1)} 回転を平均${fs < 20 * ftp ? ` <b>(サンプリングが刃の通過 ${ftp.toFixed(0)} Hz の 20 倍未満: 波形の山が丸まります)</b>` : ''}。条件 S${test.S} fz ${test.fz} ap ${test.ap} ae ${test.ae ?? '—'} ${{ slot: '溝', down: 'ダウン', up: 'アップ' }[test.mode]}、工具 φ${tool.D} ${tool.N} 枚刃。<br>${asyncTxt}。${rec.bad.length ? ` 読めなかった行 ${rec.bad.length}。` : ''}`;
+  const pct = v => `${v.toFixed(1)}%`;
+  $('vaOut').innerHTML = `<table class="oxtable" aria-label="実測と計算の比較"><caption class="hint" style="text-align:left">${vaFitRes ? '同定値での計算' : 'いまの係数と工具での計算'} と実測 (1 回転の平均波形)</caption><thead><tr><th></th><th>平均 実測/計算 [N]</th><th>山谷 実測/計算 [N]</th><th>誤差 RMS</th><th>相関</th></tr></thead><tbody>${cmp.map(c =>
+    `<tr><td>${c.comp}</td><td>${c.meanM.toFixed(0)} / ${c.meanS.toFixed(0)}</td><td>${c.ppM.toFixed(0)} / ${c.ppS.toFixed(0)}</td><td>${pct(c.rmsPct)}</td><td>${c.r.toFixed(3)}</td></tr>`).join('')}</tbody></table>
+    ${vaFitRes ? `<table class="oxtable" aria-label="同定値"><thead><tr><th></th><th>同定</th><th>いま</th></tr></thead><tbody>${COEF_KEYS.map(k => `<tr><td>${k} [${k.endsWith('c') ? 'N/mm²' : 'N/mm'}]</td><td>${vaFitRes.coefs[k].toFixed(k.endsWith('c') ? 0 : 1)}</td><td>${sim.mat[k].toFixed(k.endsWith('c') ? 0 : 1)}</td></tr>`).join('')}
+      <tr><td>振れ [µm]</td><td>${vaFitRes.runout} (向き ${Math.round(vaFitRes.runoutPhase * 180 / Math.PI)}°)</td><td>${tool.runout ?? 0}</td></tr></tbody></table>` : ''}
+    <p class="hint">誤差 RMS は実測の山谷に対する割合。目安: 10% 以下でよく合っている、相関 0.95 以上で形が合っている。${vaFitRes ? '' : '合わないときは「波形から係数と振れを同定」。'}</p>`;
+  $('vaFit').disabled = false;
+}
+$('vaOpen').onclick = () => $('vaFile').click();
+$('vaFile').onchange = async e => { const f = e.target.files[0]; e.target.value = ''; if (f) vaLoad(await f.text(), f.name); };
+$('vaSynth').onclick = () => {
+  // a made-up record: the panel material with its coefficients changed, 7 µm runout, 4 % noise and
+  // a ringing near the tool's mode (to show what the check reports); labelled as synthetic
+  const tool = { ...idTool(), runout: 7, runoutPhase: 1.1 }, m = sim.mat, S = Math.round(sim.S || startConditions(m, sim.activeTool).S || 6000);
+  const truth = { ...m, Ktc: m.Ktc * 1.15, Krc: m.Krc * 0.85, Kte: m.Kte * 1.4 };
+  const mod = sim.modalNow(S), fn = mod?.modesX?.[0]?.fn ?? mod?.fn ?? 1500;
+  const test = { S, fz: 0.05, ap: 2, ae: tool.D * 0.3, mode: 'down' };
+  vaLoad(syntheticRecord(tool, truth, test, { noise: 0.04, ring: 0.04, ringHz: fn * 0.97 + 7.3, revs: 30 }), '合成データ (実測ではありません)');
+};
+$('vaTemplate').onclick = () => saveText('cutting_force_template.csv', ['# 切削抵抗の記録 (このシミュレーターの検証用)',
+  '# 1 行目以降の # 行に条件: S [min-1] fz [mm/刃] ap ae [mm] mode=slot|down|up (任意で D N helix [°] runout [µm])',
+  '# 列: t [s], Fx Fy Fz [N] (工作物に働く力 = テーブル上の動力計の値。X = 送り方向、Y = 送りの左、Z = 上、M03)',
+  '# 目安: サンプリングは刃の通過周波数 (S/60 × 刃数) の 20 倍以上、記録は安定した切削中の 20 回転以上',
+  '# 以下の 3 行は書き方の例 (数値はダミー)。消して実測で置き換えてください',
+  '# S=3000 fz=0.05 ap=2 ae=3 mode=down D=10 N=3 helix=30', 't,Fx,Fy,Fz', '0.000000,0.0,0.0,0.0', '0.000050,0.0,0.0,0.0', '0.000100,0.0,0.0,0.0'].join('\n'), 'text/csv');
+$('vaFit').onclick = () => {
+  if (!vaRec) return;
+  $('vaFit').disabled = true; $('vaOut').innerHTML = '<p class="hint">同定中… (数秒)</p>';
+  setTimeout(() => {
+    try {
+      const comps = vaRec.rec.hasZ ? [0, 1, 2] : [0, 1];
+      vaFitRes = { ...fitRecord(vaTool(), sim.mat, vaTest(), vaRec.sa.avg, { comps }), key: sim.cfg.material };
+      $('vaApply').disabled = false;
+    } catch (err) { $('vaOut').textContent = `同定できませんでした: ${err.message}`; $('vaFit').disabled = false; return; }
+    vaShow();
+  }, 30);
+};
+$('vaApply').onclick = () => {
+  if (!vaFitRes || vaFitRes.key !== sim.cfg.material) return;
+  const c = vaFitRes.coefs, r1 = v => Math.round(v * 10) / 10;
+  sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [vaFitRes.key]: { Ktc: Math.round(c.Ktc), Krc: Math.round(c.Krc), Kac: Math.round(c.Kac), Kte: r1(c.Kte), Kre: r1(c.Kre), Kae: r1(c.Kae), mc: sim.mat.mc ?? 0, source: '波形から同定' } };
+  sim.cfg.tool.runout = vaFitRes.runout; sim.cfg.tool.runoutPhase = vaFitRes.runoutPhase; $('tRun').value = vaFitRes.runout;
+  host.config(true); updateMatHint(); showJc();
+  vaFitRes = null; $('vaApply').disabled = true;
+  vaShow();
 };
 $('coefReset').onclick = () => {
   if (sim.cfg.coefs) delete sim.cfg.coefs[sim.cfg.material];

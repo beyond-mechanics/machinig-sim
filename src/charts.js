@@ -343,3 +343,20 @@ export function drawSection(cv, s) {
 
 // temperature under a pointer position (CSS px within the canvas), from the last drawSection
 export function sectionProbe(px, py) { return probe ? probe(px, py) : null; }
+
+// one spindle revolution of force: measured (solid) and simulated (dashed), Fx Fy (Fz)
+export function drawRevolution(cv, meas, sim, comps = [0, 1, 2]) {
+  const { g, w, h } = setup(cv);
+  const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
+  const cols = [C.a, C.b, C.c], names = ['Fx', 'Fy', 'Fz'], n = meas[0].length;
+  let mx = 0; for (const c of comps) for (const a of [meas[c], sim?.[c]]) if (a) for (const v of a) mx = Math.max(mx, Math.abs(v));
+  const Y = niceMax(mx * 1.05), ys = v => box.y + box.h / 2 - v / Y * box.h / 2, xs = b => box.x + box.w * (b + 0.5) / n;
+  frame(g, box, '主軸の回転角 [°]', 'N', [[`${Y}`, ys(Y)], ['0', ys(0)], [`${-Y}`, ys(-Y)]], [0, 90, 180, 270, 360].map(d => [`${d}`, box.x + box.w * d / 360]));
+  const line = (a, col, dash) => {
+    g.strokeStyle = col; g.lineWidth = dash ? 1.2 : 1.6; g.setLineDash(dash ? [5, 4] : []);
+    g.beginPath(); for (let b = 0; b < n; b++) b ? g.lineTo(xs(b), ys(a[b])) : g.moveTo(xs(b), ys(a[b])); g.stroke();
+  };
+  for (const c of comps) { line(meas[c], cols[c], false); if (sim) line(sim[c], cols[c], true); }
+  g.setLineDash([]);
+  legend(g, [...comps.map(c => [names[c], cols[c]]), ['破線=計算', C.mute]], box.x + 22, 7);
+}
