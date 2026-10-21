@@ -27,9 +27,15 @@
 body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.5; }
 .wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 12px 32px; max-width: 1600px; margin: 0 auto; display: grid; gap: 12px; }
 header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 4px; }
-.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
+.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-right: auto; min-width: 0; }
 .brand h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: 0.04em; text-wrap: balance; }
 .brand .sub { color: var(--ink-mute); font-size: 12px; }
+.brand .caution { color: var(--warn); font-size: 12px; }
+.legal { margin-top: 16px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 18px; font-size: 13px; }
+.legal h2 { font-size: 14px; margin: 0 0 6px; }
+.legal p { margin: 0 0 6px; max-width: 70ch; }
+.legal summary { cursor: pointer; }
+.legal pre { margin: 6px 0 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; max-width: calc(80ch + 28px); }
 .pill { font: 500 12px/1 var(--font-mono); padding: 6px 10px; border-radius: 999px; border: 1px solid currentColor; letter-spacing: 0.05em; white-space: nowrap; }
 .pill[data-s="stable"] { color: var(--ok); } .pill[data-s="marginal"] { color: var(--warn); } .pill[data-s="chatter"] { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); } .pill[data-s="idle"] { color: var(--ink-mute); }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -81,6 +87,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(-
 .hint { font-size: 12px; color: var(--ink-mute); margin: 0; }
 .check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 8px; font: 12px/1.5 var(--font-mono); tab-size: 2; white-space: pre; }
+.dropzone { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); border: 3px dashed var(--accent); font-size: 18px; font-weight: 700; pointer-events: none; }
 .warnings { font-size: 12px; color: var(--warn); margin: 0; padding-left: 18px; }
 .prose { font-size: 13px; line-height: 1.7; }
 .prose h3 { font-size: 13px; margin: 14px 0 4px; letter-spacing: 0.03em; }
@@ -108,9 +115,10 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
+<div class="dropzone" id="dropzone" hidden>NC プログラムか STL をここに放してください</div>
 <div class="wrap">
   <header class="bar">
-    <div class="brand"><h1>3軸加工シミュレーター</h1><span class="sub">切削力 · びびり振動 · たわみ · 切粉</span></div>
+    <div class="brand"><h1>3軸加工シミュレーター</h1><span class="sub">切削力 · びびり振動 · たわみ · 切粉</span><span class="caution">研究用の試作です。結果は参考値で、実際の加工条件の決定には使わないでください。</span></div>
     <span class="pill" id="statePill" data-s="idle">待機中</span>
     <div class="controls">
       <button class="primary" id="btnPlay">▶ 開始</button>
@@ -137,7 +145,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         <button class="chipbtn" data-color="vibration" aria-pressed="false">振動マップ</button>
         <button class="chipbtn" data-color="wall" aria-pressed="false">ワーク変形</button>
         <button class="chipbtn" data-color="depth" aria-pressed="false">深さ</button>
-        <span class="legend" id="legend" hidden><span id="legend0">0</span><i></i><span id="legend1">40 µm</span></span>
+        <button class="chipbtn" data-color="devIdeal" aria-pressed="false" title="工具のたわみ・振動・壁の逃げで、指令どおりの形からどれだけずれたか">指令との差</button>
+        <button class="chipbtn" data-color="devTarget" aria-pressed="false" disabled title="目標形状 (STL) との差。プログラムタブで読み込みます">目標との差</button>
+        <span class="legend" id="legend" hidden><span id="legend0">0</span><i id="legendBar"></i><span id="legend1">40 µm</span></span>
       </div>
     </div>
 
@@ -165,12 +175,24 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         </fieldset>
         <fieldset>
           <legend>工具</legend>
-          <div class="seg" style="grid-template-columns:repeat(2,1fr)"><button data-ttype="flat" aria-pressed="true">フラット</button><button data-ttype="ball" aria-pressed="false">ボール</button></div>
+          <div class="seg"><button data-ttype="flat" aria-pressed="true">フラット</button><button data-ttype="ball" aria-pressed="false">ボール</button><button data-ttype="bull" aria-pressed="false">ラジアス</button></div>
+          <div class="row" id="rowCR" hidden><label for="tCR">コーナー R <span class="unit">mm</span></label><input type="number" id="tCR" min="0.1" max="10" step="0.1" value="1"></div>
           <div class="row"><label for="tD">直径 D <span class="unit">mm</span></label><input type="number" id="tD" min="1" max="32" step="0.5" value="10"></div>
           <div class="row"><label for="tN">刃数</label><input type="number" id="tN" min="1" max="8" step="1" value="3"></div>
           <div class="row"><label for="tHelix">ねじれ角 <span class="unit">°</span></label><input type="number" id="tHelix" min="0" max="60" step="1" value="30"></div>
           <div class="row"><label for="tFlute">刃長 <span class="unit">mm</span></label><input type="number" id="tFlute" min="2" max="80" step="1" value="25"></div>
+          <div class="row"><label for="tRake">すくい角 <span class="unit">°</span></label><input type="number" id="tRake" min="-10" max="25" step="1" value="10"></div>
+          <div class="row"><label for="tVB0">初期摩耗 VB <span class="unit">mm</span></label><input type="number" id="tVB0" min="0" max="0.5" step="0.05" value="0"></div>
           <div class="row"><label for="tStick">突出し長 <span class="unit">mm</span></label><input type="number" id="tStick" min="5" max="150" step="1" value="30"></div>
+          <div class="row"><label for="tShank">シャンク径 <span class="unit">mm</span></label><input type="number" id="tShank" min="0" max="50" step="0.5" placeholder="= 直径"></div>
+          <div class="row"><label for="tNeckD">首の径 <span class="unit">mm</span></label><input type="number" id="tNeckD" min="0" max="50" step="0.1" placeholder="なし"></div>
+          <div class="row"><label for="tNeckL">首下長さ <span class="unit">mm</span></label><input type="number" id="tNeckL" min="0" max="300" step="1" placeholder="なし"></div>
+          <div class="row"><label for="tHolder">ホルダー</label><select id="tHolder"></select></div>
+          <div class="seg"><button id="stlToolBtn" aria-pressed="false">工具 STL</button><button id="stlHolderBtn" aria-pressed="false">ホルダー STL</button><button id="libBtn" aria-pressed="false">工具ライブラリ</button></div>
+          <input type="file" id="stlToolFile" accept=".stl" hidden><input type="file" id="stlHolderFile" accept=".stl" hidden><input type="file" id="libFile" accept=".json,application/json" hidden>
+          <button id="assetClear" hidden>読み込んだ工具・ホルダーを外す</button>
+          <p class="hint" id="toolInfo" style="white-space:pre-line">ホルダーを選ぶと、シャンク・ホルダー・主軸端が素材に当たらないかを調べ、工具とホルダーを段付きのはりとして剛性を計算します。STL は工具の軸を Z、刃先を下にして書き出してください (寸法は mm)。工具ライブラリは Autodesk Fusion の JSON を読み、T 番号ごとの工具とホルダーを使います。</p>
+          <p class="hint">プログラムのコメントに工具寸法があれば、その工具番号ではそちらを使います (直径・形状・刃数など、書かれている項目だけ)。</p>
         </fieldset>
         <fieldset>
           <legend>工具先端の動特性</legend>
@@ -178,9 +200,12 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <div class="row"><label for="mK">剛性 k <span class="unit">N/µm</span></label><input type="number" id="mK" min="0.5" max="200" step="0.1"></div>
           <div class="row"><label for="mFn">固有振動数 <span class="unit">Hz</span></label><input type="number" id="mFn" min="100" max="20000" step="10"></div>
           <div class="row"><label for="mZeta">減衰比 ζ</label><input type="number" id="mZeta" min="0.005" max="0.3" step="0.005" value="0.04"></div>
+          <div class="row"><label for="spSoft">主軸の剛性低下 <span class="unit">% @30000</span></label><input type="number" id="spSoft" min="0" max="60" step="1" value="25"></div>
+          <p class="hint" id="spInfo">高速回転では軸受の予圧が抜けホルダーが緩むので、主軸側の剛性が下がり固有振動数が下がります。30000 min⁻¹ での低下率 (0 で無効) です。工具先端には主軸側のコンプライアンスの割合だけ効きます。</p>
+          <div class="row"><label for="frfS">測定時の回転数 <span class="unit">min⁻¹</span></label><input type="number" id="frfS" min="0" max="60000" step="500" placeholder="静止"></div>
           <div class="seg"><button id="frfLoad" aria-pressed="false">実測FRF (CSV)</button><button id="frfExample" aria-pressed="false">FRFの例</button><button id="frfClear" aria-pressed="false" disabled>外す</button></div>
           <input type="file" id="frfFile" accept=".csv,.txt,text/csv,text/plain" hidden>
-          <p class="hint" id="frfInfo" style="white-space:pre-line">ハンマリング試験の FRF を読み込むと、X/Y 別の複数モードで振動と安定限界線図を計算します。列は 周波数 [Hz], Re G<sub>xx</sub>, Im G<sub>xx</sub>, Re G<sub>yy</sub>, Im G<sub>yy</sub> (m/N)。Y の列が無ければ X と同じとみなします。</p>
+          <p class="hint" id="frfInfo" style="white-space:pre-line">ハンマリング試験の FRF を読み込むと、X/Y 別の複数モードで振動と安定限界線図を計算します。列は 周波数 [Hz], Re G<sub>xx</sub>, Im G<sub>xx</sub>, Re G<sub>yy</sub>, Im G<sub>yy</sub> (m/N)。Y の列が無ければ X と同じとみなします。回転中に測った (または切削試験から同定した) FRF は「測定時の回転数」を入れてから読み込むと、回転数ごとに複数持てます。その間の回転数は補間し、主軸の剛性低下のモデルの代わりに使います。</p>
         </fieldset>
         <fieldset>
           <legend>切削モデル</legend>
@@ -194,7 +219,12 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         </fieldset>
         <fieldset>
           <legend>切粉の排出</legend>
-          <div class="seg"><button data-cool="dry" aria-pressed="false">ドライ</button><button data-cool="air" aria-pressed="true">エアブロー</button><button data-cool="flood" aria-pressed="false">クーラント</button></div>
+          <div class="seg" style="grid-template-columns:repeat(4,1fr)"><button data-cool="dry" aria-pressed="false">ドライ</button><button data-cool="air" aria-pressed="true">エアブロー</button><button data-cool="flood" aria-pressed="false">クーラント</button><button data-cool="through" aria-pressed="false">スルー</button></div>
+          <div style="display:grid;gap:8px" id="nozzleBox">
+            <div class="slider"><label for="nzAz">ノズルの向き (工具まわりの方位)</label><output id="nzAzOut">218°</output><input type="range" id="nzAz" min="0" max="355" step="5" value="218"></div>
+            <div class="slider"><label for="nzH">ノズルの高さ (刃先から)</label><output id="nzHOut">55 mm (仰角 44°)</output><input type="range" id="nzH" min="5" max="120" step="1" value="55"></div>
+          </div>
+          <p class="hint" id="coolHint">ノズルは主軸に付いて工具と一緒に動き、常に刃先を狙います。スルーは工具内部の穴から刃先へ出すスルースピンドルクーラントです。</p>
         </fieldset>
         <fieldset>
           <legend>表示</legend>
@@ -204,11 +234,53 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         </fieldset>
       </div>
       <div class="tabpane" data-pane="prog" hidden>
-        <div class="row wide"><select id="sample" aria-label="サンプルプログラム"></select></div>
+        <fieldset>
+          <legend>プログラム</legend>
+          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="gcOpen" aria-pressed="false">ファイルを開く</button><button id="gcSave" aria-pressed="false">ファイルに保存</button></div>
+          <input type="file" id="gcFile" accept=".nc,.ngc,.gcode,.tap,.cnc,.eia,.mpf,.min,.txt,.ptp,.iso,text/plain" hidden>
+          <div class="row wide"><select id="sample" aria-label="サンプルプログラム"></select></div>
+          <p class="hint" id="gcInfo">NC ファイル (.nc .tap .gcode .eia など) を開くか、画面にドラッグ&ドロップできます。文字コードは UTF-8 と Shift_JIS を自動判別します。</p>
+        </fieldset>
         <textarea id="code" spellcheck="false" aria-label="Gコード"></textarea>
-        <button class="primary" id="btnLoad">このプログラムで再シミュレーション</button>
-        <p class="hint">対応: G0 G1 G2 G3 (I J / R)、G17 G20 G21 G90 G91、F S M3 M5 M30。<code>(STOCK 幅 奥行 高さ)</code> で素材寸法を指定します。素材上面が Z0、左下手前が X0 Y0 です。</p>
+        <fieldset>
+          <legend>素材 (ワーク)</legend>
+          <div class="seg" style="grid-template-columns:repeat(4,1fr)"><button data-stock="prog" aria-pressed="true">プログラム</button><button data-stock="box" aria-pressed="false">直方体</button><button data-stock="cyl" aria-pressed="false">丸棒</button><button data-stock="stl" aria-pressed="false">STL</button></div>
+          <div style="display:grid;gap:8px" data-for="box" hidden>
+            <div class="row"><label for="stW">幅 X <span class="unit">mm</span></label><input type="number" id="stW" min="1" max="2000" step="1" value="120"></div>
+            <div class="row"><label for="stL">奥行 Y <span class="unit">mm</span></label><input type="number" id="stL" min="1" max="2000" step="1" value="80"></div>
+            <div class="row"><label for="stH">高さ Z <span class="unit">mm</span></label><input type="number" id="stH" min="1" max="500" step="1" value="30"></div>
+          </div>
+          <div style="display:grid;gap:8px" data-for="cyl" hidden>
+            <div class="row"><label for="cD">直径 <span class="unit">mm</span></label><input type="number" id="cD" min="1" max="1000" step="1" value="60"></div>
+            <div class="row"><label for="cH">高さ Z <span class="unit">mm</span></label><input type="number" id="cH" min="1" max="500" step="1" value="30"></div>
+          </div>
+          <div style="display:grid;gap:8px" data-for="stl" hidden>
+            <button id="stlOpen" style="width:100%">STL ファイルを開く</button>
+            <input type="file" id="stlFile" accept=".stl,model/stl,application/sla" hidden>
+          </div>
+          <p class="hint" id="stockInfo">「プログラム」はコメント <code>(STOCK 幅 奥行 高さ)</code> か <code>(STOCK CYL 直径 高さ)</code> を使い、無ければ切削送りの範囲から直方体を仮定します。</p>
+          <div class="row"><label for="orgSel">プログラム原点</label><select id="orgSel">
+            <option value="auto">自動</option><option value="corner">上面の左手前の角</option><option value="center">上面の中心</option><option value="center-bottom">下面の中心</option><option value="model">STL の座標そのまま</option><option value="manual">数値で指定</option>
+          </select></div>
+          <div class="row"><label for="oX">原点の位置 X <span class="unit">mm</span></label><input type="number" id="oX" step="0.1" value="0"></div>
+          <div class="row"><label for="oY">原点の位置 Y <span class="unit">mm</span></label><input type="number" id="oY" step="0.1" value="0"></div>
+          <div class="row"><label for="oZ">原点の位置 Z <span class="unit">mm</span></label><input type="number" id="oZ" step="0.1" value="0"></div>
+          <p class="hint">原点の位置は、素材上面の左手前の角から測ったプログラム原点 (X0 Y0 Z0) の位置です。素材の下面は Z = −高さ です。</p>
+        </fieldset>
+        <fieldset>
+          <legend>目標形状 (仕上がり)</legend>
+          <div class="seg" style="grid-template-columns:1fr 1fr"><button id="tgOpen" aria-pressed="false">目標 STL を開く</button><button id="tgClear" aria-pressed="false" disabled>外す</button></div>
+          <input type="file" id="tgFile" accept=".stl,model/stl,application/sla" hidden>
+          <div class="row"><label for="tol">公差 ± <span class="unit">mm</span></label><input type="number" id="tol" min="0.001" max="5" step="0.005" value="0.05"></div>
+          <p class="hint" id="tgInfo">CAM で使った仕上がり形状の STL を読み込むと、加工結果と比べて削り残し (青) と削り過ぎ (赤) を色で示します。STL はプログラムと同じ座標 (CAM のモデル座標) で置きます。上から見えるのは上面だけなので、張り出しの下は比べません。</p>
+        </fieldset>
+        <button class="primary" id="btnLoad">この設定で再シミュレーション</button>
         <ul class="warnings" id="warnings"></ul>
+        <fieldset id="toolBox" hidden>
+          <legend>プログラムの工具</legend>
+          <ul class="hint" id="toolList" style="padding-left:18px;margin:0"></ul>
+        </fieldset>
+        <p class="hint">対応: G0 G1 G2 G3 (I J K / R、ヘリカル)、G17 G18 G19、G20 G21 G90 G91 G94 G95、固定サイクル G73 G81〜G89 (G98 G99、K/L 繰返し)、G28 G53 (Z の退避のみ)、T□ M6 の工具交換、F S M3 M4 M5 M30。工具の寸法はコメントから読み取ります: Fusion 形式 <code>(T1 D=10. CR=0. - flat end mill)</code>、または <code>(TOOL T1 D10 N3 FLAT L25 SO35)</code> (N 刃数、L 刃長、SO 突出し長、BALL でボール)。寸法の無い工具は「加工条件」タブの工具で計算します。工具径補正 G41 G42 G40 は工具の半径 (D 番号ではなく工具の寸法) で経路をずらします (G17 のみ)。マクロとサブプログラムは未対応です。</p>
       </div>
       <div class="tabpane prose" data-pane="about" hidden>
         <h3>何を計算しているか</h3>
@@ -222,14 +294,22 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <li><b>安定限界線図</b>: 同じ動特性から Altintas–Budak のゼロ次解で解析的に求めます。時間領域シミュレーションの結果と照らし合わせられます。</li>
           <li><b>たわみと応力</b>: 工具を片持ちはり(刃部の等価直径 0.8D、超硬 E=600 GPa)と主軸側ばねの直列で扱い、根元の曲げとねじりから相当応力を出します。</li>
           <li><b>ワーク(薄肉壁)の変形</b>: 工具が押している壁の厚さ・自由高さ・長さを高さマップから読み取り、根元固定の片持ち板(有効幅は荷重高さの約2倍)として剛性と質量を出します。壁は壁の法線方向の1自由度振動系として工具と連成し、切りくず厚さは工具と壁の相対変位で決まります。壁が逃げた分だけ削り残しが生じます。</li>
-          <li><b>切粉</b>: 刃が切れ刃から抜けるたびに体積を持った粒子を放出し、重力・空気やクーラントの流れ・工具の回転・素材形状との衝突で動かします。ポケット内に残った量と再切削の回数を数えます。</li>
+          <li><b>素材とプログラムの取り込み</b>: 素材は直方体・丸棒・STL から選べます。STL は真上から見た一番上の面を高さマップにします (上から見える穴やポケットは残り、オーバーハングの下は埋まります)。プログラム原点は、切削送りが素材に一番よく収まる位置を自動で選ぶか、素材上面の角から測った位置で指定します。T□ M6 で工具が替わり、寸法はプログラムのコメントから読みます。</li>
+          <li><b>工具とホルダー</b>: シャンク径・首・ホルダー(焼きばめ・コレット・ミーリングチャック・サイドロック)を指定するか、工具 STL・ホルダー STL・Fusion 360 の工具ライブラリ(JSON)を読み込めます。剛性は段付きの片持ちはりとして積分し、工具 STL の先端形状(ドリルの円すい・ボールなど)はそのまま削った形に出ます。シャンクやホルダーが素材に食い込むと、部位と食い込み量を警告し、場所を赤い点で示します。</li>
+          <li><b>切粉の排出</b>: 刃が材料から抜けるたびに、その刃が削った体積の切粉を出します。速さは切削速度、向きは切削方向にすくい面を上がる流れ (流出角 ≈ ねじれ角、Stabler の法則) を加えたもので、上向きの成分は 切削速度 × sin(ねじれ角) / 圧縮比 です。切粉 1 個の質量と投影面積は実際の切りくず厚さ (平均切取り厚さ × 被削材ごとの圧縮比) から求め、空気・クーラント中の抗力 ½ρC<sub>d</sub>A|u−v|(u−v)、浮力、付加質量、重力で動かします (アルミの切粉の終端速度は空気中で約 3 m/s、水溶性クーラント中で約 0.08 m/s)。</li>
+          <li><b>クーラントの流れ</b>: エアブローは乱流噴流 (中心速度がノズル径/距離に比例して落ち、幅が距離の約 1 割で広がる)、クーラントは崩れない液柱、スルーは工具先端から真下へ出る噴流とし、床に当たると放射状の壁面噴流になります。壁面噴流は高さマップの壁で止まって壁をはい上がり、縁を越えて外へ流れます。ノズルが低いとポケットの縁に当たって底まで届きません。クーラントは素材上に浅水流の層をつくり、ポケットにたまり、縁からあふれて端から流れ落ちます (薄い青の面)。工具の回転が周りの流体を引きずる旋回流と、乱れによる不規則な速度も入れています。</li>
+          <li><b>切粉どうしと床</b>: 切粉は球として互いに重なり (山を作る)、床や壁では反発と摩擦 (クーラントで濡れると小さく) を受けます。止まった切粉は眠らせて計算を省き、流れの力が静止摩擦を超えたとき・下の支えが無くなったとき・工具が来たときに起こします。切削中に工具の切れ刃範囲へ入った切粉を「再切削」として数えます。</li>
+          <li><b>切りくず詰まり</b>: 1 刃分の切粉のかさ (体積 × かさ係数) が刃溝の容積に対して大きすぎると警告します (接触角 120° 以上の溝加工・深い切込みで、目安 60%、刃径の 1.5 倍を超える深さでは 45%)。</li>
         </ul>
         <h3>精度とリアルタイム性のトレードオフ</h3>
         <ul>
           <li>振動の積分には 1 刃あたり数十〜数百ステップが要ります。等倍以下なら加工時間をすべて積分しますが、早送り再生では1フレームあたりの計算量に上限を設け、区間の一部だけを積分して全体を代表させています。びびりの成長速度は実時間より遅く見えることがあります。</li>
           <li>切削係数と動特性は代表値です。実機の値はハンマリング試験(FRF)と切削力測定で同定して入力してください。</li>
           <li>薄肉壁は荷重高さの壁厚だけで剛性を見積もる簡易モデルで、テーパ状の壁や床(薄い底面)のたわみは扱いません。壁の固有振動数は時間刻みの都合で 5 kHz を上限にしています。</li>
-          <li>底刃の切削力(プランジ)、工具摩耗、熱は未対応です。切粉は数を間引いた代表粒子で、流体は簡易な速度場です。</li>
+          <li>切削温度は二次元切削のエネルギー収支(Merchant のせん断角、Boothroyd の熱配分、Jaeger の移動熱源)による平均値で、FEM による温度場ではありません。断面図の温度分布は各熱源の温度を使った模式図です。工具摩耗は Usui 式を被削材ごとの代表寿命で校正しています。</li>
+          <li>工具・ホルダーは回転対称として扱い、ホルダー自体の振動は工具と一体の1モードに含めています。ドリル (固定サイクルの穴あけを含む) は先端角のないフラット工具として底刃のスラストとトルクを計算し、チゼルエッジの押し込み力は含みません。切粉は 1 粒子が数個分の切粉を代表し (最大 5000 粒子)、流体は CFD ではなく噴流・壁面噴流・浅水流の工学的な近似を重ねた速度場です。ポケット内の渦や、工具が噴流をさえぎる効果は入れていません。</li>
+          <li><b>回転数で変わる動特性</b>: 高速回転では主軸軸受の予圧が抜けホルダーが緩み、工具先端の固有振動数が下がります。振動と安定限界線図はその回転数の動特性で計算し、静止時の線図を破線で重ねます。安定ポケットは低い回転数側へずれます。回転中に測った FRF を回転数別に読み込むこともできます。</li>
+          <li><b>寸法誤差</b>: 同じ素材を指令どおり (たわみ・振動なし) にも削り、加工結果との差を「指令との差」で示します。壁の位置は格子より細かく µm 単位で比べます。目標形状 (STL) を読み込むと「目標との差」で削り残し (青) と削り過ぎ (赤) を示し、原因のプログラム行を出します。目標の壁の位置そのものは格子 (0.3 mm) 単位でしか分からないので、プログラムが目標と食い違う壁際は ± 半格子で表示します。</li>
           <li>激しいびびりでは切りくず厚さに上限(3·fz か 0.1 mm)を設けています。実機ならこの領域は工具欠損に近い状態です。</li>
         </ul>
         <h3>見どころ</h3>
@@ -245,9 +325,12 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="tile"><span class="k">工具たわみ</span><span class="v" id="vD">0.0<small>µm</small></span><span class="s" id="sD">k = 0 N/µm</span></div>
     <div class="tile" id="tileVib"><span class="k">振動振幅</span><span class="v" id="vV">0.0<small>µm</small></span><span class="s" id="sV">同期外成分 0.0 µm</span></div>
     <div class="tile"><span class="k">ワークたわみ</span><span class="v" id="vW">0.0<small>µm</small></span><span class="s" id="sW">剛体として扱い中</span></div>
-    <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s">許容目安 1500 MPa</span></div>
+    <div class="tile"><span class="k">工具応力(相当)</span><span class="v" id="vS">0<small>MPa</small></span><div class="meter"><i id="mS"></i></div><span class="s" id="stS">許容目安 1500 MPa</span></div>
     <div class="tile"><span class="k">除去率</span><span class="v" id="vM">0.0<small>cm³/min</small></span><span class="s" id="sM">ap 0.00 mm · fz 0.000 mm</span></div>
-    <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">素材上に残留 0 · 再切削 0 回</span></div>
+    <div class="tile" id="tileHeat"><span class="k">刃先温度</span><span class="v" id="vH">20<small>°C</small></span><span class="s" id="sH">切りくず 20 °C</span></div>
+    <div class="tile"><span class="k">逃げ面摩耗 VB</span><span class="v" id="vWr">0<small>µm</small></span><div class="meter"><i id="mWr"></i></div><span class="s" id="sWr">寿命 VB 300 µm</span></div>
+    <div class="tile" id="tileDev"><span class="k">寸法誤差</span><span class="v" id="vDv">—<small></small></span><span class="s" id="sDv">切削後に指令経路と比べます</span></div>
+    <div class="tile"><span class="k">切粉</span><span class="v" id="vC">0<small>% 排出</small></span><span class="s" id="sC">残留 0 mm³ · 再切削 0 回</span></div>
   </section>
 
   <section class="charts">
@@ -255,7 +338,18 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
     <div class="chart"><h2>工具先端の軌跡 <span>● 1刃ごとの位置</span></h2><canvas id="cvOrbit"></canvas></div>
     <div class="chart"><h2>振動スペクトル <span id="hSpec"></span></h2><canvas id="cvSpec"></canvas></div>
     <div class="chart"><h2>安定限界線図 <span id="hLobe">クリックで主軸回転を変更</span></h2><canvas id="cvLobes"></canvas></div>
+    <div class="chart wide"><h2>切削断面と温度分布 <span id="hSec"></span></h2><canvas id="cvSec" aria-label="二次元切削断面: 工具・せん断面・切りくずと温度分布。カーソルを当てるとその位置の温度を表示"></canvas></div>
     <div class="chart wide"><h2>側面の仕上げ面 <span id="hRough"></span></h2><canvas id="cvRough"></canvas></div>
+  </section>
+
+  <section class="legal">
+    <h2>ご利用にあたって・ライセンス</h2>
+    <p>研究・教育用の試作ソフトウェアです。切削力や安定限界は文献値や便覧値と比べて確かめていますが、材料定数や工具・機械の動特性によって大きく変わります。結果は参考値として扱い、実際の加工条件・工具選定・安全に関わる判断には使わないでください。結果によって生じた損害について、作者は責任を負いません。</p>
+    <p>このページには次のオープンソースソフトウェアが含まれています。</p>
+    <details>
+      <summary>three.js（MIT License）</summary>
+      <pre>/*THREE_LICENSE*/</pre>
+    </details>
   </section>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

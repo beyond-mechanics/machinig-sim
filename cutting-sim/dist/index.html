@@ -1,3 +1,30 @@
+<!--
+切削シミュレーター。研究用の試作です。結果は参考値で、実際の加工条件の決定には使わないでください。
+
+Includes three.js 0.160.0 (https://threejs.org), MIT License:
+
+The MIT License
+
+Copyright © 2010-2023 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+-->
 <title>切削シミュレーター</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -126,6 +153,12 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .notes p, .notes ul { margin: 0; font-size: 13px; color: var(--ink); max-width: 65ch; }
 .notes ul { padding-left: 18px; display: grid; gap: 4px; }
 .notes code { font-family: var(--font-mono); font-size: 12px; }
+.notes .legal { grid-column: 1 / -1; }
+.notes .legal p + p { margin-top: 6px; }
+.notes details { margin-top: 6px; font-size: 13px; }
+.notes summary { cursor: pointer; }
+.notes pre { margin: 6px 0 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; max-width: calc(80ch + 28px); }
+.brand .caution { margin-top: 4px; font-size: 12px; color: var(--warn); }
 @media (prefers-reduced-motion: reduce) { .progress > i { transition: none; } }
 .fatal { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--warn); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 13px; }
 .fatal code { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
@@ -137,6 +170,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
     <div class="brand">
       <h1>切削シミュレーター（2D・3D）</h1>
       <p>工具と被削材の接触部で、切りくずの生成と排出、温度、応力、ひずみ、切削抵抗、工具の温度と摩耗を計算します（粒子法 SPH、2D 平面ひずみと 3D 傾斜切削）</p>
+      <p class="caution">研究用の試作です。結果は参考値で、実際の加工条件の決定には使わないでください。</p>
     </div>
     <span class="pill" id="state" data-s="idle">待機</span>
     <button class="primary" id="run">切削開始</button>
@@ -352,6 +386,37 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <li>残留応力は、切削後に切りくずを外し、全体を一様に室温まで冷やして落ち着かせた状態で、実際の加工面からの深さごとに測ります。加工面は工具の後ろ 3h + r で凍結します（すぐ後ろで凍結すると荷重がかかったままの状態を閉じ込めて、表面が見かけの引張になります）。凍結位置・切削長・解像度を変えても表面の値は ±25 MPa ほどでそろいますが、鋼の加工面で測られる表面の引張（+200〜+600 MPa）は出ません。表層の急な温度勾配と刃先丸みでこすられる層が、粒子 1 個分の厚さしかないためとみています。</li>
         <li>条件スイープの Kienzle 指数 mc は 0.1 前後と、鋼の文献値（0.15〜0.25 程度）より小さめに出ます。薄い切込みでの刃先丸みのすき取りが粒子 1 個程度でしか表せないためで、解像度を上げ刃先丸みを大きくすると近づきます。Taylor 指数 n も 0.5 程度と超硬の実測（0.2〜0.3）より大きく、速度を上げたときの寿命の落ち方を緩めに見積もります。傾向の比較に使ってください。</li>
       </ul>
+    </div>
+    <div class="legal">
+      <h2>ご利用にあたって・ライセンス</h2>
+      <p>研究・教育用の試作ソフトウェアです。切削抵抗や温度は文献値や便覧値と 1 割前後で合わせていますが、材料定数や解像度によって大きく変わります。結果は参考値として扱い、実際の加工条件・工具選定・安全に関わる判断には使わないでください。結果によって生じた損害について、作者は責任を負いません。</p>
+      <p>このページには次のオープンソースソフトウェアが含まれています。</p>
+      <details>
+        <summary>three.js（MIT License）</summary>
+        <pre>three.js 0.160.0
+
+The MIT License
+
+Copyright © 2010-2023 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.</pre>
+      </details>
     </div>
   </section>
 </div>

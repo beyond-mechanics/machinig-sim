@@ -10,12 +10,17 @@
 import { modeSet } from './frf.js';
 
 export const BINS = 180; // angular resolution of the engagement map
+export const END_BINS = 36; // angular bins of the end-face (bottom edge) engagement map
+export const END_RINGS = 6; // radial rings of the end-face map
 export const H_REF = 0.05; // chip thickness at which the size-effect coefficients equal K [mm]
 const H_MIN = 0.002;       // below this the exponential law is not extrapolated [mm]
 
 export class CuttingEngine {
   constructor() {
     this.Hb = new Float32Array(BINS);
+    // material depth above the cutter's end face [mm], [angle bin][ring]; filled by the caller
+    this.Eb = new Float32Array(END_BINS * END_RINGS);
+    this.fza = 0; this.endR = 0;
     this.stats = newStats();
     this.hist = { n: 4096, i: 0, count: 0, Fx: new Float32Array(4096), Fy: new Float32Array(4096), Fz: new Float32Array(4096), x: new Float32Array(4096), y: new Float32Array(4096) };
     this.toothSamples = { n: 64, i: 0, count: 0, x: new Float32Array(64), y: new Float32Array(64) };
@@ -58,6 +63,7 @@ export class CuttingEngine {
     this.pr = 0;
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0; this.t = 0;
     this.setWork(null);
+    this.fza = 0;
     this.toothEngaged = new Uint8Array(this.N);
     this.toothVol = new Float64Array(this.N);
     this.toothPhi = new Float64Array(this.N);
@@ -68,6 +74,9 @@ export class CuttingEngine {
     for (const b of [this.wallSamples, this.wallSamplesPi]) { b.i = 0; b.count = 0; }
     this.stepCount = 0;
   }
+
+  // flank wear VB [mm]: edge coefficients including the wear land
+  setWear(edge) { this.Kte = edge.Kte; this.Kre = edge.Kre; }
 
   // wall: {k [N/mm], m [kg], zeta, nx, ny} or null for a rigid workpiece
   setWork(wall) {
@@ -95,9 +104,33 @@ export class CuttingEngine {
       const zr = (k + 0.5) * this.dz;
       this.sliceZ[k] = tipZ + zr;
       let r = R, kap = 1;
-      if (this.tool.type === 'ball' && zr < R) { r = Math.sqrt(Math.max(1e-6, R * R - (R - zr) ** 2)); kap = r / R; }
+      if (this.tool.rAt) {
+        // general edge shape: radius from the profile, κ from its slope (90° on a straight side)
+        r = Math.max(1e-3, this.tool.rAt(zr));
+        const dr = (this.tool.rAt(zr + 0.05) - this.tool.rAt(Math.max(0, zr - 0.05))) / (zr < 0.05 ? 0.05 + zr : 0.1);
+        kap = 1 / Math.sqrt(1 + dr * dr);
+      } else if (this.tool.type === 'ball' && zr < R) { r = Math.sqrt(Math.max(1e-6, R * R - (R - zr) ** 2)); kap = r / R; }
       this.sliceR[k] = r; this.sliceKap[k] = kap;
       this.sliceLag[k] = zr * this.tanB / R;
+    }
+  }
+
+  // End (bottom) edges: fza = axial feed per tooth [mm] while descending (plunge / ramp),
+  // rOut = outer radius of the end-face map [mm]. Eb filled by caller. Each end-edge element at
+  // radius r cuts an axial chip min(fza, depth); on a ball nose the chip normal to the edge is
+  // that times cosκ and the edge element is dr / cosκ (κ: angle of the edge normal from the axis).
+  setEndEngagement(fza, rOut, zAt = () => 0) {
+    this.fza = fza > 0 ? fza : 0; this.endR = rOut;
+    const dr = rOut / END_RINGS;
+    this.ringR = new Float64Array(END_RINGS); this.ringCos = new Float64Array(END_RINGS); this.ringZ = new Float64Array(END_RINGS);
+    this.ringDs = new Float64Array(END_RINGS);
+    for (let j = 0; j < END_RINGS; j++) {
+      const r = (j + 0.5) * dr;
+      // edge-normal angle from the slope of the tip profile z(r); steep flanks are capped (κ ≤ 77°)
+      const slope = (zAt(Math.min(rOut, r + 0.25 * dr)) - zAt(Math.max(0, r - 0.25 * dr))) / (0.5 * dr);
+      const c = Math.max(0.22, 1 / Math.sqrt(1 + slope * slope));
+      this.ringR[j] = r; this.ringCos[j] = c; this.ringDs[j] = dr / c;
+      this.ringZ[j] = zAt(r);
     }
   }
 
@@ -105,7 +138,10 @@ export class CuttingEngine {
   run(nSteps) {
     const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap } = this;
     const ux = this.ux, uy = this.uy, vx = this.vx_, vy = this.vy_, fz = this.fz;
-    const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kte = mat.Kte, Kre = mat.Kre, Kae = mat.Kae;
+    const Eb = this.Eb, fza = this.fza, ringR = this.ringR, ringCos = this.ringCos, ringDs = this.ringDs, ringZ = this.ringZ;
+    const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kae = mat.Kae;
+    // edge coefficients grow with the flank wear land (setWear)
+    const Kte = this.Kte ?? mat.Kte, Kre = this.Kre ?? mat.Kre;
     const nl = this.tool.nonlinear !== false;
     const mc = nl ? (mat.mc ?? 0) : 0;
     // process damping per slice [N·s/m] = Ci·b / V_c, V_c = ω·r
@@ -162,7 +198,31 @@ export class CuttingEngine {
           const fr = Math.hypot(Ft, Fr);
           Fsum += fr; Fr2z += fr * (sliceZ[k] - this.tipZ);
           engaged = 1; ph = phi; zsum = sliceZ[k];
+          st.sumHb += h * db; st.sumB += db;
           this.toothVol[i] += h * db * sliceR[k] * dphi;
+        }
+        if (fza) {
+          // end edges sit at the tip (no helix lag); thrust, torque and in-plane tangential force
+          let phi = (theta + i * pitch) % TWO_PI; if (phi < 0) phi += TWO_PI;
+          const row = ((phi / TWO_PI * END_BINS) | 0) * END_RINGS;
+          const sn = Math.sin(phi), cs = Math.cos(phi);
+          const txg = cs * ux - sn * vx, tyg = cs * uy - sn * vy;
+          for (let j = 0; j < END_RINGS; j++) {
+            const depth = Eb[row + j];
+            if (depth <= 2e-4) continue;
+            const c = ringCos[j], ds = ringDs[j];
+            let h = (depth < fza ? depth : fza) * c;
+            const se = mc ? Math.pow(H_REF / (h > H_MIN ? h : H_MIN), mc) : 1;
+            const Ft = Ktc * se * h * ds + Kte * ds;
+            const Fn = Krc * se * h * ds + Kre * ds; // along the edge normal: mostly axial thrust
+            Fx += -Ft * txg; Fy += -Ft * tyg;
+            Fz -= Fn * c;
+            T += Ft * ringR[j];
+            Fsum += Ft; Fr2z += Ft * ringZ[j];
+            engaged = 1; ph = phi; zsum = this.tipZ + ringZ[j];
+            st.sumHb += h * ds; st.sumB += ds;
+            this.toothVol[i] += h * ds * ringR[j] * dphi;
+          }
         }
         if (engaged) { this.toothPhi[i] = ph; this.toothZ[i] = zsum; }
         else if (this.toothEngaged[i]) {
@@ -170,6 +230,7 @@ export class CuttingEngine {
           this.toothVol[i] = 0;
         }
         this.toothEngaged[i] = engaged;
+        st.engTeeth += engaged;
       }
       // modal integration (semi-implicit Euler), SI
       x = 0; y = 0; vxs = 0; vys = 0;
@@ -244,5 +305,5 @@ export class CuttingEngine {
 
 function newStats() {
   return { n: 0, sumF: 0, maxF: 0, sumFx: 0, sumFy: 0, sumFz: 0, maxFz: 0, sumT: 0, maxT: 0, sumX: 0, sumY: 0,
-    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0 };
+    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0, sumHb: 0, sumB: 0, engTeeth: 0 };
 }

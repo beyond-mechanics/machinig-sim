@@ -10,8 +10,9 @@ const TICK_MS = 16;
 
 self.onmessage = ({ data: m }) => {
   if (m.gen !== undefined) gen = m.gen;
-  if (m.type === 'load') { Object.assign(sim.cfg, m.cfg); sim.load(m.code); }
+  if (m.type === 'load') { Object.assign(sim.cfg, m.cfg); sim.load(m.code, m.setup); }
   else if (m.type === 'reset') sim.reset();
+  else if (m.type === 'assets') sim.setAssets(m.assets);
   else if (m.type === 'cfg') { Object.assign(sim.cfg, m.cfg, { dynBudget: sim.cfg.dynBudget }); if (m.reconfigure) sim.reconfigure(); }
   else if (m.type === 'speed') sim.speed = m.speed;
   else if (m.type === 'run') { running = m.running; last = performance.now(); }
@@ -38,13 +39,13 @@ function post() {
   const d = s.dirty;
   if (d.i1 >= 0) {
     const a = d.j0 * s.nx, b = (d.j1 + 1) * s.nx;
-    patch = { j0: d.j0, j1: d.j1, i0: d.i0, i1: d.i1, H: copy(s.H.subarray(a, b)), err: copy(s.err.subarray(a, b)), wallErr: copy(s.wallErr.subarray(a, b)), markS: copy(s.markS.subarray(a, b)), markF: copy(s.markF.subarray(a, b)) };
+    patch = { j0: d.j0, j1: d.j1, i0: d.i0, i1: d.i1, H: copy(s.H.subarray(a, b)), err: copy(s.err.subarray(a, b)), wallErr: copy(s.wallErr.subarray(a, b)), markS: copy(s.markS.subarray(a, b)), markF: copy(s.markF.subarray(a, b)), devIdeal: copy(s.devIdeal.subarray(a, b)), devTarget: copy(s.devTarget.subarray(a, b)), wallD: copy(s.wallD.subarray(a, b)) };
     s.clearDirty();
   }
   self.postMessage({
     type: 'snap', gen,
-    mtime: sim.mtime, line: sim.line, done: sim.done, pos: sim.pos, ap: sim.ap, wall: sim.wall, S: sim.S,
-    display: sim.display, alerts: [...sim.alerts], removed: s.removed, dynBudget: sim.cfg.dynBudget,
+    mtime: sim.mtime, line: sim.line, activeT: sim.activeT, done: sim.done, pos: sim.pos, ap: sim.ap, wall: sim.wall, S: sim.S,
+    display: sim.display, hits: sim.hits, alerts: [...sim.alerts], removed: s.removed, dynBudget: sim.cfg.dynBudget,
     engine: e.stepsPerTooth ? {
       x: e.x, y: e.y, w: e.w, wk: e.wk, wnx: e.wnx, wny: e.wny, runMeanW: e.runMeanW, omega: e.omega, S: e.S, N: e.N,
       stepsPerTooth: e.stepsPerTooth, decim: e.decim, dt: e.dt,
@@ -54,7 +55,8 @@ function post() {
       wallSamplesPi: { ...e.wallSamplesPi, x: copy(e.wallSamplesPi.x), y: copy(e.wallSamplesPi.y) },
       ux: e.ux, uy: e.uy,
     } : null,
-    chips: { p: copy(c.p), state: copy(c.state), size: copy(c.size), heat: copy(c.heat), rot: copy(c.rot), stats: c.stats },
+    chips: { p: copy(c.p), state: copy(c.state), size: copy(c.size), heat: copy(c.heat), rot: copy(c.rot), stats: c.stats,
+      pool: c.pool ? { nx: c.pool.nx, ny: c.pool.ny, cx: c.pool.cx, cy: c.pool.cy, bed: copy(c.pool.bed), depth: copy(c.pool.depth) } : null },
     patch,
   }, transfer);
 }
