@@ -1,0 +1,15 @@
+[package]
+name = "machining-sim-native"
+version = "0.1.0"
+edition = "2021"
+description = "Machining simulator, native edition (Windows): milling simulation and chip-formation FEM"
+license = "ISC"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chipfem = { path = "../../crates/chipfem" }

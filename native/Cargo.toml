@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/chipfem", "app/src-tauri"]
+# a plain `cargo test` / `cargo build` here builds the FEM only; the app needs the WebView
+# libraries of its platform (built on Windows in CI)
+default-members = ["crates/chipfem"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.test]
+opt-level = 3
