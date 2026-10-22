@@ -21,8 +21,10 @@ pub struct CutParams {
     pub rake_deg: f64,
     pub clearance_deg: f64,
     pub re: f64,
-    /// Coulomb friction on the tool
+    /// Coulomb friction on the tool, and the friction stress limit as a share of the shear flow
+    /// stress (None: Coulomb alone)
     pub mu: f64,
+    pub shear_factor: Option<f64>,
     /// length of cut [mm]
     pub length: f64,
     /// element size at the edge and far from it [mm]
@@ -43,6 +45,7 @@ impl CutParams {
             clearance_deg: 7.0,
             re: 0.02,
             mu: 0.3,
+            shear_factor: Some(1.0),
             length: 1.0,
             h_min: (h / 8.0).min(0.012),
             h_max: (h * 0.8).max(0.04),
@@ -94,6 +97,7 @@ impl Cutting {
             c: [width + p.re + 0.002, -p.h + p.re],
             v: [-p.vc * 1000.0 / 60.0, 0.0],
             mu: p.mu,
+            shear_factor: p.shear_factor,
             heat_share: 0.5,
         };
         let poly = [[0.0, -depth], [width, -depth], [width, 0.0], [0.0, 0.0]];

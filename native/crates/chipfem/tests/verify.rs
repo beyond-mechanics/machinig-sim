@@ -89,7 +89,7 @@ fn rake_face_pushes_an_elastic_bar() {
     let re = 0.01;
     let v = 1.0;
     // rake face x = c.x − re starts at the bar's end; the edge is below the bar
-    s.tool = Some(Tool { rake: 0.0, clearance: 0.1, re, c: [l + re, -hgt - 0.05], v: [-v, 0.0], mu: 0.0, heat_share: 0.5 });
+    s.tool = Some(Tool { rake: 0.0, clearance: 0.1, re, c: [l + re, -hgt - 0.05], v: [-v, 0.0], mu: 0.0, shear_factor: None, heat_share: 0.5 });
     let u = 0.002;
     let mut fsum = 0.0;
     let mut cnt = 0;
@@ -126,7 +126,7 @@ fn clearance_face_slides_with_coulomb_friction() {
     let re = 0.02;
     let mu = 0.3;
     // flat clearance face (γ = 0) at y = c.y − re = 0, pressing down slowly and sliding along −x
-    s.tool = Some(Tool { rake: 0.0, clearance: 0.0, re, c: [0.6, re], v: [-20.0, -0.5], mu, heat_share: 0.5 });
+    s.tool = Some(Tool { rake: 0.0, clearance: 0.0, re, c: [0.6, re], v: [-20.0, -0.5], mu, shear_factor: None, heat_share: 0.5 });
     let mut fx = 0.0;
     let mut fy = 0.0;
     while s.t < 0.004 {

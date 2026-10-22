@@ -74,6 +74,8 @@ pub struct Solver {
     mass_phys: Vec<f64>,
     adj: (Vec<usize>, Vec<usize>),
     work: Vec<ElemWork>,
+    /// the two boundary neighbours of each boundary node (usize::MAX inside)
+    bnb: Vec<[usize; 2]>,
 }
 
 /// radial return: new deviatoric stress, plastic strain increment, flow stress
@@ -144,6 +146,7 @@ impl Solver {
             mass_phys: Vec::new(),
             adj: (Vec::new(), Vec::new()),
             work: vec![ElemWork::default(); ne],
+            bnb: Vec::new(),
             mesh,
         };
         s.rebuild();
@@ -166,6 +169,12 @@ impl Solver {
         self.adj = self.mesh.node_elements();
         self.work = vec![ElemWork::default(); self.mesh.tri.len()];
         self.fint = vec![[0.0; 2]; n];
+        let mut bnb = vec![[usize::MAX; 2]; n];
+        for [a, b] in self.mesh.boundary_edges() {
+            bnb[a][1] = b;
+            bnb[b][0] = a;
+        }
+        self.bnb = bnb;
         self.dt = self.stable_dt();
     }
 
@@ -328,7 +337,18 @@ impl Solver {
                 let vts = vt[0].hypot(vt[1]);
                 let mut dvt = [0.0; 2];
                 if vts > 1e-12 {
-                    let lim = tool.mu * imp_n / m;
+                    let mut lim = tool.mu * imp_n / m;
+                    if let Some(mf) = tool.shear_factor {
+                        // τ ≤ m·k over the node's share of the boundary, k = σ̄/√3 of its elements
+                        let nb = self.bnb[i];
+                        let xs = &self.mesh.x;
+                        let half = |j: usize| if j == usize::MAX { 0.0 } else { 0.5 * (xs[j][0] - xs[i][0]).hypot(xs[j][1] - xs[i][1]) };
+                        let len = half(nb[0]) + half(nb[1]);
+                        let (off, ids) = (&self.adj.0, &self.adj.1);
+                        let els = &ids[off[i]..off[i + 1]];
+                        let q: f64 = els.iter().map(|&e| { let d = self.s[e]; (1.5 * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + 2.0 * d[3] * d[3])).sqrt() }).sum::<f64>() / els.len().max(1) as f64;
+                        lim = lim.min(mf * q / 3f64.sqrt() * len * dt / m);
+                    }
                     let k = if vts <= lim { 1.0 } else { lim / vts };
                     dvt = [-k * vt[0], -k * vt[1]];
                     // friction work: tangential impulse × the slip that remains on average

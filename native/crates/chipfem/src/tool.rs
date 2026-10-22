@@ -21,6 +21,10 @@ pub struct Tool {
     pub v: [f64; 2],
     /// Coulomb friction coefficient on the tool faces
     pub mu: f64,
+    /// friction stress limit as a share m of the work's shear flow stress k (τ ≤ min(μ·σ_n, m·k):
+    /// sticking near the edge where μ·σ_n would exceed it, sliding beyond, after Zorev); None:
+    /// Coulomb alone
+    pub shear_factor: Option<f64>,
     /// share of the friction heat that goes into the work (the rest into the tool)
     pub heat_share: f64,
 }

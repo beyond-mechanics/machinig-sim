@@ -80,6 +80,10 @@ fn main() {
     if let Some(v) = std::env::var("CHIPFEM_MASS_SCALE").ok().and_then(|s| s.parse().ok()) {
         p.mass_scale = v;
     }
+    // friction stress limit m·k (CHIPFEM_SHEAR=none: Coulomb alone)
+    if let Ok(v) = std::env::var("CHIPFEM_SHEAR") {
+        p.shear_factor = v.parse().ok();
+    }
     let mut c = Cutting::new(mat, p);
     println!("{key}: Vc {vc} m/min, h {h} mm, rake {rake}°, edge radius {} mm, μ {}; {} elements", c.p.re, c.p.mu, c.solver.mesh.tri.len());
     println!("  cut[mm]  Fc[N/mm]  Ft[N/mm]  chip[mm]  Tmax[°C]  εp max  elements remeshes");
