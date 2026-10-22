@@ -1,0 +1,9 @@
+[package]
+name = "chipfem"
+version = "0.1.0"
+edition = "2021"
+description = "2D plane-strain explicit FEM of orthogonal cutting (chip formation), Johnson-Cook plasticity, thermal coupling, rigid tool contact"
+license = "ISC"
+
+[dependencies]
+rayon = "1"
