@@ -39,7 +39,7 @@ export function dumpState(s) {
   return out;
 }
 
-// Copies a frame into s; returns the core's own figures (threads, ms per step).
+// Copies a frame into s; returns the core's own figures (threads, ms per step, on the GPU).
 export function applyFrame(s, buf) {
   const h = new Float64Array(buf, 0, 16), nh = h[10], N = h[11];
   if (h[0] !== 1 || N !== s.N) throw new Error('ネイティブ計算の結果が合いません。');
@@ -65,5 +65,5 @@ export function applyFrame(s, buf) {
   s.pose(s.t);
   // As the JS solver at the end of a straight cut: the steady tool temperature for the wear estimate.
   if (s.done && !s.helix && !s.meshMode && s.heat && !s.heat.steadyT) s.heat.steady();
-  return { threads: h[12], msPerStep: h[13] };
+  return { threads: h[12], msPerStep: h[13], gpu: (h[15] & 4) !== 0 };
 }

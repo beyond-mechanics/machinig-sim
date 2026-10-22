@@ -14,7 +14,10 @@ type Eng = Arc<Mutex<Engine>>;
 #[tauri::command]
 async fn sim_init(state: String, eng: State<'_, Eng>) -> Result<serde_json::Value, String> {
     let e = eng.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || e.lock().unwrap().init(state.as_bytes()).map(|n| json!({ "n": n, "threads": rayon::current_num_threads() })))
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut e = e.lock().unwrap();
+        e.init(state.as_bytes()).map(|n| json!({ "n": n, "threads": rayon::current_num_threads(), "gpu": e.gpu_name(), "gpuNote": e.gpu_note }))
+    })
         .await
         .map_err(|e| e.to_string())?
 }
