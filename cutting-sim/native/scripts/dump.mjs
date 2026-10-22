@@ -6,7 +6,12 @@ import { Cutting3D } from '../../src/sph3d.js';
 import { EXAMPLES } from '../../src/examples3d.js';
 import { dumpState } from '../../src/nativestate.js';
 
+// Named set-ups: the STL examples (plane, mill, drill), and oblique cutting with the defaults of
+// src/sph3d.js (a periodic wide plate, λ 15°) or a strip with free sides, and one or two teeth of
+// the helical end mill.
+const OBLIQUE = { oblique: { mode: '3d' }, 'oblique-free': { mode: '3d', sides: 'free' }, helix: { mode: 'helix' }, 'helix-2': { mode: 'helix', passes: 2 } };
 export function exampleCfg(name, over = {}) {
+  if (OBLIQUE[name]) { const c = { mat: 'S45C', vc: 200, ...OBLIQUE[name], ...over }; delete c.dxUm; delete c.angle; return c; }
   const e = EXAMPLES[name], m = (t) => t.map((v) => v * 1e-3);
   const cfg = { mode: 'mesh', mat: 'S45C', vc: 200, ...e.cfg, toolTris: m(e.tool()), workTris: m(e.work()), ...over };
   if (cfg.axis) cfg.axis = cfg.axis.map((v) => v * 1e-3);

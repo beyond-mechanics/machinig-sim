@@ -1,7 +1,7 @@
 // Native solver: in the desktop app (Tauri, native/app) or behind the local engine server
-// (sphserve), STL-mode runs are computed by the Rust core instead of this page's worker. The worker
+// (sphserve), 3D runs (STL, oblique cutting, helical end mill) are computed by the Rust core instead of this page's worker. The worker
 // still sets the run up and turns the core's frames into the usual ones, so the rest of the page
-// does not know the difference; other modes run in the worker as before.
+// does not know the difference; the 2D modes run in the worker as before.
 
 export function nativeBackend() {
   const T = typeof window !== 'undefined' && window.__TAURI__;
@@ -13,7 +13,7 @@ export function nativeBackend() {
   return null;
 }
 
-// A stand-in for the worker with the same postMessage / onmessage, which sends STL-mode runs to
+// A stand-in for the worker with the same postMessage / onmessage, which sends those runs to
 // the backend. Without a backend, the worker itself.
 export function wrapWorker(worker, backend) {
   if (!backend) return worker;
@@ -40,7 +40,7 @@ export function wrapWorker(worker, backend) {
   w.postMessage = (msg) => {
     if (msg.type === 'init') {
       gen++; running = false; wall = 0;
-      native = msg.cfg.mode === 'mesh';
+      native = msg.cfg.mode === 'mesh' || msg.cfg.mode === '3d' || msg.cfg.mode === 'helix';
       if (native) ready = new Promise((r) => { setReady = r; });
       worker.postMessage(native ? { ...msg, cfg: { ...msg.cfg, native: true } } : msg);
       return;

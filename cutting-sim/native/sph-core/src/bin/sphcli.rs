@@ -39,7 +39,8 @@ fn main() {
     let out = json!({
         "steps": s.steps, "stepsRun": k, "done": s.done, "progress": s.progress(), "N": s.n,
         "loadS": load, "runS": run, "msPerStep": 1e3 * run / k.max(1) as f64, "threads": rayon::current_num_threads(),
-        "searches": s.searches, "profMs": s.prof.iter().map(|v| 1e3 * v / k.max(1) as f64).collect::<Vec<_>>(), "pairsHeld": fp, "pairsMoving": mp, "bricks": s.sdf.bricks_built(),
+        "searches": s.searches, "profMs": s.prof.iter().map(|v| 1e3 * v / k.max(1) as f64).collect::<Vec<_>>(), "pairsHeld": fp, "pairsMoving": mp, "bricks": s.sdf.as_ref().map_or(0, |m| m.bricks_built()),
+        "ttool": s.heat.as_ref().map(|h| h.max_t()),
         "summary": { "fx": mean(&h.fc), "fy": mean(&h.ft), "fz": mean(&h.fr), "torque": mean(&h.mz), "tmax": s.max_temp(),
             "rpm": s.rpm(), "angle": s.angle_deg(), "travel": s.travel_mm(), "pieces": s.pieces, "failed": s.failed, "evacuated": s.n_evac, "dead": s.n_dead },
         "hist": h,

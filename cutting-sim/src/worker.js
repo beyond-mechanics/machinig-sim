@@ -13,7 +13,7 @@ onmessage = (e) => {
   if (d.type === 'init') {
     sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix' || d.cfg.mode === 'mesh') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; warm = 0;
     // Native core (src/native.js): it gets this run's state and steps it; frames come back below.
-    if (d.cfg.native && sim.meshMode) postMessage({ type: 'nativeState', json: JSON.stringify(dumpState(sim)) });
+    if (d.cfg.native && sim instanceof Cutting3D) postMessage({ type: 'nativeState', json: JSON.stringify(dumpState(sim)) });
     send();
   }
   else if (d.type === 'nativeFrame') { if (sim) { sim.native = applyFrame(sim, d.buf); running = d.running; wall = d.wall; t0 = performance.now(); runN = d.runN; send(); } }
