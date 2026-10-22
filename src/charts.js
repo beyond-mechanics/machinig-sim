@@ -193,8 +193,12 @@ export function drawLobes(cv, lobes, op, rpmRange, rest = null, td = null) {
     pts.forEach((p, i) => { const x = xs(p.rpm), y = ys(p.alim); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
     for (const p of pts) { g.beginPath(); g.arc(xs(p.rpm), ys(p.alim), p.open ? 4 : 3, 0, 6.3); p.open ? g.stroke() : g.fill(); }
   }
-  // operating point
-  if (op.S > 0) {
+  // operating point (below the diagram's speeds: a marker at its left edge)
+  if (!(op.S >= rpmRange[0])) {
+    const y = ys(Math.min(op.ap, Y));
+    g.fillStyle = C.mute; g.textAlign = 'left'; g.textBaseline = 'bottom';
+    g.fillText(op.S > 0 ? `◀ ${Math.round(op.S)} min⁻¹ (線図より低速) / ${op.ap.toFixed(2)} mm` : '主軸停止 (0 min⁻¹)', box.x + 4, y - 4);
+  } else if (op.S > 0) {
     const x = xs(op.S), y = ys(op.ap);
     g.fillStyle = op.stable ? C.ok : C.bad; g.strokeStyle = C.panel; g.lineWidth = 2;
     g.beginPath(); g.arc(x, y, 5, 0, 6.3); g.fill(); g.stroke();

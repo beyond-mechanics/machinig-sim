@@ -199,7 +199,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
       <div class="tabpane" data-pane="cond">
         <fieldset>
           <legend>主軸・送り</legend>
-          <div class="slider"><label for="ovS">主軸回転</label><output id="ovSOut">12000 min⁻¹</output><input type="range" id="ovS" min="2000" max="30000" step="100" value="12000"></div>
+          <div class="slider"><label for="ovS">主軸回転</label><output id="ovSOut">12000 min⁻¹</output><input type="range" id="ovS" min="0" max="30000" step="100" value="12000"></div>
           <button id="btnPocket">安定ポケットに合わせる</button>
           <p class="hint" id="pocketHint">安定限界線図の山(安定ポケット)へ主軸回転を移します。線図をクリックしても変更できます。</p>
           <div class="slider"><label for="ovF">送りオーバーライド</label><output id="ovFOut">100 %</output><input type="range" id="ovF" min="10" max="200" step="5" value="100"></div>

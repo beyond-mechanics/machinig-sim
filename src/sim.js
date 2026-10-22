@@ -389,13 +389,16 @@ export class Simulator {
       const ap = Math.min(tool.fluteLen, Math.max(0, hmax - p.z));
       this.ap = ap;
       // descending (plunge / ramp / helix): axial feed per tooth for the end edges
-      const fza = !b.rapid && b.z < a.z ? (this.F / (S * tool.N)) * ((a.z - b.z) / segLen) : 0;
+      const fza = !b.rapid && b.z < a.z && S >= 1 ? (this.F / (S * tool.N)) * ((a.z - b.z) / segLen) : 0;
       const end = fza > 0 ? this.fillEndEngagement(p.x, p.y, p.z, this.u) : null;
       const endCut = !!end && end.dmax > 2e-4;
       this.plunging = endCut;
       if (vertical && b.z < a.z && b.rapid && this.stock.sample(p.x, p.y) - p.z > 0.01) this.alert('rapid', '早送り(G0)で材料に突入しています');
       if (!vertical && ap > 0.01 && b.rapid) this.alert('rapid', '早送り(G0)で材料に干渉しています');
-      if ((ap > 0.01 || endCut) && !b.rapid) {
+      // spindle stopped (override at 0 min⁻¹): no chip forms, the tool is pushed into the part
+      const stopped = S < 1;
+      if (stopped && (ap > 0.01 || endCut || (vertical && b.z < a.z && this.stock.sample(p.x, p.y) - p.z > 0.01)) && !b.rapid) this.alert('stopped', '主軸が止まったまま工具が材料に当たっています (実機では工具・ワークが破損します)');
+      if ((ap > 0.01 || endCut) && !b.rapid && !stopped) {
         const fzEff = dxy > 1e-6 ? (this.F / (S * tool.N)) * (dxy / segLen) : 0;
         e.setEngagement(this.u, fzEff, p.z, ap);
         e.setEndEngagement(endCut ? fza : 0, end ? end.rOut : 0, this.tipZAt);

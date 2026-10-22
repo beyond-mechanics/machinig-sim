@@ -373,7 +373,7 @@ addEventListener('drop', e => {
 });
 
 function setSpindle(S) {
-  S = Math.round(Math.max(2000, Math.min(30000, S)));
+  S = Math.round(Math.max(0, Math.min(30000, S)));
   $('ovS').value = S;
   $('ovSOut').textContent = `${S} min⁻¹`;
   sim.cfg.spindleOverride = S / baseS;
@@ -382,7 +382,7 @@ function setSpindle(S) {
 $('ovS').oninput = e => setSpindle(+e.target.value);
 $('ovF').oninput = e => { sim.cfg.feedOverride = e.target.value / 100; host.config(); $('ovFOut').textContent = `${e.target.value} %`; };
 $('btnPocket').onclick = () => {
-  const cur = +$('ovS').value;
+  const cur = +$('ovS').value || baseS; // from a stopped spindle: start at the program's speed
   const r = sim.bestSpindle(cur);
   setSpindle(r.S);
   $('pocketHint').textContent = `${cur} → ${r.S} min⁻¹(この切込み条件での安定限界 ${r.alim.toFixed(2)} mm)。`;
