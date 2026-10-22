@@ -13,6 +13,8 @@ npm run build     # dist/index.html（単一ファイル、Web Worker 内蔵）
 npm test          # 検証テスト（約 25 分）
 ```
 
+ネイティブ版（Rust の計算コアとデスクトップアプリ、STL 取り込みモードを多コアで計算）は [native/README.md](native/README.md) を見てください。
+
 `dist/index.html` をブラウザで開き、条件を入れて「切削開始」を押します。標準条件（S45C、200 m/min、h = 0.1 mm）は
 一般的な PC で 30〜40 秒ほどで 0.6 mm 切り終わります。
 

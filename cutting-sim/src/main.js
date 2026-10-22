@@ -8,10 +8,11 @@ import { View3DCanvas } from './view3dcanvas.js';
 import { renderField, legendGradient, bandsOf } from './fieldview.js';
 import { parseSTL, bounds, volume, weld } from './mesh.js';
 import { EXAMPLES } from './examples3d.js';
+import { nativeBackend, wrapWorker } from './native.js';
 
 const $ = (id) => document.getElementById(id);
 const workerUrl = URL.createObjectURL(new Blob([__WORKER_SRC__], { type: 'text/javascript' }));
-const worker = new Worker(workerUrl);
+const worker = wrapWorker(new Worker(workerUrl), nativeBackend());
 
 // ---- Colour maps ----
 function turbo(t) {
@@ -912,7 +913,7 @@ function readouts() {
   $('prog').style.width = s.progress * 100 + '%';
   $('clock').textContent = (cfg.mode === 'mesh' ? (s.motion === 'linear' ? `移動 ${f3(s.travel)} mm · ` : `回転角 ${f0(s.angle)}° · `) + `${f0(s.progress * 100)} % · ` : cfg.mode === 'helix' ? `回転角 ${f1(s.angle)}° · ${f0(s.progress * 100)} % · ` : cfg.mode === 'mill' ? `回転角 ${f1(s.angle)}° · ` : cfg.mode === '3d' ? `移動 ${f3(s.travel)} mm · ${f0(s.progress * 100)} % · ` : (s.relax != null && !s.residual ? `除荷・冷却 ${f0(s.relax * 100)} % · ` : `${f3(s.travel)} / ${cfg.cutLen.toFixed(2)} mm · `))
     + `${(s.t * 1e6).toFixed(1)} µs · 計算 ${(frame.wall / 1000).toFixed(0)} s`;
-  $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ`
+  $('meta').textContent = `粒子 ${s.N.toLocaleString()} 個 · 間隔 ${s.dx.toFixed(1)} µm · 質量スケーリング ×${s.ms.toFixed(0)} · Δt ${(frame.dt * 1e9).toFixed(1)} ns · ${s.steps.toLocaleString()} ステップ${frame.native ? ` · ネイティブ計算（${frame.native.threads} スレッド、${frame.native.msPerStep.toFixed(0)} ms/ステップ）` : ''}`
     + (is3(cfg.mode) ? ' · 3D は計算に数分〜十数分かかります' : '');
 }
 

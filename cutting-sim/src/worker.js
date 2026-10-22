@@ -3,13 +3,21 @@ import { CuttingSim } from './sph.js';
 import { Mill } from './process.js';
 import { toolOutline } from './tool.js';
 import { Cutting3D } from './sph3d.js';
+import { dumpState, applyFrame } from './nativestate.js';
 
 let sim = null, running = false, t0 = 0, wall = 0, runN = 0;   // runN: the latest run request, echoed in frames
 let warm = 0;   // preheat cuts done (orthogonal cutting)
 
 onmessage = (e) => {
   const d = e.data;
-  if (d.type === 'init') { sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix' || d.cfg.mode === 'mesh') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; warm = 0; send(); }
+  if (d.type === 'init') {
+    sim = (d.cfg.mode === '3d' || d.cfg.mode === 'helix' || d.cfg.mode === 'mesh') ? new Cutting3D(d.cfg) : new CuttingSim(d.cfg); running = false; wall = 0; warm = 0;
+    // Native core (src/native.js): it gets this run's state and steps it; frames come back below.
+    if (d.cfg.native && sim instanceof Cutting3D) postMessage({ type: 'nativeState', json: JSON.stringify(dumpState(sim)) });
+    send();
+  }
+  else if (d.type === 'nativeFrame') { if (sim) { sim.native = applyFrame(sim, d.buf); running = d.running; wall = d.wall; t0 = performance.now(); runN = d.runN; send(); } }
+  else if (d.type === 'nativePause') { running = false; wall = d.wall; runN = d.runN; if (sim) send(); }
   else if (d.type === 'run') { runN = d.n || 0; if (sim && !sim.done && !running) { running = true; t0 = performance.now(); loop(); } }
   else if (d.type === 'pause') { if (running) wall += performance.now() - t0; running = false; send(); }
   else if (d.type === 'sweep') { sweep = { cfg: d.cfg, key: d.key, values: d.values, i: 0, sim: null }; sweepLoop(); }
@@ -113,7 +121,7 @@ function send3d() {
     box: [s.L * 1e3, s.H * 1e3, s.bz * 1e3],
     mesh: s.meshMode ? 1 : 0,
     profile: s.done && !s.meshMode ? s.heat.profile() : null,
-    hist: s.hist, summary: s.summary(), running, runN, wall: now, dt: s.dt,
+    hist: s.hist, summary: s.summary(), running, runN, wall: now, dt: s.dt, native: s.native || null,
   }, [...(tool.tris ? [tool.tris.buffer] : []), x.buffer, y.buffer, z.buffer, T.buffer, seq.buffer, ep.buffer, sr.buffer, p.buffer, flag.buffer, D.buffer]);
   if (s.meshMode) sentTris = s;
 }
