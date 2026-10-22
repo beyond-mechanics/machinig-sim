@@ -60,6 +60,7 @@ jobs:
           cp native/sph-core/target/release/sphgpu.exe native/scripts/gpu-bench.bat gpu-bench/
           node native/scripts/dump.mjs drill gpu-bench/drill.json
           node native/scripts/dump.mjs helix gpu-bench/helix.json
+          test -s gpu-bench/drill.json && test -s gpu-bench/helix.json
       - uses: actions/upload-artifact@v4
         with:
           name: CuttingSim-gpu-bench
