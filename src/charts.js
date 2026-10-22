@@ -5,7 +5,7 @@ let C = {};
 export function refreshTheme() {
   const cs = getComputedStyle(document.documentElement);
   const v = n => cs.getPropertyValue(n).trim();
-  C = { fg: v('--ink'), mute: v('--ink-mute'), grid: v('--rule'), panel: v('--panel'), a: v('--series-a'), b: v('--series-b'), c: v('--series-c'), accent: v('--accent'), bad: v('--bad'), ok: v('--ok'), mono: v('--font-mono') };
+  C = { fg: v('--ink'), mute: v('--ink-mute'), grid: v('--rule'), panel: v('--panel'), a: v('--series-a'), b: v('--series-b'), c: v('--series-c'), accent: v('--accent'), bad: v('--bad'), ok: v('--ok'), warn: v('--warn'), mono: v('--font-mono') };
 }
 
 function setup(cv) {
@@ -159,7 +159,8 @@ export function drawSpectrum(cv, eng, fn) {
 
 // returns the plotting box so clicks can be mapped back to rpm
 // rest: optional lobes of the tool at rest, drawn dashed behind the speed-dependent ones
-export function drawLobes(cv, lobes, op, rpmRange, rest = null) {
+// td: time-domain limits [{rpm, alim, open}] (stabtd.js), drawn as points joined by a line
+export function drawLobes(cv, lobes, op, rpmRange, rest = null, td = null) {
   const { g, w, h } = setup(cv);
   const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
   const [r0, r1] = rpmRange;
@@ -186,8 +187,18 @@ export function drawLobes(cv, lobes, op, rpmRange, rest = null) {
   }
   g.strokeStyle = C.fg; g.lineWidth = 1.4; g.beginPath();
   env.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke();
-  // operating point
-  if (op.S > 0) {
+  if (td?.length) {
+    const pts = td.filter(p => p.rpm >= r0 && p.rpm <= r1).sort((a, b) => a.rpm - b.rpm);
+    g.strokeStyle = C.warn; g.fillStyle = C.warn; g.lineWidth = 1.2; g.beginPath();
+    pts.forEach((p, i) => { const x = xs(p.rpm), y = ys(p.alim); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+    for (const p of pts) { g.beginPath(); g.arc(xs(p.rpm), ys(p.alim), p.open ? 4 : 3, 0, 6.3); p.open ? g.stroke() : g.fill(); }
+  }
+  // operating point (below the diagram's speeds: a marker at its left edge)
+  if (!(op.S >= rpmRange[0])) {
+    const y = ys(Math.min(op.ap, Y));
+    g.fillStyle = C.mute; g.textAlign = 'left'; g.textBaseline = 'bottom';
+    g.fillText(op.S > 0 ? `◀ ${Math.round(op.S)} min⁻¹ (線図より低速) / ${op.ap.toFixed(2)} mm` : '主軸停止 (0 min⁻¹)', box.x + 4, y - 4);
+  } else if (op.S > 0) {
     const x = xs(op.S), y = ys(op.ap);
     g.fillStyle = op.stable ? C.ok : C.bad; g.strokeStyle = C.panel; g.lineWidth = 2;
     g.beginPath(); g.arc(x, y, 5, 0, 6.3); g.fill(); g.stroke();
@@ -336,3 +347,20 @@ export function drawSection(cv, s) {
 
 // temperature under a pointer position (CSS px within the canvas), from the last drawSection
 export function sectionProbe(px, py) { return probe ? probe(px, py) : null; }
+
+// one spindle revolution of force: measured (solid) and simulated (dashed), Fx Fy (Fz)
+export function drawRevolution(cv, meas, sim, comps = [0, 1, 2]) {
+  const { g, w, h } = setup(cv);
+  const box = { x: 40, y: 18, w: w - 52, h: h - 42 };
+  const cols = [C.a, C.b, C.c], names = ['Fx', 'Fy', 'Fz'], n = meas[0].length;
+  let mx = 0; for (const c of comps) for (const a of [meas[c], sim?.[c]]) if (a) for (const v of a) mx = Math.max(mx, Math.abs(v));
+  const Y = niceMax(mx * 1.05), ys = v => box.y + box.h / 2 - v / Y * box.h / 2, xs = b => box.x + box.w * (b + 0.5) / n;
+  frame(g, box, '主軸の回転角 [°]', 'N', [[`${Y}`, ys(Y)], ['0', ys(0)], [`${-Y}`, ys(-Y)]], [0, 90, 180, 270, 360].map(d => [`${d}`, box.x + box.w * d / 360]));
+  const line = (a, col, dash) => {
+    g.strokeStyle = col; g.lineWidth = dash ? 1.2 : 1.6; g.setLineDash(dash ? [5, 4] : []);
+    g.beginPath(); for (let b = 0; b < n; b++) b ? g.lineTo(xs(b), ys(a[b])) : g.moveTo(xs(b), ys(a[b])); g.stroke();
+  };
+  for (const c of comps) { line(meas[c], cols[c], false); if (sim) line(sim[c], cols[c], true); }
+  g.setLineDash([]);
+  legend(g, [...comps.map(c => [names[c], cols[c]]), ['破線=計算', C.mute]], box.x + 22, 7);
+}

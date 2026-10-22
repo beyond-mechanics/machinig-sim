@@ -30,6 +30,28 @@ export function tipFactor(S, kTool, kSp, soft = SOFT_DEFAULT) {
   return (1 / kTool + 1 / kSp) / (1 / kTool + 1 / (kSp * b));
 }
 
+// Tool on the spindle as two lumped masses: the tool (stiffness kTool to the holder face, modal
+// mass mTool) on the holder/spindle nose (stiffness kSp to the machine, mass mSp). The tool tip
+// then has two modes, the spindle mode below the tool's own bending mode, as measured tool-tip
+// FRFs show. M = diag(mSp, mTool), K = [[kSp + kTool, −kTool], [−kTool, kTool]]; each mode r
+// with shape φ adds φ_tip² / (m_r (ω_r² − ω²)) to the tip receptance, i.e. a tip-equivalent
+// stiffness k_r = m_r ω_r² / φ_tip² (Σ 1/k_r = 1/kTool + 1/kSp, the static chain).
+// k [N/mm], m [kg]; returns modes {k [N/mm], fn [Hz], zeta} from low to high frequency.
+export function twoDofModes(kTool, mTool, kSp, mSp, zTool = 0.03, zSp = 0.05) {
+  const k1 = kSp * 1e3, k2 = kTool * 1e3, m1 = mSp, m2 = mTool;
+  // det(K − ω²M) = 0
+  const a = m1 * m2, b = -((k1 + k2) * m2 + k2 * m1), c = k1 * k2;
+  const disc = Math.sqrt(Math.max(0, b * b - 4 * a * c));
+  const w2s = [(-b - disc) / (2 * a), (-b + disc) / (2 * a)];
+  return w2s.map(w2 => {
+    // shape with φ_spindle = 1: (k1 + k2 − ω² m1) − k2 φ_tip = 0
+    const phiT = (k1 + k2 - w2 * m1) / k2;
+    const mr = m1 + m2 * phiT * phiT;
+    // damping of the part that carries most of the mode's kinetic energy
+    return { k: mr * w2 / (phiT * phiT) / 1e3, fn: Math.sqrt(w2) / (2 * Math.PI), zeta: m2 * phiT * phiT > m1 ? zTool : zSp };
+  });
+}
+
 const scaleModes = (modes, f) => modes.map(m => ({ k: m.k * f, fn: m.fn * Math.sqrt(f), zeta: m.zeta }));
 
 function lerpModes(a, b, t) {
@@ -50,6 +72,11 @@ export function modesAt(modal, S, chain, soft = SOFT_DEFAULT) {
     let j = 1; while (L[j].S < S) j++;
     const a = pick(L[j - 1]), b = pick(L[j]), t = (S - L[j - 1].S) / (L[j].S - L[j - 1].S);
     return { x: lerpModes(a.x, b.x, t), y: lerpModes(a.y, b.y, t) };
+  }
+  // the tool on a spindle of its own: the bearing softening acts on the spindle spring only
+  if (modal.auto && chain?.twoDof) {
+    const t = chain.twoDof, ms = twoDofModes(chain.kTool, t.mTool, chain.kSp * bearingFactor(S, soft), t.mSp, modal.zeta, t.zSp);
+    return { x: ms, y: ms };
   }
   const x0 = modal.modesX?.length ? modal.modesX : one;
   const y0 = modal.modesY?.length ? modal.modesY : x0;

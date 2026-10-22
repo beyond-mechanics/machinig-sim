@@ -139,3 +139,17 @@ M30`;
   assert.ok(Math.abs(r.target.left - 3) < 1e-6 && r.target.inTol === 0, 'uncut base reported as material left');
 }
 console.log('target tests passed');
+
+// against the commanded cut: a chattering slot reads its lateral overcut (the wall pushed out by
+// the vibration, well under the slot depth), and a stable cut reads µm, not a speckle cell's
+// whole column
+{
+  const { Simulator: Sim } = await import('../src/sim.js');
+  const slot = (tool, S, F, z) => `(STOCK 90 90 15)\n(TOOL T1 ${tool})\nG21 G90 G17\nT1 M6\nS${S} M3\nG0 X66 Y45 Z2\nG1 Z${z} F300\nG1 X74 F${F}\nG0 Z5\nG0 X-90 Y60\nM30`;
+  const run = c => { const s = new Sim(); s.load(c, {}); while (!s.done) s.step(0.05); const d = s.deviationSummary().ideal; return { left: d.left, gouge: -d.gouge, chatter: s.report.lines.get(8).chatter }; };
+  const a = run(slot('D6 N3 FLAT L20 SO30', 10000, 900, -3));
+  assert.ok(a.chatter > 0 && a.gouge > 0.2 && a.gouge < 1.5, `chatter: lateral overcut ${a.gouge}`);
+  const b = run(slot('D6 N3 FLAT L15 SO20', 16000, 1440, -1.5));
+  assert.ok(b.left < 0.1 && b.gouge < 0.1, `stable: ${b.left} / ${b.gouge}`);
+  console.log(`commanded-cut deviation: chatter ${a.gouge.toFixed(2)} mm lateral, stable ${(Math.max(b.left, b.gouge) * 1000).toFixed(0)} µm`);
+}

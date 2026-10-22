@@ -1,0 +1,56 @@
+name: native
+
+on:
+  push:
+    branches: ['native/**']
+    paths: ['native/**', 'src/**', 'scripts/**', '.github/workflows/native.yml']
+  pull_request:
+    paths: ['native/**', '.github/workflows/native.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: native-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fem-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - name: chipfem tests
+        working-directory: native
+        run: cargo test --release -p chipfem
+
+  windows-app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - name: web version (offline single file) for the milling tab
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+          cp dist/machining-sim-offline.html native/app/ui/mill.html
+      - name: Tauri CLI
+        run: npm install -g @tauri-apps/cli@2
+      - name: build the installer
+        working-directory: native/app/src-tauri
+        run: tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: machining-sim-windows
+          path: |
+            native/target/release/bundle/msi/*.msi
+            native/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

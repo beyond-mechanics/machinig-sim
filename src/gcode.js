@@ -1,9 +1,15 @@
 // G-code parser and path discretizer for 3-axis milling (Fanuc-style dialect).
 // Supported: G0 G1 G2 G3 (I/J/K or R, helical) in G17/G18/G19, G20 G21 G90 G91 G94 G95,
 // canned cycles G73 G81-G89 with G98/G99 and K/L repeats, G28/G53 (to the home height),
-// tool changes (T.. M6) with tool definitions read from comments, F S M3 M4 M5 M30.
+// tool changes (T.. M6) with tool definitions read from comments, F S M3 M4 M5 M30, subprograms
+// (O-number labels, M98 P… L… / P<times><number>, M99 return), custom macro B variables, IF/GOTO
+// and WHILE/DO/END (macro.js).
+// Work coordinate systems G54-G59 and G54.1 P1-P48: each move records its system (mv.wcs);
+// opts.wcs gives every system's zero in a common frame, so a change of system re-expresses the
+// current position (incremental moves stay right). G52 shifts the local zero of the system.
 // Cutter compensation G41/G42/G40 is recorded on each move (mv.comp, mv.compD) and applied by
 // cuttercomp.js once the tool radii are known. Macros and subprograms are ignored with a warning.
+import { macroStatement, substitute } from './macro.js';
 
 const IGNORED_G = new Set([43, 44, 49, 54, 55, 56, 57, 58, 59, 61, 64, 80, 94, 15, 69, 50, 13, 12]);
 const CYCLES = new Set([73, 74, 76, 81, 82, 83, 84, 85, 86, 87, 88, 89]);
@@ -47,25 +53,104 @@ export function parseToolComment(text) {
 
 // opts.start: position before the first move (program coordinates); opts.homeZ: height that
 // G28/G53 Z moves go to (the machine's Z home is unknown, so it is taken as a safe height)
+// opts.wcs: { G54: {x,y,z}, G55: … } zero of each system in one common frame (missing ones
+// coincide with G54)
+// G65 argument addresses → local variables (Fanuc argument specification I)
+const ARG_VAR = { A: 1, B: 2, C: 3, I: 4, J: 5, K: 6, D: 7, E: 8, F: 9, H: 11, M: 13, Q: 17, R: 18, S: 19, T: 20, U: 21, V: 22, W: 23, X: 24, Y: 25, Z: 26 };
+
 export function parseGcode(text, opts = {}) {
   const start = opts.start || { x: 0, y: 0, z: 50 };
+  const W = opts.wcs || {};
+  // G10 L2 P□ / L20 P□ in the program: the offsets (machine coordinates) it writes. The machine zero
+  // is unknown here, so they are placed by their differences, anchored at the G54 the screen sets:
+  // zero = G54 + (offset − the first G10 value of G54). Without a G10 for G54 they are not used.
+  const mo = {};
+  let mo0 = null, g10Unanchored = false;
+  const zeroOf = name => {
+    const g = W.G54 || { x: 0, y: 0, z: 0 };
+    if (mo[name] && mo0) return { x: g.x + mo[name].x - mo0.x, y: g.y + mo[name].y - mo0.y, z: g.z + mo[name].z - mo0.z };
+    if (mo[name] && name !== 'G54') g10Unanchored = true;
+    return W[name] || g;
+  };
   const homeZ = opts.homeZ ?? start.z;
-  const st = { x: start.x, y: start.y, z: start.z, abs: true, unit: 1, motion: 0, plane: 17, perRev: false, F: 1000, S: 10000, spindle: false, T: null, pendingT: null, cycle: null, retractR: false, comp: null, compD: null };
+  const st = { x: start.x, y: start.y, z: start.z, abs: true, unit: 1, motion: 0, plane: 17, perRev: false, F: 1000, S: 10000, spindle: false, T: null, pendingT: null, cycle: null, retractR: false, comp: null, compD: null, wcs: 'G54', local: { x: 0, y: 0, z: 0 } };
   const moves = [];
   const warnings = [];
   const meta = { tools: {}, workOffsets: new Set(), toolOrder: [] };
   const lines = text.split(/\r?\n/);
   const warn = (ln, msg) => warnings.push(`${ln + 1}行: ${msg}`);
   let noDecimal = false;
+  // G68 rotation (G17: about Z) and G51.1 mirror images: the program's coordinates (st) are
+  // turned into the coordinates the machine moves in, mirror outermost (a rotation programmed
+  // inside a mirror image turns the other way, as on Fanuc)
+  const xf = { on: false, rot: null, mir: {} };   // rot: { cx, cy, deg, c, s }; mir: axis → centre
+  const fwd = p => {
+    let { x, y, z } = p;
+    if (xf.rot) { const r = xf.rot, dx = x - r.cx, dy = y - r.cy; x = r.cx + r.c * dx - r.s * dy; y = r.cy + r.s * dx + r.c * dy; }
+    if (xf.mir.x !== undefined) x = 2 * xf.mir.x - x;
+    if (xf.mir.y !== undefined) y = 2 * xf.mir.y - y;
+    if (xf.mir.z !== undefined) z = 2 * xf.mir.z - z;
+    return { x, y, z };
+  };
+  const inv = p => {
+    let { x, y, z } = p;
+    if (xf.mir.x !== undefined) x = 2 * xf.mir.x - x;
+    if (xf.mir.y !== undefined) y = 2 * xf.mir.y - y;
+    if (xf.mir.z !== undefined) z = 2 * xf.mir.z - z;
+    if (xf.rot) { const r = xf.rot, dx = x - r.cx, dy = y - r.cy; x = r.cx + r.c * dx + r.s * dy; y = r.cy - r.s * dx + r.c * dy; }
+    return { x, y, z };
+  };
+  // change the transformation keeping the tool where it is
+  const retransform = change => { const at = fwd(st); change(); xf.on = !!xf.rot || Object.keys(xf.mir).length > 0; Object.assign(st, inv(at)); };
+  // the zero (or the local shift) moved by d in the machine frame: the tool stays where it is,
+  // so its program position moves by −d through the transformation
+  const keepPut = d => {
+    if (!xf.on) { st.x -= d.x; st.y -= d.y; st.z -= d.z; return; }
+    const at = fwd(st); Object.assign(st, inv({ x: at.x - d.x, y: at.y - d.y, z: at.z - d.z }));
+  };
   const push = (ln, to, rapid, extra) => {
     const from = { x: st.x, y: st.y, z: st.z };
     if (to.x === from.x && to.y === from.y && to.z === from.z && !extra?.arc) return;
-    const mv = { rapid, from, to: { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, ...extra };
+    const mv = { rapid, from: xf.on ? fwd(from) : from, to: xf.on ? fwd(to) : { ...to }, F: st.F, S: st.S, spindle: st.spindle, line: ln + 1, tool: st.T, comp: st.comp, compD: st.compD, wcs: st.wcs, local: st.local, ...extra };
+    mv.zero = zeroOf(st.wcs);
+    if (xf.on) {
+      // a mirror in an odd number of the arc's axes turns its direction (and the compensation side)
+      const flips = ax => ax.filter(k => xf.mir[k] !== undefined).length % 2 === 1;
+      if (mv.arc) {
+        const ax = mv.arc.axes || ['x', 'y', 'z'];
+        if (xf.rot && ax[2] !== 'z') { warn(ln, 'G17 以外の平面の円弧は座標回転 G68 中は未対応 (直線で結びます)'); delete mv.arc; }
+        else {
+          const c = fwd({ x: from.x, y: from.y, z: from.z, [ax[0]]: mv.arc.ca, [ax[1]]: mv.arc.cb });
+          mv.arc = { ...mv.arc, ca: c[ax[0]], cb: c[ax[1]], cw: flips(ax.slice(0, 2)) ? !mv.arc.cw : mv.arc.cw };
+        }
+      }
+      if (mv.comp && flips(['x', 'y'])) mv.comp = mv.comp === 41 ? 42 : 41;
+    }
     if (!st.spindle && !rapid) warn(ln, '主軸停止中の切削送り');
     moves.push(mv);
     st.x = to.x; st.y = to.y; st.z = to.z;
   };
+  // subprograms (Fanuc): O-number labels, M98 P… L… calls them, M99 returns
+  const labels = new Map();
+  lines.forEach((l, i) => { const m = l.replace(/\([^)]*\)/g, '').trim().toUpperCase().match(/^[O:]\s*0*(\d+)/); if (m && !labels.has(+m[1])) labels.set(+m[1], i); });
+  const calls = [];
+  // custom macro: variables, N-number jump targets, WHILE loops by DO number
+  const clean = l => { let c = l.replace(/\([^)]*\)/g, '').replace(/;.*$/, '').toUpperCase().trim(); if (c.startsWith('/')) c = c.slice(1).trim(); return c; };
+  const vars = new Map(Object.entries(opts.vars || {}).map(([k, v]) => [+k, v]));
+  // N numbers are looked up within the program (O block) a line belongs to: CAM output repeats
+  // N10, N20 … in every program. progOf[i]: the line index of the O label above line i (-1: none)
+  const progOf = [], nLabels = new Map();
+  let loops = new Map();   // WHILE … DO m start lines, per call level
+  lines.forEach((l, i) => {
+    progOf[i] = i && progOf[i - 1] !== undefined ? progOf[i - 1] : -1;
+    if ([...labels.values()].includes(i)) progOf[i] = i;
+    const m = clean(l).match(/^N\s*(\d+)/), key = `${progOf[i]}:${m?.[1] ? +m[1] : ''}`;
+    if (m && !nLabels.has(key)) nLabels.set(key, i);
+  });
+  const nLabel = (ln, n) => nLabels.get(`${progOf[ln]}:${n}`);
+  let executed = 0;
   for (let ln = 0; ln < lines.length; ln++) {
+    if (++executed > 2e6) { warn(ln, 'サブプログラムの呼び出しが多すぎるため打ち切り'); break; }
     const raw = lines[ln];
     for (const cm of raw.matchAll(/\(([^)]*)\)/g)) {
       const body = cm[1];
@@ -77,11 +162,49 @@ export function parseGcode(text, opts = {}) {
     let line = raw.replace(/\([^)]*\)/g, '').replace(/;.*$/, '').toUpperCase().trim();
     if (line.startsWith('/')) line = line.slice(1); // block delete switch assumed off
     if (!line || line.startsWith('%')) continue;
-    if (/[#[\]]/.test(line) || /\b(IF|GOTO|WHILE)\b/.test(line)) { warn(ln, 'マクロ(変数・式)は未対応 (この行は無視)'); continue; }
+    if (/[#[\]]/.test(line) || /^(N\s*\d+\s*)?(IF\s*\[|GOTO|WHILE\s*\[|END\s*\d)/.test(line)) {
+      // custom macro: statements change the variables or the flow; other blocks get their values
+      try {
+        const r = macroStatement(line, vars);
+        if (r) {
+          if (r.goto !== undefined) {
+            const at = nLabel(ln, r.goto);
+            if (at === undefined) { warn(ln, `GOTO ${r.goto} の飛び先 N${r.goto} がこのプログラム内にありません (ここで終了)`); break; }
+            ln = at - 1;
+          } else if (r.whileFalse !== undefined) {
+            // past the matching END
+            const m = r.whileFalse, open = new RegExp(`^(N\\s*\\d+\\s*)?WHILE\\b.*\\bDO\\s*${m}$`), close = new RegExp(`^(N\\s*\\d+\\s*)?END\\s*${m}$`);
+            let d = 0, j = ln + 1;
+            for (; j < lines.length; j++) { const L = clean(lines[j]); if (open.test(L)) d++; else if (close.test(L)) { if (!d) break; d--; } }
+            ln = j;
+          } else if (r.loopStart !== undefined) loops.set(r.loopStart, ln);
+          else if (r.loopEnd !== undefined) { const at = loops.get(r.loopEnd); if (at !== undefined) ln = at - 1; }
+          continue;
+        }
+        line = substitute(line, vars);
+      } catch (err) { warn(ln, `マクロ: ${err.message} (この行は無視)`); continue; }
+    }
+    const g65 = line.replace(/^N\s*\d+\s*/, '');
+    if (/^G\s*0*65(?!\d)/.test(g65)) {
+      // G65 P<program> L<times> <arguments>: a subprogram with its own local variables #1–#33,
+      // the arguments set by address (A → #1, B → #2, … Z → #26)
+      const args = {};
+      for (const m of g65.replace(/^G\s*0*65/, '').matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)) args[m[1]] = parseFloat(m[2]);
+      const at = args.P === undefined ? undefined : labels.get(Math.round(args.P));
+      if (at === undefined) { warn(ln, `G65 のマクロ O${args.P ?? '?'} が見つかりません (この呼び出しは無視)`); continue; }
+      if (calls.length >= 8) { warn(ln, 'マクロ呼び出しの入れ子が深すぎます (8 段まで)'); continue; }
+      const saved = [];
+      for (let n = 1; n <= 33; n++) { saved.push(vars.get(n)); vars.delete(n); }
+      for (const [k, v] of Object.entries(args)) if (ARG_VAR[k]) vars.set(ARG_VAR[k], v);
+      calls.push({ ret: ln, left: Math.max(1, Math.round(args.L ?? 1)) - 1, start: at, locals: saved, args, loops });
+      loops = new Map();
+      ln = at;
+      continue;
+    }
     const words = [...line.matchAll(/([A-Z])\s*([-+]?\d*\.?\d+)/g)].map(m => [m[1], parseFloat(m[2]), m[2]]);
     if (!words.length) continue;
     const w = {};
-    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false;
+    let hasMotionWord = false, home = false, cycleWord = false, m6 = false, end = false, newWcs = null, local = false, sub = null, g10 = false, xfCmd = null;
     for (const [k, v, s] of words) {
       if (k === 'G') {
         if ([0, 1, 2, 3].includes(v)) { st.motion = v; hasMotionWord = true; st.cycle = null; }
@@ -101,24 +224,91 @@ export function parseGcode(text, opts = {}) {
           st.cycle = { g: v, initZ: st.cycle ? st.cycle.initZ : st.z, R: st.cycle?.R, Z: st.cycle?.Z, Q: st.cycle?.Q, P: st.cycle?.P };
           cycleWord = true;
         }
-        else if (v >= 54 && v <= 59) meta.workOffsets.add(`G${v}`);
-        else if (Math.floor(v) === 54) meta.workOffsets.add(`G${v}`);
+        else if (v >= 54 && v <= 59 && Number.isInteger(v)) newWcs = `G${v}`;
+        else if (Math.abs(v - 54.1) < 1e-6) newWcs = 'G54.1';
+        else if (v === 52) local = true;
         else if (v === 41 || v === 42) { if (st.plane !== 17) warn(ln, `工具径補正 G${v} は G17 平面のみ対応`); else st.comp = v; }
         else if (v === 40) st.comp = null;
-        else if (v === 68 || v === 51 || v === 16) warn(ln, `座標変換 G${v} は未対応`);
-        else if (v === 4 || v === 10 || v === 65) { /* dwell, data setting, macro call: no motion */ }
+        else if (v === 68) xfCmd = 'rot';
+        else if (v === 69) xfCmd = 'unrot';
+        else if (Math.abs(v - 51.1) < 1e-6) xfCmd = 'mir';
+        else if (Math.abs(v - 50.1) < 1e-6) xfCmd = 'unmir';
+        else if (v === 51 || v === 16) warn(ln, `座標変換 G${v} は未対応`);
+        else if (v === 10) g10 = true;
+        else if (v === 4 || v === 65) { /* dwell, data setting, macro call: no motion */ }
         else if (!IGNORED_G.has(v)) warn(ln, `G${v} は無視`);
       } else if (k === 'M') {
         if (v === 3 || v === 4) st.spindle = true;
         else if (v === 5) st.spindle = false;
         else if (v === 6) m6 = true;
-        else if (v === 98 || v === 99) warn(ln, 'サブプログラム呼び出し(M98/M99)は未対応');
+        else if (v === 98) sub = 'call';
+        else if (v === 99) sub = 'return';
         else if (v === 30 || v === 2) end = true;
       } else if (k === 'T') st.pendingT = v;
       else {
         w[k] = v;
         if ('XYZ'.includes(k) && !s.includes('.') && Math.abs(v) >= 1000) noDecimal = true;
       }
+    }
+    if (xfCmd) {
+      // G68 X Y R (centre, angle; G91: R added to the angle in effect) / G69, G51.1 X Y Z (mirror
+      // about these positions) / G50.1 X Y Z (cancel those axes; no axis: all). Their X Y Z R are
+      // data; the rest of the block (G54…, F, M98, and the motion of a G69 block) goes on.
+      const u0 = st.unit, val = k => (st.abs ? w[k] * u0 : st[k.toLowerCase()] + w[k] * u0);
+      if (xfCmd === 'rot') {
+        if (st.plane !== 17) warn(ln, '座標回転 G68 は G17 平面のみ対応 (この行は無視)');
+        else retransform(() => {
+          const deg = (w.R ?? 0) + (!st.abs && xf.rot ? xf.rot.deg : 0), a = deg * Math.PI / 180;
+          xf.rot = { cx: w.X !== undefined ? val('X') : st.x, cy: w.Y !== undefined ? val('Y') : st.y, deg, c: Math.cos(a), s: Math.sin(a) };
+        });
+        meta.transform = true;
+      } else if (xfCmd === 'unrot') retransform(() => { xf.rot = null; });
+      else if (xfCmd === 'mir') {
+        if (xf.rot) warn(ln, 'G68 の中で指令した G51.1: ミラーを回転の外側 (機械側) として扱います (中心も機械側の座標)');
+        retransform(() => { for (const k of 'XYZ') if (w[k] !== undefined) xf.mir[k.toLowerCase()] = val(k); }); meta.transform = true;
+      }
+      else retransform(() => { const ks = [...'XYZ'].filter(k => w[k] !== undefined); for (const k of ks.length ? ks : ['X', 'Y', 'Z']) delete xf.mir[k.toLowerCase()]; });
+      if (xfCmd !== 'unrot') { delete w.X; delete w.Y; delete w.Z; delete w.R; }
+    }
+    if (g10) {
+      // G10 L2 P1–6 (G54–G59) / L20 P n (G54.1 P n) X Y Z: write a work offset; G91 adds to it.
+      // The other L numbers (tool offsets) are data with no motion.
+      const L = Math.round(w.L ?? -1), P = Math.round(w.P ?? -1);
+      const name = L === 2 && P >= 1 && P <= 6 ? `G${53 + P}` : L === 20 && P >= 1 ? `G54.1P${P}` : null;
+      if (L === 2 && P === 0) warn(ln, 'G10 L2 P0 (外部ワーク座標系オフセット) は未対応 (この行は無視)');
+      else if (name) {
+        const before = zeroOf(st.wcs), u0 = st.unit;
+        const cur = mo[name] || (st.abs ? { x: 0, y: 0, z: 0 } : null);
+        if (!cur) warn(ln, `G91 G10: ${name} の元の値が不明のため 0 からの値として扱います`);
+        const base = cur || { x: 0, y: 0, z: 0 }, add = !st.abs;
+        const val = k => (w[k] === undefined ? base[k.toLowerCase()] : (add ? base[k.toLowerCase()] : 0) + w[k] * u0);
+        mo[name] = { x: val('X'), y: val('Y'), z: val('Z') };
+        if (name === 'G54' && !mo0) mo0 = { ...mo.G54 };
+        meta.g10 = true;
+        // the tool stays where it is when its own system moves
+        const after = zeroOf(st.wcs);
+        keepPut({ x: after.x - before.x, y: after.y - before.y, z: after.z - before.z });
+      }
+      continue;
+    }
+    if (newWcs) {
+      // G54.1 P n: the extended systems; the P word belongs to it on this block
+      if (newWcs === 'G54.1') { newWcs = w.P !== undefined ? `G54.1P${Math.round(w.P)}` : 'G54.1P1'; delete w.P; }
+      if (newWcs !== st.wcs) {
+        // the tool stays where it is: express its position in the new system
+        const a = zeroOf(st.wcs), b = zeroOf(newWcs);
+        keepPut({ x: b.x - a.x, y: b.y - a.y, z: b.z - a.z });
+        st.wcs = newWcs;
+      }
+      meta.workOffsets.add(newWcs);
+    }
+    if (local) {
+      // G52: local zero inside the current system (absolute shift; G52 X0 Y0 Z0 cancels)
+      const u0 = st.unit, nl = { x: w.X !== undefined ? w.X * u0 : st.local.x, y: w.Y !== undefined ? w.Y * u0 : st.local.y, z: w.Z !== undefined ? w.Z * u0 : st.local.z };
+      keepPut({ x: nl.x - st.local.x, y: nl.y - st.local.y, z: nl.z - st.local.z });
+      st.local = nl;
+      delete w.X; delete w.Y; delete w.Z;
+      meta.localShift = true;
     }
     if (m6 && st.pendingT !== null) {
       st.T = st.pendingT;
@@ -138,7 +328,7 @@ export function parseGcode(text, opts = {}) {
     const F0 = st.F; st.F = feed();
     if (home) {
       // G28/G30/G53: only the Z part is meaningful without the machine's coordinate system
-      if (w.Z !== undefined) push(ln, { x: st.x, y: st.y, z: homeZ }, true);
+      if (w.Z !== undefined) push(ln, { x: st.x, y: st.y, z: homeZ + zeroOf('G54').z - zeroOf(st.wcs).z - st.local.z }, true);
       if (w.X !== undefined || w.Y !== undefined) warn(ln, '原点復帰の X/Y は無視 (機械座標が不明なため)');
     } else if (st.cycle && (cycleWord || hasAxis || w.R !== undefined)) {
       runCycle(ln, w, u);
@@ -153,9 +343,37 @@ export function parseGcode(text, opts = {}) {
     }
     st.F = F0;
     if (end) break;
+    if (sub === 'call') {
+      // M98 P<program> L<times>, or the packed P<times><program 4 digits> of later controls
+      let P = w.P, L = w.L ?? 1;
+      if (P !== undefined && w.L === undefined && P >= 10000) { L = Math.floor(P / 10000); P %= 10000; }
+      const at = P === undefined ? undefined : labels.get(Math.round(P));
+      if (at === undefined) warn(ln, `サブプログラム O${P ?? '?'} が見つかりません (この呼び出しは無視)`);
+      else if (calls.length >= 8) warn(ln, 'サブプログラムの入れ子が深すぎます (8 段まで)');
+      else if (L >= 1) { calls.push({ ret: ln, left: Math.round(L) - 1, start: at, loops }); loops = new Map(); ln = at; }
+    } else if (sub === 'return') {
+      const c = calls[calls.length - 1];
+      if (!c) { if (w.P !== undefined) warn(ln, 'メインプログラムの M99 P□ (飛び越し) は未対応 (ここで終了)'); break; } // M99 in the main program: the end (its loop back to the start is not run)
+      if (c.left > 0 && w.P === undefined) {
+        c.left--; ln = c.start; loops = new Map();
+        if (c.locals) { for (let n = 1; n <= 33; n++) vars.delete(n); for (const [k, v] of Object.entries(c.args)) if (ARG_VAR[k]) vars.set(ARG_VAR[k], v); }
+      } else {
+        calls.pop(); ln = c.ret; loops = c.loops;
+        // M99 P<n>: back to N<n> of the caller instead of the block after the call
+        if (w.P !== undefined) {
+          const at = nLabel(c.ret, Math.round(w.P));
+          if (at === undefined) warn(ln, `M99 P${w.P} の戻り先 N${w.P} がありません (呼び出しの次の行へ戻ります)`); else ln = at - 1;
+        }
+        // a G65 call gives the caller its local variables back
+        if (c.locals) c.locals.forEach((v, i) => (v === undefined ? vars.delete(i + 1) : vars.set(i + 1, v)));
+      }
+    }
   }
   if (noDecimal) warnings.push('小数点のない座標値を mm として扱いました (最小設定単位 0.001 mm の機械では値が1000倍になります)');
-  if (meta.workOffsets.size > 1) warnings.push(`複数のワーク座標系 (${[...meta.workOffsets].join(' ')}) は同じ原点として扱います`);
+  if (g10Unanchored) warnings.push('G10 で設定したワーク座標系がありますが、G54 の G10 が無いため位置を決められません (画面の設定を使います)');
+  if (meta.g10 && mo0) meta.g10Zero = Object.fromEntries(Object.keys(mo).map(n => [n, zeroOf(n)]));
+  const unset = [...meta.workOffsets].filter(n => n !== 'G54' && !W[n] && !meta.g10Zero?.[n]);
+  if (unset.length) warnings.push(`ワーク座標系 ${unset.join(' ')} の原点が未設定のため G54 と同じ位置として扱います (プログラムタブで設定できます)`);
   const undefinedTools = meta.toolOrder.filter(t => !meta.tools[t]);
   if (undefinedTools.length && Object.keys(meta.tools).length) warnings.push(`工具 ${undefinedTools.map(t => 'T' + t).join(' ')} の寸法がコメントに無いため「加工条件」の工具で計算します`);
   meta.workOffsets = [...meta.workOffsets];
@@ -216,9 +434,9 @@ const CHORD_TOL = 0.001; // largest chord error of an arc [mm]
 // Convert moves into a polyline. Each point carries the attributes of the segment ending at it.
 export function discretize(moves, maxSeg = 0.5) {
   if (!moves.length) return [];
-  const pts = [{ ...moves[0].from, rapid: true, F: moves[0].F, S: moves[0].S, line: moves[0].line, tool: moves[0].tool }];
+  const pts = [{ ...moves[0].from, rapid: true, F: moves[0].F, S: moves[0].S, line: moves[0].line, tool: moves[0].tool, wcs: moves[0].wcs, local: moves[0].local, zero: moves[0].zero }];
   for (const mv of moves) {
-    const attr = { rapid: mv.rapid, F: mv.F, S: mv.S, line: mv.line, tool: mv.tool };
+    const attr = { rapid: mv.rapid, F: mv.F, S: mv.S, line: mv.line, tool: mv.tool, wcs: mv.wcs, local: mv.local, zero: mv.zero };
     if (mv.arc) {
       const { ca, cb, cw } = mv.arc;
       const [a, b, n] = mv.arc.axes || ['x', 'y', 'z'];

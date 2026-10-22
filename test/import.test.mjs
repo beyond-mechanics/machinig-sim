@@ -92,8 +92,8 @@ G80`);
 {
   const { warnings } = parseGcode('G90 X1000 Y20\n#100=5\nG1 X#100\nM98 P100');
   assert.ok(warnings.some(w => /小数点/.test(w)));
-  assert.ok(warnings.some(w => /マクロ/.test(w)));
-  assert.ok(warnings.some(w => /M98/.test(w)));
+  assert.ok(!warnings.some(w => /マクロ/.test(w)), 'variables are read now (test/macro.test.mjs)');
+  assert.ok(warnings.some(w => /O100/.test(w)), 'M98 to a missing subprogram is reported');
   // Shift_JIS comment
   const sjis = new Uint8Array([0x28, 0x83, 0x65, 0x83, 0x58, 0x83, 0x67, 0x29, 0x0a, 0x47, 0x30]); // (テスト)\nG0
   assert.equal(decodeText(sjis), '(テスト)\nG0');
@@ -214,3 +214,27 @@ M30`;
   console.log('sample origins ok');
 }
 console.log('import tests passed');
+
+// ---------- mesh files: OBJ, units, up axis, rotation ----------
+{
+  const { parseObj, parseMesh, orientMesh } = await import('../src/workpiece.js');
+  // a 100 × 50 × 20 mm block written in metres, Y up (height along Y), as a CAD export
+  const v = [[0, 0, 0], [0.1, 0, 0], [0.1, 0.02, 0], [0, 0.02, 0], [0, 0, 0.05], [0.1, 0, 0.05], [0.1, 0.02, 0.05], [0, 0.02, 0.05]];
+  const f = [[1, 2, 3, 4], [5, 8, 7, 6], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 8, 4], [4, 8, 5, 1]];
+  const obj = '# block\n' + v.map(p => `v ${p.join(' ')}`).join('\n') + '\n' + f.map(q => `f ${q.map(i => `${i}//1`).join(' ')}`).join('\n');
+  const m = parseMesh(new TextEncoder().encode(obj), 'block.obj');
+  assert.equal(m.count, 12, 'quads fanned into triangles');
+  const o = orientMesh(m, { unit: 'auto', up: 'Y' });
+  const size = o.max.map((x, k) => +(x - o.min[k]).toFixed(6));
+  assert.equal(o.scale, 1000, 'metres detected');
+  assert.deepEqual(size, [100, 50, 20], 'Y-up height becomes Z');
+  const r = orientMesh(m, { unit: 'm', up: 'Y', rotZ: 90 });
+  assert.deepEqual(r.max.map((x, k) => +(x - r.min[k]).toFixed(6)), [50, 100, 20], 'turned 90° about Z');
+  assert.throws(() => parseObj(new TextEncoder().encode('v 0 0 0\nf 1 2 3')), /頂点/);
+  // and it builds a stock whose top is the block's top
+  const { buildStock } = await import('../src/workpiece.js');
+  const st = buildStock({ type: 'stl', ...o }, 1);
+  assert.equal(st.w, 100); assert.equal(st.l, 50);
+  assert.ok(st.H.every(h => Math.abs(h) < 1e-6), 'flat top at Z0');
+  console.log('mesh import: OBJ, metres → mm, Y up → Z up, rotation OK');
+}

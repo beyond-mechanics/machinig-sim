@@ -26,6 +26,30 @@ export function parseStl(buf) {
     for (let i = 0; i < tris.length / 3; i++) tris.set(v[i], i * 3);
   }
   if (!tris.length) throw new Error('三角形がありません');
+  return meshInfo(tris);
+}
+
+// Wavefront OBJ: vertices and faces (polygons fanned into triangles; v/vt/vn and negative
+// indices allowed). Other records (normals, materials, groups) are ignored.
+export function parseObj(buf) {
+  const text = new TextDecoder('utf-8').decode(buf instanceof Uint8Array ? buf : new Uint8Array(buf));
+  const v = [], out = [];
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t.startsWith('v ')) { const c = t.slice(2).trim().split(/\s+/).map(Number); v.push([c[0], c[1], c[2]]); }
+    else if (t.startsWith('f ')) {
+      const ids = t.slice(2).trim().split(/\s+/).map(w => { const i = parseInt(w.split('/')[0], 10); return i < 0 ? v.length + i : i - 1; });
+      for (let k = 1; k + 1 < ids.length; k++) for (const i of [ids[0], ids[k], ids[k + 1]]) { const p = v[i]; if (!p) throw new Error(`面が存在しない頂点 ${i + 1} を参照しています`); out.push(...p); }
+    }
+  }
+  if (!out.length) throw new Error('OBJ に面 (f) がありません');
+  return meshInfo(new Float32Array(out));
+}
+// a mesh file by its name: STL (binary or ASCII) or OBJ
+export function parseMesh(buf, name = '') {
+  return /\.obj$/i.test(name) ? parseObj(buf) : parseStl(buf);
+}
+export function meshInfo(tris) {
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < tris.length; i += 3) for (let k = 0; k < 3; k++) {
     const x = tris[i + k];
@@ -33,6 +57,27 @@ export function parseStl(buf) {
     if (x < min[k]) min[k] = x; if (x > max[k]) max[k] = x;
   }
   return { tris, min, max, count: tris.length / 9 };
+}
+
+// Units, up axis and a turn about the vertical for an imported mesh. CAD exports are often in
+// metres or inches, or with Y up. unit: 'auto' | 'mm' | 'inch' | 'm' (auto: a model under 2
+// units across is taken as metres); up: 'Z' | 'Y' | '-Y' | 'X' (which model axis points up);
+// rotZ: 0 | 90 | 180 | 270 degrees about the new vertical. Returns a new mesh and the scale used.
+export const MESH_UNITS = { mm: 1, inch: 25.4, m: 1000 };
+export function orientMesh(mesh, { unit = 'auto', up = 'Z', rotZ = 0 } = {}) {
+  const size = Math.max(...mesh.max.map((v, k) => v - mesh.min[k]));
+  const k = unit === 'auto' ? (size < 2 ? 1000 : 1) : (MESH_UNITS[unit] ?? 1);
+  const c = Math.round(Math.cos(rotZ * Math.PI / 180)), s = Math.round(Math.sin(rotZ * Math.PI / 180));
+  const src = mesh.tris, tris = new Float32Array(src.length);
+  for (let i = 0; i < src.length; i += 3) {
+    let x = src[i] * k, y = src[i + 1] * k, z = src[i + 2] * k;
+    // bring the model's up axis to +Z (right-handed turns)
+    if (up === 'Y') [y, z] = [-z, y];
+    else if (up === '-Y') [y, z] = [z, -y];
+    else if (up === 'X') [x, z] = [-z, x];
+    tris[i] = c * x - s * y; tris[i + 1] = s * x + c * y; tris[i + 2] = z;
+  }
+  return { ...meshInfo(tris), scale: k };
 }
 
 // size of the stock frame box
