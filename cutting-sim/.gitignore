@@ -1,1 +1,5 @@
 node_modules/
+native/sph-core/target/
+native/app/src-tauri/target/
+native/app/src-tauri/gen/
+native/app/web/
