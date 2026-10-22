@@ -959,7 +959,9 @@ export class Cutting3D {
       // Means over the samples where the tool is cutting (|F| above a tenth of its peak): a tooth
       // is in the work for only part of a turn, and a straight cut takes a while to load up.
       const mag = hs.fc.map((v, i) => Math.hypot(v, hs.ft[i], hs.fr[i])), pk = Math.max(0, ...mag);
-      const on = mag.map((v) => pk > 0 && v >= 0.1 * pk), mean = (a) => { let s = 0, n = 0; for (let i = 0; i < a.length; i++) if (on[i]) { s += a[i]; n++; } return n ? s / n : 0; };
+      // A drill is always cutting but takes about half a turn to load up: its means are over the last quarter of the run.
+      const drill = c.motion === 'drill', n0 = Math.floor(0.75 * mag.length);
+      const on = mag.map((v, i) => (drill ? i >= n0 : pk > 0 && v >= 0.1 * pk)), mean = (a) => { let s = 0, n = 0; for (let i = 0; i < a.length; i++) if (on[i]) { s += a[i]; n++; } return n ? s / n : 0; };
       const avg = mean, mz = mean(hs.mz || []);
       return {
         ...frac, toolT: null, toolSteadyT: null, mode: 'mesh', fx: avg(hs.fc), fy: avg(hs.ft), fz: avg(hs.fr), fxMax: amax(hs.fc), fyMax: amax(hs.ft), fzMax: amax(hs.fr),
