@@ -95,11 +95,11 @@ enum Motion { Linear, Mill, Drill, Oblique, Helix }
 // until the next search, even if a particle wakes meanwhile), and for every particle the slots of
 // its pairs in the JS order (CSR: list[start[p]..start[p + 1]]).
 #[derive(Default)]
-struct Held { i: Vec<u32>, j: Vec<u32>, t: Vec<[f64; 8]>, start: Vec<u32>, list: Vec<u32> }
+pub(crate) struct Held { pub(crate) i: Vec<u32>, pub(crate) j: Vec<u32>, pub(crate) t: Vec<[f64; 8]>, pub(crate) start: Vec<u32>, pub(crate) list: Vec<u32> }
 // Candidate pairs with a moving particle, in the JS order, and for every particle its own entries
 // (pi, pj) in that order. Their kernel terms are evaluated where they are used.
 #[derive(Default)]
-struct Moving { i: Vec<u32>, j: Vec<u32>, start: Vec<u32>, ea: Vec<u32>, eb: Vec<u32> }
+pub(crate) struct Moving { pub(crate) i: Vec<u32>, pub(crate) j: Vec<u32>, pub(crate) start: Vec<u32>, pub(crate) ea: Vec<u32>, pub(crate) eb: Vec<u32> }
 
 fn csr(i: &[u32], j: &[u32], n: usize) -> (Vec<u32>, Vec<u32>) {
     let mut cnt = vec![0u32; n + 1];
@@ -127,12 +127,12 @@ pub struct Sim {
     pub rho: Vec<f64>, pub p: Vec<f64>, pub temp: Vec<f64>, pub ep: Vec<f64>, pub epd: Vec<f64>, pub seq: Vec<f64>, pub sr: Vec<f64>,
     pub z0: Vec<f64>, pub dmg: Vec<f64>, pub s: [Vec<f64>; 6],
     pub fixed: Vec<u8>, pub contact: Vec<u8>, pub dead: Vec<u8>, pub touched: Vec<u8>,
-    q: Vec<f64>, lm: Vec<f64>, pk: Vec<f64>, ac: Vec<f64>,
+    pub(crate) q: Vec<f64>, pub(crate) lm: Vec<f64>, pub(crate) pk: Vec<f64>, pub(crate) ac: Vec<f64>,
     // Conduction factor of every moving entry this step (NaN: not a pair now), from the momentum pass.
     ef: Vec<f64>,
     pub sc: Scalars, pub cfg: Cfg, pub mat: Mat, pub sdf: Option<MeshSdf>, wedge: Option<Wedge>, pub heat: Option<ToolHeat>,
-    motion: Motion, per: Option<f64>, ox: f64, pub mill: Option<MillD>,
-    fixp: Held, movp: Moving,
+    motion: Motion, pub(crate) per: Option<f64>, ox: f64, pub mill: Option<MillD>,
+    pub(crate) fixp: Held, pub(crate) movp: Moving,
     // Positions and supports before the last integration, kept for the chip analysis of a sampling step.
     snap: Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<u8>)>, want_snap: bool,
     xr: Option<(Vec<f64>, Vec<f64>, Vec<f64>)>, dead_ref: u64, last_sort: Option<u64>,
@@ -350,7 +350,7 @@ impl Sim {
     // Verlet list as in JS: candidates within 2h + skin, searched again only when a particle has
     // moved more than half the skin or one was removed. Pairs of two held particles are evaluated
     // at the search only; the others where they are used, every step.
-    fn build_pairs(&mut self) {
+    pub(crate) fn build_pairs(&mut self) {
         let n = self.n;
         let skin = 0.3 * self.sc.hk;
         let mut need = self.xr.is_none() || self.n_dead + self.n_evac != self.dead_ref;
@@ -402,6 +402,35 @@ impl Sim {
         let mut lap = |s: &mut Sim, k: usize| { s.prof[k] += clk.elapsed().as_secs_f64(); clk = std::time::Instant::now(); };
         self.build_pairs();
         lap(self, 0);
+        self.pass_lm();
+        lap(self, 1);
+        if self.steps % 20 == 0 { self.shepard(); }
+        lap(self, 2);
+
+        // 2. Constitutive update.
+        self.constitutive();
+        lap(self, 3);
+        {
+            let n = self.n;
+            let q = Shared::new(&mut self.q);
+            let rho = &self.rho;
+            (0..n).into_par_iter().with_min_len(1024).for_each(|i| unsafe { *q.at(4 * i + 3) = rho[i]; });
+        }
+
+        // 3. Momentum, XSPH and heat conduction.
+        self.pass_momentum();
+        lap(self, 4);
+        self.conduct();
+        lap(self, 5);
+
+        // 4. Integrate, tool contact, supports.
+        self.integrate();
+        lap(self, 6);
+    }
+
+    // q = (v, ρ) of every particle, then pass 1: velocity gradient L, correction matrix M and dρ/dt
+    // into lm (19 per particle).
+    pub(crate) fn pass_lm(&mut self) {
         let n = self.n;
         let sc = self.sc;
         let m = sc.m;
@@ -448,20 +477,14 @@ impl Sim {
                 for c in 0..19 { *lm.at(19 * p + c) = o[c]; }
             });
         }
-        lap(self, 1);
-        if self.steps % 20 == 0 { self.shepard(); }
-        lap(self, 2);
+    }
 
-        // 2. Constitutive update.
-        self.constitutive();
-        lap(self, 3);
-        {
-            let q = Shared::new(&mut self.q);
-            let rho = &self.rho;
-            (0..n).into_par_iter().with_min_len(1024).for_each(|i| unsafe { *q.at(4 * i + 3) = rho[i]; });
-        }
-
-        // 3. Momentum, XSPH and heat conduction.
+    // Pass 3: stress divergence with artificial viscosity and the tensile correction, and XSPH, into
+    // ac (6 per particle); keeps the conduction factor of every entry in ef.
+    pub(crate) fn pass_momentum(&mut self) {
+        let n = self.n;
+        let sc = self.sc;
+        let m = sc.m;
         {
             let xs = 0.5 * m;
             let (hk, cs) = (sc.hk, sc.cs);
@@ -507,13 +530,6 @@ impl Sim {
                 for c in 0..6 { *acc.at(6 * p + c) = a[c]; }
             });
         }
-        lap(self, 4);
-        self.conduct();
-        lap(self, 5);
-
-        // 4. Integrate, tool contact, supports.
-        self.integrate();
-        lap(self, 6);
     }
 
     fn shepard(&mut self) {

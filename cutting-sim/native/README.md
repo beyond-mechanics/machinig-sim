@@ -10,6 +10,7 @@ native/
     src/tool2d.rs    刃先断面（tool.js のくさび・多角形）
     src/toolheat.rs  工具の温度格子（toolheat.js の接触熱と伝導。定常温度と摩耗は JS 側）
     src/meshsdf.rs   工具メッシュの符号付き距離場（src/mesh.js の MeshSDF）
+    src/gpu.rs, gpu.wgsl  GPU 試作（wgpu、f32）。対の 2 工程をシェーダーで計算して CPU と比べる（sphgpu）
     src/engine.rs    画面とのやりとり（状態の受け取り、時間で区切った計算、バイナリのフレーム）
     src/bin/sphcli.rs    コマンドライン実行（状態ファイル → 力の履歴と要約）
     src/bin/sphserve.rs  ローカルサーバー（ページと計算を 127.0.0.1 で配る、試験用）
@@ -61,6 +62,17 @@ native/
 表示の更新は 1 秒に約 4 回にしています（毎回の書き戻しと描画が計算の CPU を食うため）。
 さらに速くするには GPU 計算（wgpu、Windows では DirectX 12）に移します（今後）。
 
+## GPU 試作
+
+1 ステップの時間の約 7 割を占める対の 2 工程（速度勾配と補正行列、運動量）を GPU のコンピュートシェーダー
+（wgpu、Windows では DirectX 12）に移した試作です。まだアプリでは使っていません。GPU の計算は f32 なので
+JS とはビット一致せず、CPU（f64）との差は相対 1e-6 程度です（ドリル例・3D エンドミル例で確認）。
+
+GitHub Actions の成果物 `CuttingSim-gpu-bench` を展開して `gpu-bench.bat` を実行すると、その PC の GPU で
+同じ状態から CPU と GPU の時間・差を測り、`gpu-bench-result.txt` に書きます。`gpuMs` が `cpuMs` より十分小さければ、
+ステップ全体を GPU に載せる価値があります。この開発環境には GPU がなく、CPU で GPU をまねる llvmpipe では
+GPU 側が CPU の半分の速さでした（正しさの確認だけの数字です）。
+
 ## 作り方
 
 ```
@@ -88,6 +100,6 @@ cargo build --release --manifest-path native/sph-core/Cargo.toml --features serv
 
 ## 次の段階
 
-1. GPU 計算（wgpu の compute shader）で粒子数を 10 倍級に。各粒子が対を集める今の形はそのまま GPU に載ります。
+1. GPU 計算で粒子数を 10 倍級に。対の 2 工程は試作済み（上）。会社 PC で速さを測ってから、残り（構成則、熱伝導、積分と工具接触、近傍探索）を移します。
 2. 高解像度向けの表示（フレームを f32 に、表示する粒子を間引く）、結果の VTK 書き出し（ParaView）、条件スイープの一括実行。
 3. 2D（直交切削・エンドミル断面）の移植。今でも 1 分以内に終わるので後回しにしています。

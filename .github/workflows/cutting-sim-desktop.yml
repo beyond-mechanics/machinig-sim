@@ -1,6 +1,7 @@
 # Cutting simulator, native core and desktop app (cutting-sim/native).
 # - core: the Rust core must step like the JS solver (a few steps from the same state agree to rounding).
-# - windows: the Tauri app for Windows, as a portable exe and a per-user installer (artifacts).
+# - windows: the Tauri app for Windows, as a portable exe and a per-user installer, and the GPU
+#   prototype benchmark with two example states (artifacts).
 name: cutting-sim desktop
 
 on:
@@ -24,6 +25,8 @@ jobs:
         with: { workspaces: cutting-sim/native/sph-core }
       - run: npm ci
       - run: cargo build --release --manifest-path native/sph-core/Cargo.toml
+      - name: GPU prototype builds
+        run: cargo build --release --manifest-path native/sph-core/Cargo.toml --features gpu --bin sphgpu
       - name: Native core against the JS solver (drill example, 2 steps)
         run: node native/scripts/compare.mjs drill 2 native/sph-core/target/release/sphcli 2
 
@@ -35,7 +38,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: cutting-sim/native/app/src-tauri }
+        with: { workspaces: "cutting-sim/native/app/src-tauri\ncutting-sim/native/sph-core" }
       - run: npm ci
       - run: npm run build
       - run: node native/scripts/page.mjs
@@ -48,4 +51,17 @@ jobs:
           path: |
             cutting-sim/native/app/src-tauri/target/release/cutting-sim-app.exe
             cutting-sim/native/app/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+      - name: GPU benchmark kit
+        shell: bash
+        run: |
+          cargo build --release --manifest-path native/sph-core/Cargo.toml --features gpu --bin sphgpu
+          mkdir -p gpu-bench
+          cp native/sph-core/target/release/sphgpu.exe native/scripts/gpu-bench.bat gpu-bench/
+          node native/scripts/dump.mjs drill gpu-bench/drill.json
+          node native/scripts/dump.mjs helix gpu-bench/helix.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CuttingSim-gpu-bench
+          path: cutting-sim/gpu-bench
           if-no-files-found: error
