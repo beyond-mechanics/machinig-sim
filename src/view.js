@@ -19,6 +19,8 @@ export class View {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = T.PCFSoftShadowMap;
     this.scene.environment = buildEnvironment(this.renderer);
+    // the inside of a machine enclosure behind everything (screen-space gradient)
+    this.scene.background = backdropTexture();
     this.scene.add(new T.HemisphereLight(lin(0xdfe8f2), lin(0x3a3f47), 0.5));
     // key light casts shadows (tool on the stock, walls into pockets); its frustum follows the stock
     const sun = new T.DirectionalLight(0xffffff, 0.8); sun.position.set(-80, -120, 200);
@@ -65,32 +67,31 @@ export class View {
     g.setAttribute('rough', new T.BufferAttribute(new Float32Array(n), 1).setUsage(T.DynamicDrawUsage));
     g.setIndex(new T.BufferAttribute(idx, 1).setUsage(T.DynamicDrawUsage));
     this.topGeo = g;
-    this.top = new T.Mesh(g, stockMaterial());
+    this.top = new T.Mesh(g, stockMaterial(this.wet || (this.wet = { value: 0 })));
     this.top.castShadow = this.top.receiveShadow = true;
     // side walls follow the edge heights
     const per = 2 * (nx + ny);
     const wg = new T.BufferGeometry();
     wg.setAttribute('position', new T.BufferAttribute(new Float32Array(per * 2 * 3), 3).setUsage(T.DynamicDrawUsage));
     const wi = [];
-    for (let s = 0; s < per - 1; s++) { const a = s * 2, b = a + 1, c = a + 2, d = a + 3; wi.push(a, c, b, b, c, d); }
+    // the perimeter runs counter-clockwise seen from above: (a, b, c) faces outwards (the shadow's
+    // normal bias needs the normals out of the stock)
+    for (let s = 0; s < per - 1; s++) { const a = s * 2, b = a + 1, c = a + 2, d = a + 3; wi.push(a, b, c, b, d, c); }
     wg.setIndex(wi);
     this.wallGeo = wg;
     const base = new T.Color(...(mat.surf || mat.chip)).multiplyScalar(0.8).convertSRGBToLinear();
-    this.walls = new T.Mesh(wg, new T.MeshStandardMaterial({ color: base, metalness: 0.45, roughness: 0.62, side: T.DoubleSide }));
+    this.walls = new T.Mesh(wg, sideMaterial(base));
     this.walls.castShadow = this.walls.receiveShadow = true;
-    // machine table under the stock
-    const table = new T.Mesh(new T.PlaneGeometry(stock.w + 160, stock.l + 160), new T.MeshStandardMaterial({ color: lin(0x5a636e), metalness: 0.4, roughness: 0.7 }));
-    table.position.set(stock.w / 2, stock.l / 2, stock.zBottom - 0.05);
-    table.receiveShadow = true;
+    // machine table under the stock: cast iron with T-slots along X (18 mm slots at 63 mm pitch,
+    // as on a vertical machining centre); ground lands, dark slot floors
+    const table = machineTable(stock);
     // fit the shadow frustum to the stock plus the tool above it
     const sc = this.sun.shadow.camera, half = Math.hypot(stock.w, stock.l) / 2 + 40;
     sc.left = sc.bottom = -half; sc.right = sc.top = half; sc.near = 1; sc.far = 800; sc.updateProjectionMatrix();
     this.sun.target.position.set(stock.w / 2, stock.l / 2, stock.zBottom / 2);
     this.sun.position.set(stock.w / 2 - 120, stock.l / 2 - 180, 300);
-    const grid = new T.GridHelper(Math.max(stock.w, stock.l) + 160, 24, lin(0x7c8794), lin(0x6a737e));
-    grid.rotation.x = Math.PI / 2; grid.position.set(stock.w / 2, stock.l / 2, stock.zBottom);
     this.stockGroup = new T.Group();
-    this.stockGroup.add(this.top, this.walls, table, grid);
+    this.stockGroup.add(this.top, this.walls, table);
     this.scene.add(this.stockGroup);
     this.updateStock(true);
     this.orbit.target.set(stock.w / 2, stock.l / 2, stock.zBottom / 2);
@@ -109,7 +110,21 @@ export class View {
     const mk = this.topGeo.attributes.mark, rg = this.topGeo.attributes.rough, M = mk.array, RG = rg.array;
     const base = this.mat.surf || this.mat.chip, depth = s.zTop - s.zBottom;
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const k = j * nx + i, z = H[k];
+      const k = j * nx + i;
+      let z = H[k];
+      // A needle one or two cells across: left where the cutter edge passed through the cell
+      // centres (the tie on the edge keeps them on every pass), or as a cusp between two cutter
+      // positions on a tight arc. A cutter much wider than a cell sweeps it away, so it is drawn
+      // at its neighbours' height (the stock data keep it).
+      if (i > 0 && j > 0 && i < nx - 1 && j < ny - 1 && this.needleR > 2 * s.hx) {
+        let low = 0, top = -Infinity;
+        const high = [];
+        for (const [di, dj] of NB8) { const q = k + dj * nx + di; if (H[q] < z - 0.3) { low++; if (H[q] > top) top = H[q]; } else high.push(di, dj); }
+        // a single column: 7 of 8 neighbours below; a pair: 6, on the cutter edge, with the two
+        // standing neighbours next to each other (on opposite sides it is a wall one cell thick)
+        const pair = low === 6 && Math.abs(high[0] - high[2]) <= 1 && Math.abs(high[1] - high[3]) <= 1;
+        if (low >= 7 || (pair && s.wallD?.[k] < 0.5 * s.hx)) z = top;
+      }
       P[k * 3 + 2] = z;
       // a wall foot sits where the cutter edge actually passed, not on the grid point
       if (!this.bentSet?.has(k)) { const f = wallFoot(s, i, j); P[k * 3] = f[0]; P[k * 3 + 1] = f[1]; }
@@ -120,7 +135,8 @@ export class View {
       const L = Math.hypot(gx, gy, 1);
       N[k * 3] = gx / L; N[k * 3 + 1] = gy / L; N[k * 3 + 2] = 1 / L;
       let r, g, b;
-      const cut = z < s.zTop - 0.005;
+      // a standing cell on a machined wall (the cutter edge passed beside it) is a cut face too
+      const cut = z < s.zTop - 0.005 || (L > 2.2 && s.wallD[k] < 1);
       if (this.colorMode === 'vibration' && cut) [r, g, b] = ramp(Math.min(1, s.err[k] / 40));
       else if (this.colorMode === 'wall') [r, g, b] = s.wallErr[k] > 0.5 ? ramp(Math.min(1, s.wallErr[k] / 50)) : [base[0] * 0.6, base[1] * 0.6, base[2] * 0.62];
       else if (this.colorMode === 'depth') [r, g, b] = ramp(Math.min(1, (s.zTop - z) / depth));
@@ -135,6 +151,48 @@ export class View {
       const vib = Math.min(1, s.err[k] / 30);
       RG[k] = cut ? 0.26 + 0.42 * vib : 0.62;
       M[k * 2] = s.markS[k]; M[k * 2 + 1] = this.colorMode === 'material' && cut ? s.markF[k] : 0;
+    }
+    // Steep faces: the cells straddling a wall that runs along grid nodes are cut on one layer
+    // and left on the next (the edge passes within a hair of their centres), so the heights
+    // along the wall are noise and the gradient above swings sideways: vertical streaks. The wall
+    // vertices themselves were moved onto the cut surface (wallFoot), so their positions lie on
+    // it whatever the heights do: the face direction comes from the principal axis of the wall
+    // vertices around (kept from the gradient at an inside corner, where there is no one axis).
+    for (let j = Math.max(2, j0); j <= Math.min(ny - 3, j1); j++) for (let i = Math.max(2, i0); i <= Math.min(nx - 3, i1); i++) {
+      const k = j * nx + i;
+      if (N[k * 3 + 2] > 0.75) continue;
+      let n = 0, mx = 0, my = 0, sxx = 0, syy = 0, sxy = 0, nz = 0, cr = 0, cg = 0, cb = 0, ro = 0;
+      for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+        const q = k + dj * nx + di;
+        if (N[q * 3 + 2] > 0.75) continue;
+        const x = P[q * 3] - P[k * 3], y = P[q * 3 + 1] - P[k * 3 + 1];
+        n++; mx += x; my += y; sxx += x * x; syy += y * y; sxy += x * y; nz += N[q * 3 + 2];
+        cr += C[q * 3]; cg += C[q * 3 + 1]; cb += C[q * 3 + 2]; ro += RG[q];
+      }
+      // colour, occlusion and roughness follow the height noise as well: even them out on the face
+      C[k * 3] = cr / n; C[k * 3 + 1] = cg / n; C[k * 3 + 2] = cb / n; RG[k] = ro / n;
+      if (n < 4) continue;
+      mx /= n; my /= n; sxx = sxx / n - mx * mx; syy = syy / n - my * my; sxy = sxy / n - mx * my;
+      const tr = sxx + syy, det = sxx * syy - sxy * sxy, disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+      const l1 = tr / 2 + disc, l2 = tr / 2 - disc;
+      if (!(l1 > 9 * Math.max(l2, 1e-12))) continue;
+      // tangent along the major axis; normal across it, on the side the gradient points to
+      let tx = sxy, ty = l1 - sxx;
+      if (Math.abs(tx) + Math.abs(ty) < 1e-12) { tx = 1; ty = 0; }
+      let ex = -ty, ey = tx;
+      const el = Math.hypot(ex, ey);
+      ex /= el; ey /= el;
+      if (ex * N[k * 3] + ey * N[k * 3 + 1] < 0) { ex = -ex; ey = -ey; }
+      // the tilt too: averaged over the face (it follows the same height noise)
+      nz /= n;
+      const h = Math.sqrt(1 - nz * nz);
+      N[k * 3] = ex * h; N[k * 3 + 1] = ey * h; N[k * 3 + 2] = nz;
+      // and the vertex moves only across the face: wallFoot also pulls it along the wall
+      // towards a neighbour that happens to be cut lower on this row
+      if (!this.bentSet?.has(k)) {
+        const ox = i * s.hx, oy = j * s.hy, d = (P[k * 3] - ox) * ex + (P[k * 3 + 1] - oy) * ey;
+        P[k * 3] = ox + ex * d; P[k * 3 + 1] = oy + ey * d;
+      }
     }
     // Split each grid square along the diagonal that joins the two corners closest in height:
     // a curved or diagonal wall then keeps its rim vertices joined to each other (and its feet
@@ -219,12 +277,22 @@ export class View {
     // ground carbide: polished land and rake face, duller flute gullet (vertex shade)
     this.fluteMat = new T.MeshStandardMaterial({ color: lin(0xc4cad2), vertexColors: true, metalness: 0.9, roughness: 0.24, transparent: true });
     this.shankMat = new T.MeshStandardMaterial({ color: lin(0xaeb5bd), metalness: 0.85, roughness: 0.35 });
-    this.holderMat = new T.MeshStandardMaterial({ color: lin(0x2f3338), metalness: 0.7, roughness: 0.35 });
+    this.holderMat = new T.MeshStandardMaterial({ color: lin(0x2f3338), metalness: 0.8, roughness: 0.3 });  // black-oxide steel
+    this.nutMat = new T.MeshStandardMaterial({ color: lin(0xb9bfc7), metalness: 0.92, roughness: 0.18 });   // polished nut
   }
 
+  // coating of the fluted part (the look only): uncoated carbide, AlTiN, TiAlN, TiN, DLC
+  setCoating(name) {
+    const c = COATINGS[name] || COATINGS.none, m = this.fluteMat;
+    m.color.copy(lin(c.color)); m.metalness = c.metal; m.roughness = c.rough; m.needsUpdate = true;
+    this.coating = name;
+  }
   setTool(t) {
     const T = THREE;
     this.toolCfg = t;
+    // smallest cutter radius used so far: needles much narrower than it are drawn away
+    this.needleR = Math.min(this.needleR ?? Infinity, t.R ?? t.D / 2);
+    this.setCoating(t.coating || this.coating || 'none');
     for (const c of [...this.spin.children]) { this.spin.remove(c); c.geometry.dispose(); }
     if (this.blurGroup) { this.pivot.remove(this.blurGroup); this.blurGroup.traverse(o => o.geometry && o.geometry.dispose()); }
     const R = t.D / 2, N = t.N, fl = t.fluteLen;
@@ -252,14 +320,12 @@ export class View {
       for (const b of bands) if (b.part === 'holder') { pts.push(new T.Vector2(b.r0 ?? b.r, b.z0), new T.Vector2(b.r1 ?? b.r, b.z1)); }
       pts.unshift(new T.Vector2(Math.max(0.1, (t.shankD || t.D) / 2), pts[0].y));
       pts.push(new T.Vector2(0.1, pts[pts.length - 1].y));
-      const lg = new T.LatheGeometry(pts, 64); lg.rotateX(Math.PI / 2);
+      const lg = new T.LatheGeometry(pts, 96); lg.rotateX(Math.PI / 2);
       this.spin.add(new T.Mesh(lg, this.holderMat));
     } else {
-      // no holder chosen: the original stylised collet nut + holder body above the stickout
-      const hg1 = new T.CylinderGeometry(R * 1.9, R * 2.3, 14, 40); hg1.rotateX(Math.PI / 2); hg1.translate(0, 0, t.stickout + 7);
-      const hg2 = new T.CylinderGeometry(R * 3.4, R * 2.4, 22, 40); hg2.rotateX(Math.PI / 2); hg2.translate(0, 0, t.stickout + 25);
-      const hg3 = new T.CylinderGeometry(R * 4.4, R * 4.4, 30, 40); hg3.rotateX(Math.PI / 2); hg3.translate(0, 0, t.stickout + 51);
-      this.spin.add(new T.Mesh(hg1, this.holderMat), new T.Mesh(hg2, this.holderMat), new T.Mesh(hg3, this.holderMat));
+      // no holder chosen (the tool alone is checked for interference): drawn as an ER collet
+      // chuck on a BT40 flange so the picture reads as a machine, not as interference geometry
+      this.addDefaultHolder(t, R);
     }
     this.spin.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // tool hangs from the pivot: children are offset by -stickout
@@ -278,6 +344,20 @@ export class View {
     this.blurGroup.visible = false;
     this.pivot.add(this.blurGroup);
     this.flute = flute;
+  }
+
+  // ER-style collet chuck: polished nut with chamfers and a spanner groove, dark body tapering
+  // up to a BT40 flange (Ø63, with its 60° V-groove)
+  addDefaultHolder(t, R) {
+    const T = THREE, z = t.stickout, rIn = Math.max(R, (t.shankD || t.D) / 2) + 0.4;
+    const nr = Math.max(R * 2.6, 15), nh = Math.max(16, nr * 1.1);
+    const lathe = (pts, mat) => { const g = new T.LatheGeometry(pts.map(([r, h]) => new T.Vector2(r, z + h)), 96); g.rotateX(Math.PI / 2); const m = new T.Mesh(g, mat); this.spin.add(m); return m; };
+    // collet visible below the nut
+    lathe([[rIn, -0.01], [rIn + 1.6, 0.6], [rIn + 2.4, 3], [rIn + 2.4, 3.2], [0.1, 3.2]], this.shankMat);
+    lathe([[rIn + 2.4, 2.5], [nr - 1.4, 2.5], [nr, 3.9], [nr, nh * 0.42], [nr - 0.9, nh * 0.47], [nr - 0.9, nh * 0.56], [nr, nh * 0.61], [nr, nh - 1.2], [nr - 1.2, nh], [0.1, nh]], this.nutMat);
+    const b0 = nh, b1 = nh + 34, fr = 31.5, fh = 15.9;
+    lathe([[nr * 0.92, b0], [Math.min(fr - 6, nr * 1.25), b1 - 4], [fr - 4, b1], [fr, b1 + 1.2], [fr, b1 + fh * 0.3], [fr - 3.2, b1 + fh * 0.5], [fr, b1 + fh * 0.7], [fr, b1 + fh - 1], [fr - 1, b1 + fh], [0.1, b1 + fh]], this.holderMat);
+    // (the spindle nose above is not drawn: at its real Ø150 it hides the cut from above)
   }
 
   // red markers where the shank, holder or spindle touched the stock
@@ -303,7 +383,7 @@ export class View {
     // interference: the colliding part glows red for a moment
     if (collide) this.hitGlow = 1;
     this.hitGlow = Math.max(0, (this.hitGlow || 0) - 0.04);
-    this.holderMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0);
+    this.holderMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0); this.nutMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0);
     this.shankMat.emissive.setRGB(0.5 * this.hitGlow, 0, 0);
     this.pivot.position.set(pos.x, pos.y, pos.z + L);
     const sx = Math.max(-0.9, Math.min(0.9, dy / L)), sy = Math.max(-0.9, Math.min(0.9, dx / L));
@@ -351,6 +431,13 @@ export class View {
     this.chipVariants = [];
     this.chipCap = Math.ceil(MAX_CHIPS / 3);
     this.chipMat = new T.MeshStandardMaterial({ metalness: 0.8, roughness: 0.32, side: T.DoubleSide });
+    // the two faces of a chip differ: the side that slid over the rake face is burnished (bright,
+    // smooth), the free side is the lamellar shear-band surface (matte, a little darker)
+    this.chipMat.onBeforeCompile = sh => {
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <color_fragment>', '#include <color_fragment>\n  if (gl_FrontFacing) diffuseColor.rgb *= 0.78;')
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = gl_FrontFacing ? 0.62 : 0.2;');
+    };
     for (let v = 0; v < 3; v++) {
       const mesh = new T.InstancedMesh(new T.BufferGeometry(), this.chipMat, this.chipCap);
       mesh.castShadow = true;
@@ -360,6 +447,7 @@ export class View {
       this.scene.add(mesh); this.chipVariants.push(mesh);
     }
     this.chipStyle = '';
+    this.chipTemper = new Float32Array(MAX_CHIPS); // hottest glow each chip had (0…1)
     this._m = new T.Matrix4(); this._q = new T.Quaternion(); this._e = new T.Euler(); this._s = new T.Vector3(); this._p = new T.Vector3(); this._c = new T.Color();
     this._zero = new T.Matrix4().makeScale(0, 0, 0);
   }
@@ -383,7 +471,7 @@ export class View {
     for (let i = 0; i < MAX_CHIPS; i++) {
       const mesh = vs[i % 3], slot = (i / 3) | 0;
       if (slot >= cap) continue;
-      if (!cs.state[i]) { mesh.setMatrixAt(slot, this._zero); continue; }
+      if (!cs.state[i]) { mesh.setMatrixAt(slot, this._zero); this.chipTemper[i] = 0; continue; }
       const o = i * 3;
       this._p.set(cs.p[o], cs.p[o + 1], cs.p[o + 2]);
       this._e.set(cs.rot[o], cs.rot[o + 1], cs.rot[o] * 0.7);
@@ -393,10 +481,17 @@ export class View {
       this._m.compose(this._p, this._q, this._s);
       mesh.setMatrixAt(slot, this._m);
       // hot steel chips show temper colours (straw → blue), aluminium stays silver
-      const h = cs.heat[i];
-      if (mat.hot && h > 0.05) this._c.setRGB(base[0] + h * 0.5, base[1] + h * 0.25, base[2] - h * 0.1);
+      // steels and titanium keep the temper colour of the hottest moment of the chip (the oxide
+      // film), aluminium stays bright
+      const tp = this.chipTemper;
+      if (cs.heat[i] > tp[i]) tp[i] = cs.heat[i];
+      const T = 250 + 600 * tp[i];
+      if (mat.hot && T > 200) { const c = temperColour(T); this._c.setRGB(c[0], c[1], c[2]); }
       else this._c.setRGB(base[0], base[1], base[2]);
       this._c.convertSRGBToLinear();
+      // no two chips catch the light alike (thickness, oxide, oil), and a chip lying in coolant is
+      // wet and darker
+      this._c.multiplyScalar(CHIP_SHADE[i & 255] * (cs.state[i] >= 2 ? 1 - 0.22 * (this.wet?.value || 0) : 1));
       mesh.setColorAt(slot, this._c);
     }
     for (const m of vs) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
@@ -424,6 +519,8 @@ export class View {
     const S = this.spray, P = S.p, V = S.v, L = S.life, c = COOLANTS[coolant], liquid = !!c?.liquid;
     const through = c?.jet === 'tool';
     const on = active && !!c && (through || this.nozzle.visible);
+    // the stock gets wet within a couple of seconds of flood coolant and dries slowly after
+    if (this.wet) this.wet.value = clamp(this.wet.value + (on && liquid ? dt / 2 : -dt / 40), 0, 1);
     this.sprayPts.visible = on || L.some(l => l > 0);
     if (!this.sprayPts.visible) return;
     const m = this.sprayPts.material;
@@ -487,6 +584,20 @@ export class View {
     this.sparkLines = new T.LineSegments(g, new T.LineBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, toneMapped: false }));
     this.sparkLines.frustumCulled = false;
     this.scene.add(this.sparkLines);
+    // glow: a soft halo at each spark head and one over the cutting zone while the chip is hot
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const x = c.getContext('2d'), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.25, 'rgba(255,255,255,0.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+    const halo = new T.CanvasTexture(c);
+    const hg = new T.BufferGeometry();
+    hg.setAttribute('position', new T.BufferAttribute(new Float32Array(n * 3), 3).setUsage(T.DynamicDrawUsage));
+    hg.setAttribute('color', new T.BufferAttribute(new Float32Array(n * 3), 3).setUsage(T.DynamicDrawUsage));
+    this.sparkHalo = new T.Points(hg, new T.PointsMaterial({ size: 1.6, map: halo, vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    this.sparkHalo.frustumCulled = false;
+    this.zoneGlow = new T.Sprite(new T.SpriteMaterial({ map: halo, color: 0xffffff, transparent: true, blending: T.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    this.zoneGlow.visible = false;
+    this.scene.add(this.sparkHalo, this.zoneGlow);
     this.sparkT = performance.now();
   }
   // c: {active, pos, R, ap, ux, uy, phiSt, phiEx, tempChip [°C], mrr [cm³/min], burns, quench}
@@ -514,23 +625,41 @@ export class View {
       TT[i] = Teff * (0.9 + Math.random() * 0.2);
       L[i] = 0.15 + Math.random() * 0.35;
     }
+    // the cutting zone glows where the chip leaves it, as bright as the chip is hot
+    const zg = clamp((Teff - 480) / 600, 0, 1);
+    this.zoneGlow.visible = c.active && zg > 0;
+    if (this.zoneGlow.visible) {
+      const ph = (c.phiSt + c.phiEx) / 2, sn = Math.sin(ph), cs = Math.cos(ph);
+      const nx = sn * c.ux + cs * vx, ny = sn * c.uy + cs * vy;
+      this.zoneGlow.position.set(c.pos.x + nx * c.R, c.pos.y + ny * c.R, c.pos.z + Math.max(0.2, c.ap) + 0.3);
+      const sz = c.R * (0.8 + 1.4 * zg) * (c.quench ? 0.5 : 1);
+      this.zoneGlow.scale.set(sz, sz, 1);
+      const [r, g, b] = glow(Teff * (c.quench ? 0.85 : 1));
+      this.zoneGlow.material.color.setRGB(r * 0.6, g * 0.6, b * 0.6);
+    }
+    const hp = this.sparkHalo.geometry.attributes.position.array, hc = this.sparkHalo.geometry.attributes.color.array;
     const pos = this.sparkLines.geometry.attributes.position.array, col = this.sparkLines.geometry.attributes.color.array;
     let any = false;
     for (let i = 0; i < S.n; i++) {
       const o = i * 3, q = i * 6;
-      if (L[i] <= 0) { pos[q + 2] = pos[q + 5] = -1e5; continue; }
+      if (L[i] <= 0) { pos[q + 2] = pos[q + 5] = -1e5; hp[o + 2] = -1e5; continue; }
       any = true;
       L[i] -= dt; TT[i] -= 900 * dt; // radiates and cools in flight
       V[o] *= 1 - 1.5 * dt; V[o + 1] *= 1 - 1.5 * dt; V[o + 2] = V[o + 2] * (1 - 1.5 * dt) - 9810 * dt;
       P[o] += V[o] * dt; P[o + 1] += V[o + 1] * dt; P[o + 2] += V[o + 2] * dt;
-      if (this.stock && P[o + 2] < this.stock.floor(P[o], P[o + 1])) { L[i] = 0; continue; }
+      if (this.stock && P[o + 2] < this.stock.floor(P[o], P[o + 1])) { L[i] = 0; hp[o + 2] = -1e5; continue; }
       // head and a tail one exposure behind it: the streak a camera would see
       const k = 0.01;
       pos[q] = P[o]; pos[q + 1] = P[o + 1]; pos[q + 2] = P[o + 2];
       pos[q + 3] = P[o] - V[o] * k; pos[q + 4] = P[o + 1] - V[o + 1] * k; pos[q + 5] = P[o + 2] - V[o + 2] * k;
       const [r, g, b] = glow(TT[i]);
       col[q] = r; col[q + 1] = g; col[q + 2] = b; col[q + 3] = r * 0.25; col[q + 4] = g * 0.2; col[q + 5] = b * 0.15;
+      hp[o] = P[o]; hp[o + 1] = P[o + 1]; hp[o + 2] = P[o + 2];
+      hc[o] = r * 0.35; hc[o + 1] = g * 0.3; hc[o + 2] = b * 0.25;
     }
+    this.sparkHalo.visible = any;
+    this.sparkHalo.geometry.attributes.position.needsUpdate = true;
+    this.sparkHalo.geometry.attributes.color.needsUpdate = true;
     this.sparkLines.visible = any;
     this.sparkLines.geometry.attributes.position.needsUpdate = true;
     this.sparkLines.geometry.attributes.color.needsUpdate = true;
@@ -541,7 +670,23 @@ export class View {
   // cells sink below the stock surface, so the water edge is a shoreline cut by the depth test.
   buildPool() {
     const T = THREE;
-    this.poolMat = new T.MeshStandardMaterial({ color: lin(0x5aa2dc), transparent: true, opacity: 0.2, roughness: 0.12, metalness: 0.0, depthWrite: false });
+    // water: tinted, transparent, fading out towards the shoreline by depth (no spiky edge),
+    // with a reflection of the sky at grazing angles
+    this.poolMat = new T.ShaderMaterial({
+      transparent: true, depthWrite: false,
+      uniforms: { uCol: { value: lin(0x5aa2dc) } },
+      vertexShader: `attribute float depth; varying float vD; varying vec3 vN; varying vec3 vV;
+        void main() { vD = depth; vN = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position, 1.0); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `uniform vec3 uCol; varying float vD; varying vec3 vN; varying vec3 vV;
+        void main() {
+          float a = smoothstep(0.1, 0.7, vD) * 0.32;
+          float fres = pow(1.0 - max(dot(normalize(vN), normalize(vV)), 0.0), 3.0);
+          vec3 c = mix(uCol * 0.55, vec3(0.75, 0.82, 0.9), fres * 0.6);
+          gl_FragColor = vec4(c, a + 0.25 * fres * step(0.1, vD));
+          #include <tonemapping_fragment>
+          #include <encodings_fragment>
+        }`,
+    });
     this.poolMesh = null; this.poolKey = '';
   }
   updatePool(pool) {
@@ -554,22 +699,52 @@ export class View {
       for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const k = (j * nx + i) * 3; pos[k] = (i + 0.5) * cx; pos[k + 1] = (j + 0.5) * cy; }
       for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) { const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1; idx.push(a, b, d, a, d, c); }
       g.setAttribute('position', new T.BufferAttribute(pos, 3).setUsage(T.DynamicDrawUsage));
+      g.setAttribute('depth', new T.BufferAttribute(new Float32Array(nx * ny), 1).setUsage(T.DynamicDrawUsage));
       g.setIndex(idx);
       this.poolMesh = new T.Mesh(g, this.poolMat);
       this.poolMesh.renderOrder = 2;
       this.scene.add(this.poolMesh);
       this.poolKey = key;
     }
-    const P = this.poolMesh.geometry.attributes.position.array;
+    const P = this.poolMesh.geometry.attributes.position.array, D = this.poolMesh.geometry.attributes.depth.array;
     let wet = false;
     for (let k = 0; k < nx * ny; k++) {
+      // the surface follows the bed where it is dry, so a shoreline is a fade, not a cliff
       const d = depth[k];
-      if (d > 0.15) { P[k * 3 + 2] = bed[k] + d; wet = true; } else P[k * 3 + 2] = bed[k] - 3;
+      D[k] = d; P[k * 3 + 2] = bed[k] + Math.max(d, 0.02);
+      if (d > 0.15) wet = true;
     }
     this.poolMesh.visible = wet;
     if (!wet) return;
     this.poolMesh.geometry.attributes.position.needsUpdate = true;
+    this.poolMesh.geometry.attributes.depth.needsUpdate = true;
     this.poolMesh.geometry.computeVertexNormals();
+  }
+
+  // ---------- work coordinate systems ----------
+  // a small axis triad (X red, Y green, Z blue) and the name at each work zero
+  setWcs(list) {
+    const T = THREE;
+    if (this.wcsGroup) { this.scene.remove(this.wcsGroup); this.wcsGroup.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); }
+    this.wcsGroup = new T.Group();
+    const L = 12;
+    for (const w of list) {
+      const g = new T.Group(); g.position.set(w.x, w.y, w.z);
+      for (const [dir, col] of [[[1, 0, 0], 0xe5484d], [[0, 1, 0], 0x46a758], [[0, 0, 1], 0x3e7bd6]]) {
+        const a = new T.ArrowHelper(new T.Vector3(...dir), new T.Vector3(0, 0, 0), L, col, 2.6, 1.4);
+        a.line.material.depthTest = false; a.cone.material.depthTest = false; a.renderOrder = 6;
+        g.add(a);
+      }
+      // name tag (canvas sprite, fixed size on screen)
+      const c = document.createElement('canvas'); c.width = 128; c.height = 48;
+      const x = c.getContext('2d'); x.font = '600 26px ui-monospace, monospace'; x.fillStyle = 'rgba(20,24,28,0.75)';
+      const tw = x.measureText(w.name).width + 16; x.fillRect(0, 6, tw, 36); x.fillStyle = '#f2f4f6'; x.textBaseline = 'middle'; x.fillText(w.name, 8, 25);
+      const sp = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(c), depthTest: false, sizeAttenuation: false }));
+      sp.scale.set(0.11, 0.041, 1); sp.center.set(0, 0); sp.position.set(2, 2, L * 0.4); sp.renderOrder = 7;
+      g.add(sp);
+      this.wcsGroup.add(g);
+    }
+    this.scene.add(this.wcsGroup);
   }
 
   // ---------- tool path ----------
@@ -587,8 +762,43 @@ export class View {
     g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
     g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
     this.pathLine = new T.LineSegments(g, new T.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55 }));
+    g.attributes.color.setUsage(T.DynamicDrawUsage);
+    this.pathBase = Float32Array.from(col); this.pathDone = 0; this.pathPts = path; this.pathDim = 0.3;
     this.pathLine.visible = this.showPath;
     this.scene.add(this.pathLine);
+  }
+
+  // Colour the feed moves by their program line: colourOf(line) → [r, g, b] (sRGB) or null for
+  // the plain feed colour; rapids stay red. null restores the plain colours.
+  colorPath(colourOf) {
+    if (!this.pathLine || !this.pathPts) return;
+    const P = this.pathPts, B = this.pathBase, A = this.pathLine.geometry.attributes.color.array;
+    // a coloured path is read as a whole: the run part is not dimmed
+    this.pathDim = colourOf ? 1 : 0.3;
+    for (let i = 1; i < P.length; i++) {
+      const b = P[i], c = (b.rapid ? [0.85, 0.35, 0.3] : (colourOf && colourOf(b.line)) || [0.25, 0.6, 0.95]).map(toLin), q = (i - 1) * 6;
+      for (let v = 0; v < 2; v++) for (let k = 0; k < 3; k++) {
+        B[q + v * 3 + k] = c[k];
+        A[q + v * 3 + k] = i - 1 < this.pathDone ? c[k] * this.pathDim : c[k];
+      }
+    }
+    const C = this.pathLine.geometry.attributes.color;
+    C.updateRange.offset = 0; C.updateRange.count = -1; C.needsUpdate = true;
+    this.pathFullDirty = true; // until uploaded, a progress update must not narrow the range
+  }
+
+  // dim the part of the tool path already run (segments before seg), so the rest stands out
+  setPathProgress(seg) {
+    if (!this.pathLine || !this.pathBase) return;
+    const n = this.pathBase.length / 6, k = Math.max(0, Math.min(n, seg - 1));
+    if (k === this.pathDone) return;
+    const C = this.pathLine.geometry.attributes.color, A = C.array, B = this.pathBase;
+    const a = Math.min(k, this.pathDone), b = Math.max(k, this.pathDone);
+    const dim = this.pathDim ?? 0.3;
+    for (let i = a * 6; i < b * 6; i++) A[i] = i < k * 6 ? B[i] * dim : B[i];
+    if (!this.pathFullDirty) { C.updateRange.offset = a * 6; C.updateRange.count = (b - a) * 6; }
+    C.needsUpdate = true;
+    this.pathDone = k;
   }
 
   // ---------- camera ----------
@@ -596,8 +806,16 @@ export class View {
     const el = this.canvas;
     const pts = new Map();
     let last = null;
-    el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY, btn: e.button, shift: e.shiftKey }); last = null; });
-    el.addEventListener('pointerup', e => { pts.delete(e.pointerId); last = null; });
+    el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY, down: { x: e.clientX, y: e.clientY }, btn: e.button, shift: e.shiftKey }); last = null; });
+    el.addEventListener('pointerup', e => {
+      const p = pts.get(e.pointerId);
+      pts.delete(e.pointerId); last = null;
+      // a click (no drag) in pick mode: the point on the stock under the cursor
+      if (p && this.onPick && Math.hypot(e.clientX - p.down.x, e.clientY - p.down.y) < 5) {
+        const hit = this.pickStock(e.clientX, e.clientY);
+        if (hit) this.onPick(hit); else this.onMiss?.();
+      }
+    });
     el.addEventListener('pointercancel', e => { pts.delete(e.pointerId); last = null; });
     el.addEventListener('pointermove', e => {
       const p = pts.get(e.pointerId); if (!p) return;
@@ -614,6 +832,29 @@ export class View {
     });
     el.addEventListener('wheel', e => { e.preventDefault(); this.orbit.dist = clamp(this.orbit.dist * Math.exp(e.deltaY * 0.001), 20, 2000); }, { passive: false });
     el.addEventListener('contextmenu', e => e.preventDefault());
+  }
+  // Point on the stock under the screen position (stock frame), snapped to a corner, an edge
+  // midpoint or a face centre of the stock box when close: what a program zero is set on.
+  // Returns { x, y, z, snap } or null.
+  pickStock(cx, cy) {
+    const T = THREE, r = this.canvas.getBoundingClientRect();
+    const ndc = new T.Vector2((cx - r.left) / r.width * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+    const ray = new T.Raycaster(); ray.setFromCamera(ndc, this.camera);
+    this.topGeo.computeBoundingSphere(); this.wallGeo.computeBoundingSphere();
+    const hit = ray.intersectObjects([this.top, this.walls], false)[0];
+    if (!hit) return null;
+    const s = this.stock, p = hit.point, zt = s.zTop, zb = s.zBottom;
+    const xs = [0, s.w / 2, s.w], ys = [0, s.l / 2, s.l], zs = [zt, zb];
+    const NAMES = { x: ['左', '中央', '右'], y: ['手前', '中央', '奥'], z: ['上面', '下面'] };
+    let best = null;
+    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) for (let c = 0; c < 2; c++) {
+      // corners, edge midpoints and face centres of the box (not its centre)
+      const d = Math.hypot(p.x - xs[a], p.y - ys[b], p.z - zs[c]);
+      if (!best || d < best.d) best = { d, x: xs[a], y: ys[b], z: zs[c], snap: `${NAMES.z[c]}の${a === 1 && b === 1 ? '中心' : `${NAMES.x[a]}${NAMES.y[b]}`.replace('中央中央', '中心')}` };
+    }
+    const tol = 0.06 * Math.max(s.w, s.l);
+    if (best.d < tol) return { x: best.x, y: best.y, z: best.z, snap: best.snap };
+    return { x: p.x, y: p.y, z: p.z, snap: null };
   }
   pan(dx, dy) {
     const T = THREE, o = this.orbit;
@@ -641,10 +882,85 @@ export class View {
     this.camera.lookAt(o.target);
     if (this.pathLine) this.pathLine.visible = this.showPath;
     this.renderer.render(this.scene, this.camera);
+    this.pathFullDirty = false; // the whole path colour buffer went up with this frame
   }
 }
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// Outer faces of the stock: a sawn / face-milled plate, fine horizontal marks and mottling
+function sideMaterial(color) {
+  const T = THREE, m = new T.MeshStandardMaterial({ color, metalness: 0.5, roughness: 0.55, side: T.DoubleSide });
+  m.extensions = { derivatives: true };
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vWP;
+        float h1(float x) { return fract(sin(x * 91.17) * 43758.5); }
+        float n1(float x) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(h1(i), h1(i + 1.0), f); }`)
+      .replace('#include <roughnessmap_fragment>', `float roughnessFactor = roughness;
+        float ph = (vWP.z * 6.0 + 0.3 * n1((vWP.x + vWP.y) * 0.4)) * 3.0;
+        // fade by the frequency actually drawn: finer than a few pixels it aliases into moire
+        float fw = fwidth(ph), amp = smoothstep(0.5, 0.15, fw);
+        float mark = n1(ph) * amp;
+        diffuseColor.rgb *= 0.88 + 0.12 * mark + 0.05 * n1((vWP.x + vWP.y) * 0.07 + vWP.z * 0.2);
+        roughnessFactor += 0.12 * (mark - 0.5);`);
+  };
+  return m;
+}
+
+// screen-space backdrop: the darker upper enclosure fading to the lit floor area
+function backdropTexture() {
+  const T = THREE, c = document.createElement('canvas'); c.width = 4; c.height = 256;
+  const x = c.getContext('2d'), g = x.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, '#15181c'); g.addColorStop(0.55, '#2a2f35'); g.addColorStop(1, '#3a4047');
+  x.fillStyle = g; x.fillRect(0, 0, 4, 256);
+  const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding;
+  return t;
+}
+
+// cast-iron T-slot table: lands with slot floors 14 mm lower, slots along X
+function machineTable(stock) {
+  const T = THREE, W = stock.w + 200, Lt = stock.l + 200, pitch = 63, slot = 18, depth = 14;
+  const g = new T.Group(), z0 = stock.zBottom;
+  const land = new T.MeshStandardMaterial({ color: lin(0x6b7078), metalness: 0.7, roughness: 0.42 });
+  const iron = new T.MeshStandardMaterial({ color: lin(0x3c4046), metalness: 0.5, roughness: 0.7 });
+  const cx = stock.w / 2, y0 = stock.l / 2 - Lt / 2;
+  // slots centred under the stock
+  const slots = [];
+  for (let y = stock.l / 2 - Math.floor(Lt / 2 / pitch) * pitch; y < y0 + Lt; y += pitch) if (y - slot / 2 > y0 && y + slot / 2 < y0 + Lt) slots.push(y);
+  let yPrev = y0;
+  for (const y of [...slots, y0 + Lt + slot / 2]) {
+    const a = yPrev, b = Math.min(y0 + Lt, y - slot / 2);
+    if (b > a) { const m = new T.Mesh(new T.BoxGeometry(W, b - a, depth), land); m.position.set(cx, (a + b) / 2, z0 - depth / 2); m.receiveShadow = true; g.add(m); }
+    yPrev = y + slot / 2;
+  }
+  const body = new T.Mesh(new T.BoxGeometry(W, Lt, 40), iron); body.position.set(cx, stock.l / 2, z0 - depth - 20); body.receiveShadow = true;
+  g.add(body);
+  return g;
+}
+
+// coatings of the fluted part (sRGB colour, metalness, roughness)
+const COATINGS = {
+  none: { color: 0xc4cad2, metal: 0.9, rough: 0.24 },  // ground carbide
+  AlTiN: { color: 0x34313a, metal: 0.75, rough: 0.3 }, // near black with a violet cast
+  TiAlN: { color: 0x5e5470, metal: 0.8, rough: 0.28 }, // violet grey
+  TiN: { color: 0xd6b05a, metal: 0.9, rough: 0.22 },   // gold
+  DLC: { color: 0x3b3e43, metal: 0.85, rough: 0.16 },  // dark, very smooth
+};
+
+// Temper (oxide film) colour of steel heated to T [°C], sRGB: straw → bronze → purple → blue →
+// grey, then the dark oxide of a chip that glowed
+// per-chip brightness 0.82–1.08 (a fixed hash, so a chip keeps its shade)
+const CHIP_SHADE = Float32Array.from({ length: 256 }, (_, i) => 0.82 + 0.26 * (((i * 2654435761) >>> 0) % 1000) / 1000);
+
+function temperColour(T) {
+  const st = [[200, [0.62, 0.62, 0.63]], [230, [0.85, 0.76, 0.52]], [255, [0.72, 0.52, 0.30]], [280, [0.50, 0.33, 0.52]], [300, [0.24, 0.30, 0.58]], [330, [0.38, 0.52, 0.70]], [420, [0.50, 0.52, 0.55]], [650, [0.24, 0.24, 0.26]]];
+  if (T >= st[st.length - 1][0]) return st[st.length - 1][1];
+  for (let k = 1; k < st.length; k++) if (T <= st[k][0]) { const [t0, a] = st[k - 1], [t1, b] = st[k], f = (T - t0) / (t1 - t0); return a.map((v, i) => v + (b[i] - v) * f); }
+  return st[0][1];
+}
 
 // Colour of incandescent metal [°C] (rough blackbody, linear RGB scaled for additive streaks):
 // invisible below ~420 °C, red at 600, orange at 850, yellow-white above 1200.
@@ -662,6 +978,7 @@ function glow(T) {
 // then stands upright at its true place and follows the cutter's path smoothly.
 // all 8 neighbours: on a curved wall many feet touch the wall only across a corner
 const FOOT = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+const NB8 = FOOT;
 const _foot = [0, 0];
 function wallFoot(s, i, j) {
   const { nx, ny, H, hx, hy } = s, k = j * nx + i, z = H[k], x = i * hx, y = j * hy;
@@ -745,17 +1062,20 @@ function buildEnvironment(renderer) {
 // Stock top surface: per-vertex roughness (dull where chatter hit) and the feed marks the
 // trailing edge leaves on flat floors, drawn procedurally at their true spacing and faded
 // out where they are finer than a pixel (zoom in to see them).
-function stockMaterial() {
+// wet: {value 0…1} shared uniform, how wet the surface is with liquid coolant
+function stockMaterial(wet) {
   const T = THREE;
   const m = new T.MeshStandardMaterial({ vertexColors: true, metalness: 0.55, roughness: 0.5, envMapIntensity: 0.7 });
   m.extensions = { derivatives: true };
   m.onBeforeCompile = sh => {
+    sh.uniforms.uWet = wet;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec2 mark; attribute float rough; varying vec2 vMark; varying float vRough; varying float vUp; varying vec3 vWPos; varying vec3 vWN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMark = mark; vRough = rough; vUp = normal.z; vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = normal;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec2 vMark; varying float vRough; varying float vUp; varying vec3 vWPos; varying vec3 vWN;
+        uniform float uWet;
         float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float vnoise(vec2 p) {
           vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -792,7 +1112,11 @@ function stockMaterial() {
           roughnessFactor += 0.1 * amp * line;
           // and the sheen of a cut face varies a little along it
           diffuseColor.rgb *= 0.95 + 0.08 * vnoise(vec2(dot(vWPos.xy, tdir) * 0.8, vWPos.z * 3.0));
-        }`);
+        }
+        // a film of coolant: darker and glossier, more where it pools on upward faces
+        float wetK = uWet * (0.6 + 0.4 * smoothstep(0.5, 0.95, vUp)) * (0.85 + 0.3 * vnoise(vWPos.xy * 0.15));
+        diffuseColor.rgb *= 1.0 - 0.22 * wetK;
+        roughnessFactor = mix(roughnessFactor, 0.08, clamp(wetK, 0.0, 1.0));`);
   };
   return m;
 }

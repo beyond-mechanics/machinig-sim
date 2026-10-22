@@ -330,4 +330,106 @@ M30
       return { tris, count: tris.length / 9, min: [0, 0, -5], max: [60, 60, 0], name: '角ボス (組み込み)' };
     },
   },
+  troch: {
+    name: '鋼のトロコイド加工と通常の溝 (S50C)',
+    material: 'S50C',
+    // a full-width slot and a trochoidal slot side by side: the trochoid cuts 3x deeper with a
+    // short contact per revolution (cooler edge, chip thinning lets the feed per tooth rise)
+    code: (() => {
+      const L = ['(STOCK 100 70 25)', '(TOOL T1 D10 N3 FLAT L25 SO35)',
+        '(上: 通常の溝 φ10 全幅・ap 3 mm・4770 min-1・fz 0.04)',
+        '(下: トロコイド 幅 14 mm・ap 9 mm・ステップ 0.8 mm・3000 min-1・fz 0.07)',
+        '(被削材は S50C。溝はびびり、トロコイドは 3 倍の深さでも低速のプロセスダンピングで安定)',
+        '(加工レポート・時間領域の安定限界・経路の色分けで比べてください)',
+        'G21 G90 G17', 'T1 M6', 'S4770 M3',
+        'G0 X-8 Y50 Z5', 'G1 Z-3 F300', 'G1 X108 F572', 'G0 Z5',
+        'S3000', 'G0 X-8 Y20 Z5', 'G1 Z-9 F300', 'F630'];
+      const r = 2;
+      for (let x = -6; x <= 106; x += 0.8) for (let a = 0; a < 360; a += 20) {
+        const t = a * Math.PI / 180, px = x + 0.8 * a / 360 + r * Math.sin(t), py = 20 - r * Math.cos(t);
+        L.push(`G1 X${px.toFixed(3)} Y${py.toFixed(3)}`);
+      }
+      L.push('G0 Z5', 'M30');
+      return L.join('\n');
+    })(),
+  },
+  twin: {
+    name: 'ワーク座標系: 2個取り (G54 と G55)',
+    // G55 sits 60 mm to the right of G54 (as a setup sheet would give it)
+    wcsDelta: { G55: { x: 60, y: 0, z: 0 } },
+    code: `(STOCK 120 60 15)
+(TOOL T1 D8 N3 FLAT L20 SO30)
+(同じ部品を 2 個取りする。1 個目は G54、2 個目は G55 [G54 から X+60])
+(部品のプログラムは同じで、座標系だけを替える。G55 の位置はプログラムタブで変えられる)
+G21 G90 G17
+T1 M6
+S12000 M3
+G54
+G0 X10 Y15 Z5
+G1 Z-3 F500
+G1 X50 F1500
+G1 Y45
+G1 X10
+G1 Y15
+G0 Z5
+G0 X30 Y30
+G1 Z-6 F300
+G2 X30 Y30 I-6 J0 F1000
+G0 Z5
+G55
+G0 X10 Y15 Z5
+G1 Z-3 F500
+G1 X50 F1500
+G1 Y45
+G1 X10
+G1 Y15
+G0 Z5
+G0 X30 Y30
+G1 Z-6 F300
+G2 X30 Y30 I-6 J0 F1000
+G0 Z5
+M5
+M30
+`,
+  },
+  macro: {
+    name: 'マクロと座標回転: 放射スロット (G10 G65 G68)',
+    // G10 writes G54 and G55 (the part centre), a WHILE loop turns a G65 slot macro by 60° steps
+    code: `(STOCK 90 90 15)
+(TOOL T1 D6 N3 FLAT L15 SO20)
+(G10 で座標系を書き、G55 = 部品の中心 [G54 から X+45 Y+45])
+(WHILE と G68 で 60 度ずつ回しながら、G65 のスロットマクロ O9010 を 6 回呼ぶ)
+(マクロの引数: X 中心半径 Y 中心の Y Z 深さ Q 長さ)
+(条件は φ6 突出し 20 mm の安定ポケット S16000 に合わせてある)
+G21 G90 G17
+G10 L2 P1 X-400. Y-250. Z-300.
+G10 L2 P2 X-355. Y-205. Z-300.
+T1 M6
+S16000 M3
+G55
+#1 = 0
+WHILE [#1 LT 6] DO1
+G68 X0 Y0 R[#1 * 60]
+G65 P9010 X25. Y0 Z-1.5 Q8.
+G69
+#1 = #1 + 1
+END1
+(中央の丸ポケット)
+G0 X0 Y0 Z5
+G1 Z-2 F300
+G1 X6 F800
+G3 X6 Y0 I-6 J0
+G1 X0
+G0 Z30
+G0 X-90 Y60
+M5
+M30
+O9010 (SLOT X=#24 Y=#25 Z=#26 L=#17)
+G0 X[#24 - #17 / 2] Y#25 Z2
+G1 Z#26 F300
+G1 X[#24 + #17 / 2] F1440
+G0 Z5
+M99
+`,
+  },
 };

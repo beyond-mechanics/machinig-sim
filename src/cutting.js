@@ -5,6 +5,9 @@
 // With tool.nonlinear (default) the shearing coefficients follow an exponential size effect
 // K(h) = K·(h0/h)^mc and the flank adds process damping Ci·b·v_n/V_c against the normal
 // vibration velocity, which stabilises low-speed cutting.
+// Radial runout (tool.runout [mm], tool.runoutPhase [rad]): the cutter turns about an axis e
+// off its own, so tooth i cuts at R + δ_i with δ_i = e·cos(2πi/N − γ); the surface each tooth
+// leaves (regeneration) and the wall it generates (roughness) include its δ_i.
 // Lengths in mm, forces in N, modal states in metres (SI).
 
 import { modeSet } from './frf.js';
@@ -36,6 +39,9 @@ export class CuttingEngine {
   configure(tool, modal, mat, S, fnMax = 0) {
     this.tool = tool; this.mat = mat; this.modal = modal;
     this.N = tool.N; this.R = tool.R; this.tanB = Math.tan(tool.helixDeg * Math.PI / 180);
+    // radial offset of each tooth from runout [mm]
+    const e = tool.runout || 0, g0 = tool.runoutPhase || 0;
+    this.dR = Float64Array.from({ length: tool.N }, (_, i) => e * Math.cos(2 * Math.PI * i / tool.N - g0));
     this.S = Math.max(100, S);
     this.omega = this.S * 2 * Math.PI / 60;
     const Ttooth = 60 / (this.S * this.N);
@@ -95,13 +101,15 @@ export class CuttingEngine {
     const nz = ap <= 0 ? 0 : Math.min(this.maxSlices, Math.ceil(ap / this.dz));
     this.nz = nz;
     this.db = this.dz;
+    // the top slice covers only what is left of ap (a whole slice would add up to dz of width)
+    this.sliceB = Float64Array.from({ length: nz }, (_, k) => Math.min(this.dz, ap - k * this.dz));
     this.sliceZ = new Float64Array(nz);
     this.sliceLag = new Float64Array(nz);
     this.sliceR = new Float64Array(nz);
     this.sliceKap = new Float64Array(nz);
     const R = this.R;
     for (let k = 0; k < nz; k++) {
-      const zr = (k + 0.5) * this.dz;
+      const zr = k * this.dz + 0.5 * this.sliceB[k];
       this.sliceZ[k] = tipZ + zr;
       let r = R, kap = 1;
       if (this.tool.rAt) {
@@ -136,7 +144,7 @@ export class CuttingEngine {
 
   // Integrate nSteps. Returns nothing; results accumulate in this.stats / hist / chipEvents.
   run(nSteps) {
-    const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceZ, sliceLag, sliceR, sliceKap } = this;
+    const { N, Hb, mat, dt, surf, stepsPerTooth, stepsPerRev, nz, db, sliceB, sliceZ, sliceLag, sliceR, sliceKap, dR } = this;
     const ux = this.ux, uy = this.uy, vx = this.vx_, vy = this.vy_, fz = this.fz;
     const Eb = this.Eb, fza = this.fza, ringR = this.ringR, ringCos = this.ringCos, ringDs = this.ringDs, ringZ = this.ringZ;
     const Ktc = mat.Ktc, Krc = mat.Krc, Kac = mat.Kac, Kae = mat.Kae;
@@ -167,13 +175,15 @@ export class CuttingEngine {
       const rvx = vxs - wv * wnx_, rvy = vys - wv * wny_;
       for (let i = 0; i < N; i++) {
         let engaged = 0, ph = 0, zsum = 0;
+        const dRi = dR[i];
         let pi = pr + i * stepsPerTooth; if (pi >= stepsPerRev) pi -= stepsPerRev;
         for (let k = 0; k < nz; k++) {
           let phi = (theta + i * pitch - sliceLag[k]) % TWO_PI;
           if (phi < 0) phi += TWO_PI;
           const sn = Math.sin(phi), cs = Math.cos(phi);
           const nxg = sn * ux + cs * vx, nyg = sn * uy + cs * vy;
-          const rn = xm * nxg + ym * nyg;
+          // where this tooth's edge is along its normal: tool position plus its runout offset
+          const rn = xm * nxg + ym * nyg + dRi;
           const idx = k * stepsPerRev + pi;
           const prev = surf[idx];
           const feedH = fz * sn * sliceKap[k];
@@ -185,11 +195,12 @@ export class CuttingEngine {
           // physical cap: beyond this the real tool breaks or jumps out; keeps severe chatter bounded
           if (h > hMax) h = hMax;
           const se = mc ? Math.pow(H_REF / (h > H_MIN ? h : H_MIN), mc) : 1;
-          const Ft = Ktc * se * h * db + Kte * db;
-          let Fr = Krc * se * h * db + Kre * db;
-          const Fa = Kac * se * h * db + Kae * db;
+          const bk = sliceB[k];
+          const Ft = Ktc * se * h * bk + Kte * bk;
+          let Fr = Krc * se * h * bk + Kre * bk;
+          const Fa = Kac * se * h * bk + Kae * bk;
           // flank indentation resists motion along the edge normal (process damping)
-          if (pdK) Fr += pdK / sliceR[k] * (rvx * nxg + rvy * nyg);
+          if (pdK) Fr += pdK * (bk / db) / sliceR[k] * (rvx * nxg + rvy * nyg);
           const txg = cs * ux - sn * vx, tyg = cs * uy - sn * vy;
           Fx += -Ft * txg - Fr * nxg;
           Fy += -Ft * tyg - Fr * nyg;
@@ -198,8 +209,8 @@ export class CuttingEngine {
           const fr = Math.hypot(Ft, Fr);
           Fsum += fr; Fr2z += fr * (sliceZ[k] - this.tipZ);
           engaged = 1; ph = phi; zsum = sliceZ[k];
-          st.sumHb += h * db; st.sumB += db;
-          this.toothVol[i] += h * db * sliceR[k] * dphi;
+          st.sumHb += h * bk; st.sumB += bk; st.sumRb += sliceR[k] * h * bk;
+          this.toothVol[i] += h * bk * sliceR[k] * dphi;
         }
         if (fza) {
           // end edges sit at the tip (no helix lag); thrust, torque and in-plane tangential force
@@ -220,7 +231,7 @@ export class CuttingEngine {
             T += Ft * ringR[j];
             Fsum += Ft; Fr2z += Ft * ringZ[j];
             engaged = 1; ph = phi; zsum = this.tipZ + ringZ[j];
-            st.sumHb += h * ds; st.sumB += ds;
+            st.sumHb += h * ds; st.sumB += ds; st.sumRb += ringR[j] * h * ds;
             this.toothVol[i] += h * ds * ringR[j] * dphi;
           }
         }
@@ -255,9 +266,15 @@ export class CuttingEngine {
       const ph = pr % stepsPerTooth;
       if (ph === 0) {
         ts.x[ts.i] = x - w * wnx; ts.y[ts.i] = y - w * wny; ts.i = (ts.i + 1) % ts.n; ts.count++;
-        const b = this.wallSamples; b.x[b.i] = x - w * wnx; b.y[b.i] = y - w * wny; b.i = (b.i + 1) % b.n; b.count++;
+        // the tooth now at φ = 0 generates the +v wall: its edge reaches δ further that way
+        const d0 = dR[(N - (pr / stepsPerTooth) % N) % N] * 1e-3;
+        const b = this.wallSamples; b.x[b.i] = x - w * wnx + d0 * vx; b.y[b.i] = y - w * wny + d0 * vy; b.i = (b.i + 1) % b.n; b.count++;
       }
-      if (ph === this.piStep) { const b = this.wallSamplesPi; b.x[b.i] = x - w * wnx; b.y[b.i] = y - w * wny; b.i = (b.i + 1) % b.n; b.count++; }
+      if (ph === this.piStep) {
+        // and the tooth at φ = π the −v wall
+        const ip = ((Math.round((Math.PI - pr * dphi) / pitch) % N) + N) % N, dp = dR[ip] * 1e-3;
+        const b = this.wallSamplesPi; b.x[b.i] = x - w * wnx - dp * vx; b.y[b.i] = y - w * wny - dp * vy; b.i = (b.i + 1) % b.n; b.count++;
+      }
       t += dt;
       // statistics
       const Fxy = Math.hypot(Fx, Fy);
@@ -305,5 +322,5 @@ export class CuttingEngine {
 
 function newStats() {
   return { n: 0, sumF: 0, maxF: 0, sumFx: 0, sumFy: 0, sumFz: 0, maxFz: 0, sumT: 0, maxT: 0, sumX: 0, sumY: 0,
-    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0, sumHb: 0, sumB: 0, engTeeth: 0 };
+    minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, sumZc: 0, wZc: 0, sumW: 0, maxW: 0, sumHb: 0, sumB: 0, sumRb: 0, engTeeth: 0 };
 }
