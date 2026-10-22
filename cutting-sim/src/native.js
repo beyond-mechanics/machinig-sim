@@ -27,10 +27,12 @@ export function wrapWorker(worker, backend) {
   };
   async function loop(g) {
     try { await ready; } catch (e) { return; }
+    // About 4 frames a second: each one is copied into the worker and drawn, which costs the
+    // core CPU time on a machine with few cores (and much more with software WebGL).
     while (running && g === gen) {
       const t = performance.now();
       let buf;
-      try { buf = await backend.run(80); } catch (e) { fail(e); return; }
+      try { buf = await backend.run(250); } catch (e) { fail(e); return; }
       if (g !== gen) return;                                  // reset meanwhile
       wall += performance.now() - t;
       if (new Float64Array(buf, 0, 16)[3] === 1) running = false;

@@ -5,7 +5,7 @@
 
 ```
 native/
-  sph-core/        Rust の SPH コア（src/sph3d.js の STL モードを移植、マルチスレッド）
+  sph-core/        Rust の SPH コア（src/sph3d.js の 3D モードを移植、マルチスレッド）
     src/sim.rs       ソルバー本体（STL・3D 傾斜切削・3D エンドミル）
     src/tool2d.rs    刃先断面（tool.js のくさび・多角形）
     src/toolheat.rs  工具の温度格子（toolheat.js の接触熱と伝導。定常温度と摩耗は JS 側）
@@ -40,7 +40,8 @@ native/
 - 300 ステップ: 陽解法なので丸めの差は育ちますが、工具にかかる力は 1e-4 の相対差。
 - 3D 傾斜切削（標準条件）: 2,500 ステップ後も切削抵抗の差は 2e-6。画面から最後まで計算して kc 2197 N/mm²、
   流出角 16.2°、工具温度 416 °C（JS 版の検証値 kc ≈ 2100、ηc ≈ 15.6°）。
-- 3D エンドミル（2 刃続けて）: 1,500 ステップ後も全粒子がビット一致。
+- 3D エンドミル（2 刃続けて）: 1,500 ステップ後も全粒子がビット一致。画面の標準条件（7,700 粒子・23,603 ステップ）を
+  最後まで計算して、JS 版と主分力 34.6 N・kc 1877 対 1879 N/mm²・流出角 46.5° が一致。
 
 `node native/scripts/compare.mjs drill 2 native/sph-core/target/release/sphcli` が 2 ステップで一致を確かめます
 （CI でも実行）。
@@ -55,6 +56,9 @@ native/
 
 1 スレッドでは JS とほぼ同じ速さです（各粒子が対を集める方式は、対ごとの計算を両側で 2 回するため）。そのかわり
 コア数にほぼ比例して速くなります（4 スレッドで 3.7 倍）。8 コア 16 スレッドの PC なら JS の 6〜8 倍の見込みです。
+画面から計算したときの全体の時間（4 コア、表示込み）は、3D エンドミル標準条件で JS 710 秒に対して 306 秒です。
+粒子が 1 万個未満だと並列の効きが落ちる（4 スレッドで 2 倍強）ので、粒子を増やすほど差が開きます。
+表示の更新は 1 秒に約 4 回にしています（毎回の書き戻しと描画が計算の CPU を食うため）。
 さらに速くするには GPU 計算（wgpu、Windows では DirectX 12）に移します（今後）。
 
 ## 作り方
@@ -68,7 +72,7 @@ cargo build --release --manifest-path native/sph-core/Cargo.toml --features serv
 - コマンドライン: `node native/scripts/dump.mjs drill state.json` で例の状態を書き、
   `native/sph-core/target/release/sphcli state.json --threads 4 --out result.json`。
 - ローカルサーバー: `native/sph-core/target/release/sphserve dist/index.html 8765` を起動してブラウザで
-  http://127.0.0.1:8765/ を開くと、STL モードの計算がサーバー側（Rust）で走ります。画面の下の行に
+  http://127.0.0.1:8765/ を開くと、3D の計算がサーバー側（Rust）で走ります。画面の下の行に
   「ネイティブ計算（n スレッド、… ms/ステップ）」と出ます。
 - デスクトップアプリ（Windows）: GitHub Actions の「cutting-sim desktop」が windows-latest でビルドし、
   成果物 `CuttingSim-windows` に単体で動く `cutting-sim-app.exe` と、ユーザー単位のインストーラー（管理者権限なし）を置きます。
@@ -84,6 +88,6 @@ cargo build --release --manifest-path native/sph-core/Cargo.toml --features serv
 
 ## 次の段階
 
-1. 2D（直交切削・エンドミル）と 3D 傾斜切削・3D エンドミルも Rust に移す（工具温度の格子 toolheat.js を含む）。
-2. GPU 計算（wgpu の compute shader）で粒子数を 10 倍級に。各粒子が対を集める今の形はそのまま GPU に載ります。
-3. 高解像度向けの表示（フレームを f32 に、表示する粒子を間引く）、結果の VTK 書き出し（ParaView）、条件スイープの一括実行。
+1. GPU 計算（wgpu の compute shader）で粒子数を 10 倍級に。各粒子が対を集める今の形はそのまま GPU に載ります。
+2. 高解像度向けの表示（フレームを f32 に、表示する粒子を間引く）、結果の VTK 書き出し（ParaView）、条件スイープの一括実行。
+3. 2D（直交切削・エンドミル断面）の移植。今でも 1 分以内に終わるので後回しにしています。
