@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>切削シミュレーター</title>
+<style>
+:root { --bg: #f4f6f8; --panel: #fff; --ink: #1d2733; --mute: #5f6b78; --rule: #dde3ea; --accent: #b06d00; --a: #2f6fb3; --b: #c4572b; --font: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif; --mono: "Cascadia Mono", Consolas, monospace; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14181d; --panel: #1d232a; --ink: #e4e9ef; --mute: #98a3af; --rule: #2e3740; --accent: #e3a33b; --a: #6aa8e8; --b: #ec8a5d; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); }
+header { display: flex; gap: 4px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--rule); background: var(--panel); }
+header h1 { font-size: 16px; margin: 0 18px 0 0; }
+header button { font: inherit; padding: 6px 14px; border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 6px; cursor: pointer; }
+header button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+main { height: calc(100% - 52px); }
+#mill { width: 100%; height: 100%; border: 0; display: block; }
+#fem { display: grid; grid-template-columns: 300px 1fr; gap: 14px; padding: 14px; height: 100%; overflow: auto; }
+.card { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.card h2 { font-size: 14px; margin: 0 0 8px; }
+.row { display: grid; grid-template-columns: 1fr 110px; gap: 8px; align-items: center; margin: 6px 0; }
+.row input, .row select { font: inherit; width: 100%; padding: 4px 6px; border: 1px solid var(--rule); border-radius: 5px; background: var(--bg); color: var(--ink); }
+.btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.btns button { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+.btns button.ghost { background: transparent; color: var(--accent); }
+.btns button:disabled { opacity: 0.45; cursor: default; }
+.hint { color: var(--mute); font-size: 12px; }
+.view { display: grid; gap: 14px; grid-template-rows: auto auto auto; align-content: start; }
+canvas { width: 100%; display: block; }
+#cvField { height: 420px; }
+#cvHist { height: 200px; }
+.seg { display: inline-flex; gap: 4px; margin-left: 8px; }
+.seg button { font: inherit; font-size: 12px; padding: 2px 10px; border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 5px; cursor: pointer; }
+.seg button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+table { border-collapse: collapse; width: 100%; font: 13px var(--mono); }
+td, th { padding: 4px 6px; border-bottom: 1px solid var(--rule); text-align: right; }
+td:first-child, th:first-child { text-align: left; font-family: var(--font); }
+</style>
+</head>
+<body>
+<header>
+  <h1>切削シミュレーター</h1>
+  <button id="tabMill" aria-pressed="true">フライス加工</button>
+  <button id="tabFem" aria-pressed="false">切りくず FEM</button>
+</header>
+<main>
+  <iframe id="mill" src="mill.html" title="フライス加工シミュレーター"></iframe>
+  <section id="fem" hidden>
+    <div class="card">
+      <h2>直交切削の条件</h2>
+      <div class="row"><label for="mat">被削材</label><select id="mat">
+        <option value="S50C">S50C (AISI 1045)</option><option value="SCM440">SCM440</option><option value="SUS304">SUS304</option>
+        <option value="SKD61">SKD61 (焼入れ)</option><option value="Ti64">Ti-6Al-4V</option><option value="IN718">インコネル 718</option>
+        <option value="A7075">A7075</option><option value="A5052">A5052</option></select></div>
+      <div class="row"><label for="vc">切削速度 [m/min]</label><input id="vc" type="number" value="200" min="1" step="10"></div>
+      <div class="row"><label for="h">切取り厚さ [mm]</label><input id="h" type="number" value="0.1" min="0.01" step="0.01"></div>
+      <div class="row"><label for="rake">すくい角 [°]</label><input id="rake" type="number" value="5" step="1"></div>
+      <div class="row"><label for="clr">逃げ角 [°]</label><input id="clr" type="number" value="7" step="1"></div>
+      <div class="row"><label for="re">刃先丸み [mm]</label><input id="re" type="number" value="0.02" min="0.002" step="0.005"></div>
+      <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" value="0.6" min="0" step="0.05"></div>
+      <div class="row"><label for="len">切削長 [mm]</label><input id="len" type="number" value="1" min="0.1" step="0.1"></div>
+      <div class="btns"><button id="run">計算する</button><button id="stop" class="ghost" disabled>止める</button></div>
+      <p class="hint">2 次元の平面ひずみ (幅 1 mm あたり)。Johnson–Cook の材料定数、刃先丸みつきの剛体工具、クーロン摩擦、塑性発熱と熱伝導。要素がつぶれる前に自動で作り直します。力は工具に働く力で、主分力 Fc は切削方向、背分力 Ft は仕上げ面に垂直。</p>
+      <p class="hint" id="status"></p>
+    </div>
+    <div class="view">
+      <div class="card"><h2>分布 <span class="seg" id="fieldSel"><button data-f="temp" aria-pressed="true">温度</button><button data-f="ep" aria-pressed="false">塑性ひずみ</button><button data-f="mises" aria-pressed="false">相当応力</button></span></h2><canvas id="cvField"></canvas></div>
+      <div class="card"><h2>切削抵抗 (幅 1 mm あたり)</h2><canvas id="cvHist"></canvas></div>
+      <div class="card"><h2>定常値 (後半 40 % の平均)</h2><div id="result" class="hint">まだ計算していません。</div></div>
+    </div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const tauri = window.__TAURI__;
+// tabs
+for (const [btn, show] of [['tabMill', 'mill'], ['tabFem', 'fem']]) $(btn).onclick = () => {
+  $('mill').hidden = show !== 'mill'; $('fem').hidden = show !== 'fem';
+  $('tabMill').setAttribute('aria-pressed', show === 'mill'); $('tabFem').setAttribute('aria-pressed', show === 'fem');
+  if (show === 'fem') draw();
+};
+let fields = null, hist = [], field = 'temp';
+document.querySelectorAll('#fieldSel button').forEach(b => b.onclick = () => {
+  field = b.dataset.f; document.querySelectorAll('#fieldSel button').forEach(x => x.setAttribute('aria-pressed', x === b)); draw();
+});
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function setup(cv) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  g.font = `11px ${css('--mono')}`; return { g, w, h };
+}
+function colour(t) {
+  const st = [[0, [20, 30, 110]], [0.35, [30, 170, 200]], [0.7, [250, 220, 60]], [1, [210, 40, 30]]];
+  t = Math.min(1, Math.max(0, t)); let k = st.findIndex(s => s[0] >= t); if (k < 1) k = 1;
+  const [a, b] = [st[k - 1], st[k]], f = (t - a[0]) / (b[0] - a[0]);
+  return `rgb(${a[1].map((v, i) => Math.round(v + f * (b[1][i] - v))).join(',')})`;
+}
+function drawField() {
+  const { g, w, h } = setup($('cvField'));
+  if (!fields) { g.fillStyle = css('--mute'); g.fillText('計算すると、刃先まわりの分布をここに描きます。', 12, 20); return; }
+  const f = fields, [cx, cy, re, rake, clr] = f.tool, hh = +$('h').value;
+  // window: 6h behind the edge to 3h ahead, 5h up to 3.5h down
+  const x0 = cx - 6 * hh, x1 = cx + 3 * hh, y0 = cy - 3.5 * hh, y1 = cy + 5 * hh;
+  const s = Math.min((w - 70) / (x1 - x0), h / (y1 - y0)), X = x => (x - x0) * s, Y = y => (y1 - y) * s;
+  const vals = field === 'temp' ? f.tri.map(t => (f.temp[t[0]] + f.temp[t[1]] + f.temp[t[2]]) / 3) : f[field];
+  const vmax = field === 'ep' ? Math.min(4, Math.max(...vals)) : Math.max(...vals);
+  f.tri.forEach((t, e) => {
+    const p = t.map(i => f.x[i]);
+    if (p.every(q => q[0] < x0 || q[0] > x1 || q[1] < y0 || q[1] > y1)) return;
+    g.fillStyle = g.strokeStyle = colour(vals[e] / vmax);
+    g.beginPath(); g.moveTo(X(p[0][0]), Y(p[0][1])); g.lineTo(X(p[1][0]), Y(p[1][1])); g.lineTo(X(p[2][0]), Y(p[2][1])); g.closePath(); g.fill(); g.lineWidth = 0.4; g.stroke();
+  });
+  // tool: rake face up from the edge, the rounded edge, the clearance face
+  const nr = [-Math.cos(rake), Math.sin(rake)], tr = [Math.sin(rake), Math.cos(rake)], nc = [Math.sin(clr), -Math.cos(clr)], tc = [Math.cos(clr), Math.sin(clr)];
+  g.fillStyle = '#9aa3ad'; g.strokeStyle = '#333'; g.lineWidth = 1; g.beginPath();
+  g.moveTo(X(cx + re * nr[0] + 9 * hh * tr[0]), Y(cy + re * nr[1] + 9 * hh * tr[1]));
+  g.lineTo(X(cx + re * nr[0]), Y(cy + re * nr[1]));
+  let a0 = Math.atan2(nr[1], nr[0]), a1 = Math.atan2(nc[1], nc[0]); if (a1 > a0) a1 -= 2 * Math.PI;
+  for (let k = 0; k <= 16; k++) { const a = a0 + (a1 - a0) * k / 16; g.lineTo(X(cx + re * Math.cos(a)), Y(cy + re * Math.sin(a))); }
+  g.lineTo(X(cx + re * nc[0] + 6 * hh * tc[0]), Y(cy + re * nc[1] + 6 * hh * tc[1]));
+  g.lineTo(X(cx + 9 * hh), Y(cy + 9 * hh)); g.closePath(); g.fill(); g.stroke();
+  // colour bar
+  const unit = { temp: '°C', ep: '', mises: 'MPa' }[field];
+  for (let k = 0; k < 100; k++) { g.fillStyle = colour(k / 99); g.fillRect(w - 50, h - 20 - k * (h - 40) / 100, 14, (h - 40) / 100 + 1); }
+  g.fillStyle = css('--ink'); g.fillText(`${vmax.toFixed(field === 'ep' ? 1 : 0)} ${unit}`, w - 62, 12); g.fillText('0', w - 30, h - 8);
+}
+function drawHist() {
+  const { g, w, h } = setup($('cvHist')), box = { x: 46, y: 14, w: w - 60, h: h - 38 };
+  const L = +$('len').value, fmax = Math.max(50, ...hist.map(p => Math.max(p.fc, p.ft))) * 1.1;
+  g.strokeStyle = css('--rule'); g.fillStyle = css('--mute');
+  for (let k = 0; k <= 4; k++) { const y = box.y + box.h * (1 - k / 4); g.beginPath(); g.moveTo(box.x, y); g.lineTo(box.x + box.w, y); g.stroke(); g.fillText((fmax * k / 4).toFixed(0), 6, y + 4); }
+  g.fillText('切削長 [mm]', box.x + box.w - 70, h - 4); g.fillText('0', box.x, h - 18); g.fillText(L.toFixed(1), box.x + box.w - 16, h - 18);
+  for (const [k, col, name] of [['fc', css('--a'), '主分力 Fc'], ['ft', css('--b'), '背分力 Ft']]) {
+    g.strokeStyle = col; g.lineWidth = 1.6; g.beginPath();
+    hist.forEach((p, i) => { const x = box.x + box.w * p.cut / L, y = box.y + box.h * (1 - p[k] / fmax); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.stroke();
+  }
+  g.fillStyle = css('--a'); g.fillText('■ 主分力 Fc [N/mm]', box.x + 8, 12); g.fillStyle = css('--b'); g.fillText('■ 背分力 Ft [N/mm]', box.x + 150, 12);
+}
+function draw() { if (!$('fem').hidden) { drawField(); drawHist(); } }
+window.addEventListener('resize', draw);
+if (tauri) {
+  tauri.event.listen('fem-progress', e => { hist.push(e.payload); const p = e.payload; $('status').textContent = `切削長 ${p.cut.toFixed(3)} mm · Fc ${p.fc.toFixed(0)} N/mm · 要素 ${p.elements}`; drawHist(); });
+  tauri.event.listen('fem-fields', e => { fields = e.payload; drawField(); });
+}
+$('run').onclick = async () => {
+  if (!tauri) { $('status').textContent = 'この画面はネイティブ版 (アプリ) でだけ計算できます。'; return; }
+  hist = []; fields = null; draw();
+  $('run').disabled = true; $('stop').disabled = false; $('status').textContent = '計算中…';
+  const req = { material: $('mat').value, vc: +$('vc').value, h: +$('h').value, rake: +$('rake').value, clearance: +$('clr').value, re: +$('re').value, mu: +$('mu').value, length: +$('len').value };
+  try {
+    const r = await tauri.core.invoke('orthogonal', { req });
+    fields = r.fields; hist = r.history; draw();
+    const s = r.steady;
+    $('result').innerHTML = `<table><tr><th></th><th>値</th></tr>
+      <tr><td>主分力 Fc</td><td>${s.fc.toFixed(1)} N/mm</td></tr><tr><td>背分力 Ft</td><td>${s.ft.toFixed(1)} N/mm</td></tr>
+      <tr><td>比切削抵抗 Fc / h</td><td>${(s.fc / req.h).toFixed(0)} MPa</td></tr>
+      <tr><td>切りくず厚さ</td><td>${s.chip.toFixed(3)} mm (厚さ比 ${(req.h / s.chip).toFixed(2)})</td></tr>
+      <tr><td>せん断角</td><td>${r.shear_angle.toFixed(1)}°</td></tr><tr><td>最高温度</td><td>${s.t_max.toFixed(0)} °C</td></tr></table>
+      <p class="hint">${r.stopped ? '途中で止めました。' : ''}計算時間 ${r.seconds.toFixed(1)} 秒。</p>`;
+    $('status').textContent = '';
+  } catch (err) { $('status').textContent = `計算できませんでした: ${err}`; }
+  $('run').disabled = false; $('stop').disabled = true;
+};
+$('stop').onclick = () => tauri?.core.invoke('stop');
+</script>
+</body>
+</html>

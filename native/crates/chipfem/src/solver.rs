@@ -365,6 +365,73 @@ impl Solver {
         }
     }
 
+    /// Worst element quality, 4√3·A / Σl² (1 for an equilateral triangle, 0 when flat); negative
+    /// if an element turned inside out.
+    pub fn min_quality(&self) -> f64 {
+        let x = &self.mesh.x;
+        self.mesh
+            .tri
+            .par_iter()
+            .map(|t| {
+                let (a, b, c) = (x[t[0]], x[t[1]], x[t[2]]);
+                let (area, _) = tri_geom(a, b, c);
+                let l2 = (b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (c[0] - b[0]).powi(2) + (c[1] - b[1]).powi(2) + (a[0] - c[0]).powi(2) + (a[1] - c[1]).powi(2);
+                4.0 * 3f64.sqrt() * area / l2
+            })
+            .reduce(|| f64::INFINITY, f64::min)
+    }
+
+    /// Carry the state over to a new mesh of the same body (remesh.rs): nodal velocity and
+    /// temperature interpolated, element state from the old element at the new centroid. Nodes
+    /// that land inside the tool are moved onto its surface.
+    pub fn transfer_to(&mut self, mut new: Mesh) {
+        use crate::remesh::Locator;
+        if let Some(tool) = &self.tool {
+            for p in new.x.iter_mut() {
+                if let Some(ct) = tool.contact(*p) {
+                    p[0] += ct.depth * ct.n[0];
+                    p[1] += ct.depth * ct.n[1];
+                }
+            }
+        }
+        let loc = Locator::new(&self.mesh);
+        let old_tri = &self.mesh.tri;
+        let (v, temp): (Vec<[f64; 2]>, Vec<f64>) = new
+            .x
+            .par_iter()
+            .map(|&p| {
+                let (e, l) = loc.locate(p);
+                let t = old_tri[e];
+                let mut vv = [0.0; 2];
+                let mut tt = 0.0;
+                for k in 0..3 {
+                    vv[0] += l[k] * self.v[t[k]][0];
+                    vv[1] += l[k] * self.v[t[k]][1];
+                    tt += l[k] * self.temp[t[k]];
+                }
+                (vv, tt)
+            })
+            .unzip();
+        let src: Vec<usize> = new
+            .tri
+            .par_iter()
+            .map(|t| {
+                let c = [(new.x[t[0]][0] + new.x[t[1]][0] + new.x[t[2]][0]) / 3.0, (new.x[t[0]][1] + new.x[t[1]][1] + new.x[t[2]][1]) / 3.0];
+                loc.locate(c).0
+            })
+            .collect();
+        self.s = src.iter().map(|&e| self.s[e]).collect();
+        self.ev = src.iter().map(|&e| self.ev[e]).collect();
+        self.ep = src.iter().map(|&e| self.ep[e]).collect();
+        self.epdot = src.iter().map(|&e| self.epdot[e]).collect();
+        self.sigma = src.iter().map(|&e| self.sigma[e]).collect();
+        drop(loc);
+        self.v = v;
+        self.temp = temp;
+        self.mesh = new;
+        self.rebuild();
+    }
+
     /// heat stored in the nodes above the initial temperature t0 [mJ]
     pub fn heat_content(&self, t0: f64) -> f64 {
         self.temp.iter().zip(&self.mass_phys).map(|(t, m)| (t - t0) * m * self.mat.cp).sum()

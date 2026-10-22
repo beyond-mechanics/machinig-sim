@@ -5,7 +5,9 @@
 pub mod material;
 pub mod mesh;
 pub mod solver;
+pub mod remesh;
 pub mod tool;
+pub mod cutting;
 
 pub use material::{JohnsonCook, Material};
 pub use mesh::Mesh;

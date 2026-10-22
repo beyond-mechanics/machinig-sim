@@ -1,2 +1,4 @@
 node_modules/
 native/target/
+native/app/ui/mill.html
+native/app/src-tauri/gen/

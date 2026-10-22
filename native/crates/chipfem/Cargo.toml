@@ -7,3 +7,4 @@ license = "ISC"
 
 [dependencies]
 rayon = "1"
+spade = "2"
