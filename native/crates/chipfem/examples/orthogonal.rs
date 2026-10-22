@@ -110,4 +110,16 @@ fn main() {
     svg.push_str("</svg>\n");
     std::fs::write(&out, svg).unwrap();
     println!("wrote {out}");
+    // the fields as the app's screen gets them (CHIPFEM_JSON=path)
+    if let Ok(path) = std::env::var("CHIPFEM_JSON") {
+        let s = &c.solver;
+        let t = s.tool.as_ref().unwrap();
+        let mises: Vec<f64> = s.sigma.iter().map(|g| { let p = (g[0] + g[1] + g[2]) / 3.0; let (a, b, z) = (g[0] - p, g[1] - p, g[2] - p); (1.5 * (a * a + b * b + z * z + 2.0 * g[3] * g[3])).sqrt() }).collect();
+        let list = |v: &[f64]| v.iter().map(|x| format!("{x:.4}")).collect::<Vec<_>>().join(",");
+        let xs = s.mesh.x.iter().map(|p| format!("[{:.6},{:.6}]", p[0], p[1])).collect::<Vec<_>>().join(",");
+        let tri = s.mesh.tri.iter().map(|t| format!("[{},{},{}]", t[0], t[1], t[2])).collect::<Vec<_>>().join(",");
+        let json = format!("{{\"x\":[{xs}],\"tri\":[{tri}],\"temp\":[{}],\"ep\":[{}],\"mises\":[{}],\"tool\":[{},{},{},{},{}]}}", list(&s.temp), list(&s.ep), list(&mises), t.c[0], t.c[1], t.re, t.rake, t.clearance);
+        std::fs::write(&path, json).unwrap();
+        println!("wrote {path}");
+    }
 }

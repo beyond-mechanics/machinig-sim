@@ -102,8 +102,9 @@ function drawField() {
   const { g, w, h } = setup($('cvField'));
   if (!fields) { g.fillStyle = css('--mute'); g.fillText('計算すると、刃先まわりの分布をここに描きます。', 12, 20); return; }
   const f = fields, [cx, cy, re, rake, clr] = f.tool, hh = +$('h').value;
-  // window: 6h behind the edge to 3h ahead, 5h up to 3.5h down
-  const x0 = cx - 6 * hh, x1 = cx + 3 * hh, y0 = cy - 3.5 * hh, y1 = cy + 5 * hh;
+  // window: 7h behind the edge to 3h ahead, 3.5h down, and up to the top of the chip (at least 5h)
+  const yTop = Math.max(...f.x.filter(p => p[0] > cx - 7 * hh && p[0] < cx + 3 * hh).map(p => p[1]));
+  const x0 = cx - 7 * hh, x1 = cx + 3 * hh, y0 = cy - 3.5 * hh, y1 = Math.min(cy + 12 * hh, Math.max(cy + 5 * hh, yTop + 0.3 * hh));
   const s = Math.min((w - 70) / (x1 - x0), h / (y1 - y0)), X = x => (x - x0) * s, Y = y => (y1 - y) * s;
   const vals = field === 'temp' ? f.tri.map(t => (f.temp[t[0]] + f.temp[t[1]] + f.temp[t[2]]) / 3) : f[field];
   const vmax = field === 'ep' ? Math.min(4, Math.max(...vals)) : Math.max(...vals);
@@ -122,6 +123,8 @@ function drawField() {
   for (let k = 0; k <= 16; k++) { const a = a0 + (a1 - a0) * k / 16; g.lineTo(X(cx + re * Math.cos(a)), Y(cy + re * Math.sin(a))); }
   g.lineTo(X(cx + re * nc[0] + 6 * hh * tc[0]), Y(cy + re * nc[1] + 6 * hh * tc[1]));
   g.lineTo(X(cx + 9 * hh), Y(cy + 9 * hh)); g.closePath(); g.fill(); g.stroke();
+  // the rounded edge itself (the outline above only runs along its outside)
+  g.beginPath(); g.arc(X(cx), Y(cy), re * s, 0, 2 * Math.PI); g.fill();
   // colour bar
   const unit = { temp: '°C', ep: '', mises: 'MPa' }[field];
   for (let k = 0; k < 100; k++) { g.fillStyle = colour(k / 99); g.fillRect(w - 50, h - 20 - k * (h - 40) / 100, 14, (h - 40) / 100 + 1); }
