@@ -86,17 +86,25 @@ fn main() {
     }
     let mut c = Cutting::new(mat, p);
     println!("{key}: Vc {vc} m/min, h {h} mm, rake {rake}°, edge radius {} mm, μ {}; {} elements", c.p.re, c.p.mu, c.solver.mesh.tri.len());
-    println!("  cut[mm]  Fc[N/mm]  Ft[N/mm]  chip[mm]  Tmax[°C]  εp max  elements remeshes");
+    println!("  cut[mm]  Fc[N/mm]  Ft[N/mm]  chip[mm]  Tmax[°C]  εp max  elements remeshes  Ttool[°C]");
     let t0 = std::time::Instant::now();
-    c.run(len / 20.0, |s, _| {
-        println!("  {:6.3}  {:8.1}  {:8.1}  {:8.4}  {:8.0}  {:6.2}  {:8} {:8}", s.cut, s.fc, s.ft, s.chip, s.t_max, s.ep_max, s.elements, s.remeshes);
+    c.run(len / 20.0, |s, c| {
+        println!("  {:6.3}  {:8.1}  {:8.1}  {:8.4}  {:8.0}  {:6.2}  {:8} {:8}  {:8.0}", s.cut, s.fc, s.ft, s.chip, s.t_max, s.ep_max, s.elements, s.remeshes, s.t_tool);
+        if std::env::var("CHIPFEM_DEBUG").is_ok() {
+            // where the hottest node is: relative to the edge centre, the time step
+            let sv = &c.solver;
+            let (i, t) = sv.temp.iter().enumerate().fold((0, f64::MIN), |b, (i, &t)| if t > b.1 { (i, t) } else { b });
+            let tc = sv.tool.as_ref().unwrap().c;
+            let p = sv.mesh.x[i];
+            eprintln!("    hottest node {i}: {t:.0} °C at ({:+.4}, {:+.4}) from the edge centre; dt {:.2e} s, steps {}, quality {:.3}", p[0] - tc[0], p[1] - tc[1], sv.dt, sv.steps, sv.min_quality());
+        }
         true
     });
     let st = c.steady(0.4);
     let r = c.p.h / st.chip.max(1e-9);
     let a_r = c.p.rake_deg.to_radians();
     let phi = (r * a_r.cos() / (1.0 - r * a_r.sin())).atan().to_degrees();
-    println!("steady (last 40 %): Fc {:.1} N/mm, Ft {:.1} N/mm, chip {:.4} mm (ratio {:.2}, shear angle {:.1}°), Tmax {:.0} °C  [{:.1} s]", st.fc, st.ft, st.chip, r, phi, st.t_max, t0.elapsed().as_secs_f64());
+    println!("steady (last 40 %): Fc {:.1} N/mm, Ft {:.1} N/mm, chip {:.4} mm (ratio {:.2}, shear angle {:.1}°), Tmax {:.0} °C, tool {:.0} °C  [{:.1} s]", st.fc, st.ft, st.chip, r, phi, st.t_max, st.t_tool, t0.elapsed().as_secs_f64());
     // fields: temperature (element mean of the nodes) and plastic strain
     let m = &c.solver.mesh;
     let te: Vec<f64> = m.tri.iter().map(|t| t.iter().map(|&i| c.solver.temp[i]).sum::<f64>() / 3.0).collect();

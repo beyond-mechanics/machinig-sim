@@ -7,7 +7,9 @@ pub mod mesh;
 pub mod solver;
 pub mod remesh;
 pub mod tool;
+pub mod toolheat;
 pub mod cutting;
+pub mod coefs;
 
 pub use material::{JohnsonCook, Material};
 pub use mesh::Mesh;

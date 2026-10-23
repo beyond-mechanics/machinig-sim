@@ -121,6 +121,91 @@ async fn orthogonal(window: Window, run: State<'_, Run>, req: Request) -> Result
     .map_err(|e| e.to_string())
 }
 
+#[derive(Deserialize)]
+struct CoefRequest {
+    material: String,
+    vc: f64,
+    rake: f64,
+    clearance: f64,
+    re: f64,
+    mu: f64,
+    helix: f64,
+    hs: Vec<f64>,
+}
+
+#[derive(Serialize, Clone)]
+struct CoefProgress {
+    k: usize,
+    n: usize,
+    h: f64,
+    fc: f64,
+    ft: f64,
+    chip: f64,
+}
+
+#[derive(Serialize)]
+struct CoefRow {
+    h: f64,
+    fc: f64,
+    ft: f64,
+    chip: f64,
+    t_max: f64,
+    tau_s: f64,
+    phi: f64,
+    lambda: f64,
+    ktc: f64,
+    krc: f64,
+    kac: f64,
+}
+
+#[derive(Serialize)]
+struct CoefOutcome {
+    ktc: f64,
+    krc: f64,
+    kac: f64,
+    kte: f64,
+    kre: f64,
+    kae: f64,
+    mc: f64,
+    r2: [f64; 2],
+    rows: Vec<CoefRow>,
+    seconds: f64,
+}
+
+/// FEM runs at several uncut chip thicknesses → milling coefficients (chipfem::coefs)
+#[tauri::command]
+async fn milling_coefs(window: Window, run: State<'_, Run>, req: CoefRequest) -> Result<Option<CoefOutcome>, String> {
+    let mat = Material::preset(&req.material).ok_or_else(|| format!("材料 {} はありません", req.material))?;
+    let stop = run.stop.clone();
+    stop.store(false, Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut base = CutParams::new(req.vc, 0.1, req.rake);
+        base.clearance_deg = req.clearance;
+        base.re = req.re;
+        base.mu = req.mu;
+        let t0 = std::time::Instant::now();
+        let r = chipfem::coefs::milling_coefs(&mat, &base, &req.hs, req.helix, |k, n, row, c| {
+            let _ = window.emit("coef-progress", CoefProgress { k, n, h: row.h, fc: row.fc, ft: row.ft, chip: row.chip });
+            let _ = window.emit("fem-fields", fields(c));
+            !stop.load(Ordering::SeqCst)
+        });
+        r.map(|r| CoefOutcome {
+            ktc: r.ktc,
+            krc: r.krc,
+            kac: r.kac,
+            kte: r.kte,
+            kre: r.kre,
+            kae: r.kae,
+            mc: r.mc,
+            r2: r.r2,
+            rows: r.rows.iter().map(|q| CoefRow { h: q.h, fc: q.fc, ft: q.ft, chip: q.chip, t_max: q.t_max, tau_s: q.tau_s, phi: q.phi, lambda: q.lambda, ktc: q.ktc, krc: q.krc, kac: q.kac }).collect(),
+            seconds: t0.elapsed().as_secs_f64(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn stop(run: State<'_, Run>) {
     run.stop.store(true, Ordering::SeqCst);
@@ -129,7 +214,7 @@ fn stop(run: State<'_, Run>) {
 fn main() {
     tauri::Builder::default()
         .manage(Run::default())
-        .invoke_handler(tauri::generate_handler![orthogonal, stop])
+        .invoke_handler(tauri::generate_handler![orthogonal, milling_coefs, stop])
         .run(tauri::generate_context!())
         .expect("failed to start the application");
 }

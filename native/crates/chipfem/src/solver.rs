@@ -21,6 +21,7 @@
 use crate::material::Material;
 use crate::mesh::{min_altitude, tri_geom, Mesh};
 use crate::tool::Tool;
+use crate::toolheat::ToolHeat;
 use rayon::prelude::*;
 
 /// prescribed velocity of one degree of freedom
@@ -56,6 +57,9 @@ pub struct Solver {
     pub sigma: Vec<[f64; 4]>,
     pub bcs: Vec<Bc>,
     pub tool: Option<Tool>,
+    /// heat conduction in the tool (None: the tool is adiabatic and its share of the friction
+    /// heat is lost)
+    pub tool_heat: Option<ToolHeat>,
     pub mass_scale: f64,
     pub cfl: f64,
     pub dt: f64,
@@ -69,6 +73,8 @@ pub struct Solver {
     pub fint: Vec<[f64; 2]>,
     pub tool_force: [f64; 2],
     pub plastic_work: f64,
+    /// stable explicit step of the tool's heat conduction
+    pub tool_dt: f64,
     pub friction_work: f64,
     mass: Vec<f64>,
     mass_phys: Vec<f64>,
@@ -130,6 +136,8 @@ impl Solver {
             sigma: vec![[0.0; 4]; ne],
             bcs: Vec::new(),
             tool: None,
+            tool_heat: None,
+            tool_dt: f64::INFINITY,
             mass_scale: 1.0,
             cfl: 0.5,
             dt: 0.0,
@@ -209,6 +217,7 @@ impl Solver {
         let tri = &self.mesh.tri;
         let beta = mat.beta;
         let kth = if self.thermal { mat.k } else { 0.0 };
+        let rho_cp = mat.rho * mat.cp;
 
         // 1. deviatoric stress, plastic strain and heat per element
         let pw: f64 = self
@@ -245,9 +254,15 @@ impl Solver {
                 let tr = lxx + lyy;
                 *ev += tr * dt;
                 let plastic = sy * dep * area;
+                // explicit conduction is stable while dt ≤ ρc·a²/(4k) (a: shortest altitude); an
+                // element squashed thin between remeshes would break that long before the
+                // mechanical step does, so its conductivity is capped there (a few elements, for a
+                // few steps, instead of a temperature blow-up)
+                let alt = 2.0 * area / [(x[b][0] - x[a][0]).hypot(x[b][1] - x[a][1]), (x[cc][0] - x[b][0]).hypot(x[cc][1] - x[b][1]), (x[a][0] - x[cc][0]).hypot(x[a][1] - x[cc][1])].iter().cloned().fold(0.0, f64::max);
+                let kth_e = if kth > 0.0 { kth.min(0.25 * rho_cp * alt * alt / dt) } else { 0.0 };
                 // heat: plastic work share, conduction −A·k·∇N_i·∇T
                 for k in 0..3 {
-                    w.q[k] = beta * plastic / 3.0 - dt * area * kth * (gr[k][0] * gtx + gr[k][1] * gty);
+                    w.q[k] = beta * plastic / 3.0 - dt * area * kth_e * (gr[k][0] * gtx + gr[k][1] * gty);
                 }
                 w.area = area;
                 w.tr_d = tr;
@@ -334,16 +349,21 @@ impl Solver {
                 let dvn = ct.depth / dt;
                 let imp_n = m * dvn;
                 let vt = [vr[0] - vn * nn[0], vr[1] - vn * nn[1]];
+                // the node's share of the contact length
+                let len = {
+                    let nb = self.bnb[i];
+                    let xs = &self.mesh.x;
+                    let half = |j: usize| if j == usize::MAX { 0.0 } else { 0.5 * (xs[j][0] - xs[i][0]).hypot(xs[j][1] - xs[i][1]) };
+                    half(nb[0]) + half(nb[1])
+                };
+                // the tool surface node it touches (for the heat exchange)
+                let tj = self.tool_heat.as_ref().filter(|_| self.thermal).map(|th| th.nearest_surface([p[0] - tool.c[0], p[1] - tool.c[1]]));
                 let vts = vt[0].hypot(vt[1]);
                 let mut dvt = [0.0; 2];
                 if vts > 1e-12 {
                     let mut lim = tool.mu * imp_n / m;
                     if let Some(mf) = tool.shear_factor {
                         // τ ≤ m·k over the node's share of the boundary, k = σ̄/√3 of its elements
-                        let nb = self.bnb[i];
-                        let xs = &self.mesh.x;
-                        let half = |j: usize| if j == usize::MAX { 0.0 } else { 0.5 * (xs[j][0] - xs[i][0]).hypot(xs[j][1] - xs[i][1]) };
-                        let len = half(nb[0]) + half(nb[1]);
                         let (off, ids) = (&self.adj.0, &self.adj.1);
                         let els = &ids[off[i]..off[i + 1]];
                         let q: f64 = els.iter().map(|&e| { let d = self.s[e]; (1.5 * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + 2.0 * d[3] * d[3])).sqrt() }).sum::<f64>() / els.len().max(1) as f64;
@@ -351,12 +371,27 @@ impl Solver {
                     }
                     let k = if vts <= lim { 1.0 } else { lim / vts };
                     dvt = [-k * vt[0], -k * vt[1]];
-                    // friction work: tangential impulse × the slip that remains on average
+                    // friction work: friction force × the slip that is left after it (a sticking
+                    // node, k = 1, does not slip and makes no friction heat: its shearing is the
+                    // plastic work of the layer next to the tool; counting the tangential velocity
+                    // the step built up as slip would turn numerical impacts into heat)
                     let ft = m * k * vts;
-                    let slip = vts * (1.0 - 0.5 * k);
+                    let slip = vts * (1.0 - k);
                     let wf = ft * slip;
                     self.friction_work += wf;
                     heat_fric[i] = tool.heat_share * wf;
+                    if let (Some(j), Some(th)) = (tj, self.tool_heat.as_mut()) {
+                        th.add_heat(j, (1.0 - tool.heat_share) * wf);
+                    }
+                }
+                // conduction across the interface, limited so that one step cannot overshoot
+                if let (Some(j), Some(th)) = (tj, self.tool_heat.as_mut()) {
+                    let cw = self.mass_phys[i] * self.mat.cp;
+                    let ct = th.capacity(j);
+                    let g = (th.h_contact * len * dt).min(0.5 * cw * ct / (cw + ct));
+                    let q = g * (self.temp[i] - th.temp[j]);
+                    heat_fric[i] -= q;
+                    th.add_heat(j, q);
                 }
                 let dv = [dvn * nn[0] + dvt[0], dvn * nn[1] + dvt[1]];
                 self.v[i][0] += dv[0];
@@ -376,6 +411,14 @@ impl Solver {
             for i in 0..n {
                 let qf = if heat_fric.is_empty() { 0.0 } else { heat_fric[i] };
                 self.temp[i] += (fint[i].1 + qf) / (self.mass_phys[i] * cp);
+            }
+            if let Some(th) = self.tool_heat.as_mut() {
+                // sub-steps when the tool mesh needs a shorter explicit step than the mechanics
+                let sub = (dt / self.tool_dt).ceil().max(1.0) as usize;
+                th.step(dt / sub as f64);
+                for _ in 1..sub {
+                    th.step(dt / sub as f64);
+                }
             }
         }
         self.t += dt;

@@ -645,6 +645,18 @@ $('coefFile').onchange = async e => {
       (r.material ? '' : '。対応する材料が表にないので、選択中の材料に当てています');
   } catch (err) { $('coefInfo').textContent = `読み込めませんでした：${err.message}`; }
 };
+// ---- coefficients sent by the native edition's chip-formation FEM (the page runs in its frame) ----
+// { type: 'machsim.coefs', material, coefs: {Ktc, Krc, Kac, Kte, Kre, Kae, mc}, source } from the
+// parent window of the same origin: the material is selected and its coefficients replaced
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (e.origin !== location.origin || e.source !== window.parent || d?.type !== 'machsim.coefs' || !MATERIALS[d.material]) return;
+  const c = d.coefs, r1 = v => Math.round(v * 10) / 10;
+  if (![c.Ktc, c.Krc, c.Kac, c.Kte, c.Kre].every(Number.isFinite)) return;
+  sim.cfg.material = d.material; $('material').value = d.material;
+  sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [d.material]: { Ktc: Math.round(c.Ktc), Krc: Math.round(c.Krc), Kac: Math.round(c.Kac), Kte: r1(c.Kte), Kre: r1(c.Kre), Kae: r1(c.Kae ?? 0), mc: c.mc ?? 0, source: String(d.source || 'FEM') } };
+  host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); showJc(); showStart();
+});
 $('coefReset').onclick = () => {
   $('coefInfo').textContent = COEF_HINT;
   if (sim.cfg.coefs) delete sim.cfg.coefs[sim.cfg.material];
