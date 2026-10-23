@@ -27,8 +27,10 @@ impl JohnsonCook {
         let hard = self.a + self.b * ep.max(1e-9).powf(self.n);
         let rate = 1.0 + self.c * (epdot / self.eps0).max(1.0).ln();
         let ts = ((t - self.t_room) / (self.t_melt - self.t_room)).clamp(0.0, 1.0);
-        // a molten (or nearly) element keeps 1 % of its strength so the solution stays defined
-        hard * rate * (1.0 - ts.powf(self.m)).max(0.01)
+        // near the melting point the softening stops at 10 % of the strength: a solid model cannot
+        // melt, and an element at a few per cent strength is squashed flat within a few steps
+        // (in cutting the tool–chip interface stays below about 0.9 T_m)
+        hard * rate * (1.0 - ts.powf(self.m)).max(0.1)
     }
 }
 

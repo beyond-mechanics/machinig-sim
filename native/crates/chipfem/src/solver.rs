@@ -75,6 +75,8 @@ pub struct Solver {
     pub plastic_work: f64,
     /// stable explicit step of the tool's heat conduction
     pub tool_dt: f64,
+    /// stop at the first non-finite value (CHIPFEM_DEBUG)
+    pub debug_nan: bool,
     pub friction_work: f64,
     mass: Vec<f64>,
     mass_phys: Vec<f64>,
@@ -138,6 +140,7 @@ impl Solver {
             tool: None,
             tool_heat: None,
             tool_dt: f64::INFINITY,
+            debug_nan: std::env::var("CHIPFEM_DEBUG").is_ok(),
             mass_scale: 1.0,
             cfl: 0.5,
             dt: 0.0,
@@ -339,6 +342,11 @@ impl Solver {
             heat_fric = vec![0.0; n];
             for i in 0..n {
                 let p = [self.mesh.x[i][0] + dt * self.v[i][0], self.mesh.x[i][1] + dt * self.v[i][1]];
+                // only the work's surface touches the tool (an inside node caught by an edge that
+                // slipped between two surface nodes would be pushed through its neighbours)
+                if self.bnb[i][0] == usize::MAX {
+                    continue;
+                }
                 let Some(ct) = tool.contact(p) else { continue };
                 let nn = ct.n;
                 let m = self.mass[i];
@@ -414,11 +422,30 @@ impl Solver {
             }
             if let Some(th) = self.tool_heat.as_mut() {
                 // sub-steps when the tool mesh needs a shorter explicit step than the mechanics
-                let sub = (dt / self.tool_dt).ceil().max(1.0) as usize;
+                assert!(dt.is_finite() && dt > 0.0, "time step {dt} (the mesh has no usable element)");
+                let sub = ((dt / self.tool_dt).ceil().max(1.0) as usize).min(1000);
                 th.step(dt / sub as f64);
                 for _ in 1..sub {
                     th.step(dt / sub as f64);
                 }
+            }
+        }
+        if self.debug_nan {
+            // the first non-finite value and where it is
+            let bad_t = self.temp.iter().position(|t| !t.is_finite());
+            let bad_v = self.v.iter().position(|v| !(v[0].is_finite() && v[1].is_finite()));
+            let bad_s = self.s.iter().position(|s| !s.iter().all(|x| x.is_finite()));
+            let bad_tool = self.tool_heat.as_ref().and_then(|th| th.temp.iter().position(|t| !t.is_finite()));
+            if let Some(i) = bad_v {
+                let (off, ids) = (&self.adj.0, &self.adj.1);
+                let areas: Vec<f64> = ids[off[i]..off[i + 1]].iter().map(|&e| self.mesh.area(e)).collect();
+                let tc = self.tool.as_ref().map(|t| t.c).unwrap_or([0.0; 2]);
+                let inside = self.tool.as_ref().map(|t| t.contact(self.mesh.x[i]).map(|c| (c.depth, c.n)));
+                eprintln!("node {i}: x {:?} (from the edge centre {:+.5} {:+.5}), mass {:e}, fint {:?}, element areas {:?}, boundary neighbours {:?}, contact {:?}",
+                    self.mesh.x[i], self.mesh.x[i][0] - tc[0], self.mesh.x[i][1] - tc[1], self.mass[i], self.fint[i], areas, self.bnb[i], inside.map(|o| o.map(|(d, n)| (d, n))));
+            }
+            if bad_t.is_some() || bad_v.is_some() || bad_s.is_some() || bad_tool.is_some() {
+                panic!("non-finite at step {}: temperature node {:?}, velocity node {:?}, stress element {:?}, tool node {:?}", self.steps, bad_t, bad_v, bad_s, bad_tool);
             }
         }
         self.t += dt;
@@ -447,7 +474,9 @@ impl Solver {
     /// Carry the state over to a new mesh of the same body (remesh.rs): nodal velocity and
     /// temperature interpolated, element state from the old element at the new centroid. Nodes
     /// that land inside the tool are moved onto its surface.
-    pub fn transfer_to(&mut self, mut new: Mesh) {
+    /// Returns false (and changes nothing) when moving the nodes out of the tool would turn an
+    /// element inside out.
+    pub fn transfer_to(&mut self, mut new: Mesh) -> bool {
         use crate::remesh::Locator;
         if let Some(tool) = &self.tool {
             for p in new.x.iter_mut() {
@@ -456,6 +485,9 @@ impl Solver {
                     p[1] += ct.depth * ct.n[1];
                 }
             }
+        }
+        if (0..new.tri.len()).any(|e| !(new.area(e) > 1e-14)) {
+            return false;
         }
         let loc = Locator::new(&self.mesh);
         let old_tri = &self.mesh.tri;
@@ -493,6 +525,7 @@ impl Solver {
         self.temp = temp;
         self.mesh = new;
         self.rebuild();
+        true
     }
 
     /// heat stored in the nodes above the initial temperature t0 [mJ]

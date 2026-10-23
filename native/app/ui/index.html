@@ -62,11 +62,11 @@ td:first-child, th:first-child { text-align: left; font-family: var(--font); }
       <div class="row"><label for="mu">摩擦係数 μ</label><input id="mu" type="number" value="0.6" min="0" step="0.05"></div>
       <div class="row"><label for="len">切削長 [mm]</label><input id="len" type="number" value="1" min="0.1" step="0.1"></div>
       <div class="btns"><button id="run">計算する</button><button id="stop" class="ghost" disabled>止める</button></div>
-      <p class="hint">2 次元の平面ひずみ (幅 1 mm あたり)。Johnson–Cook の材料定数、刃先丸みつきの剛体工具、付着–すべり摩擦 (摩擦応力は μ×面圧と材料のせん断強さの小さいほう)、塑性発熱と熱伝導。要素がつぶれる前に自動で作り直します。力は工具に働く力で、主分力 Fc は切削方向、背分力 Ft は仕上げ面に垂直。</p>
+      <p class="hint">温度の図の工具は、使い続けて温まった後の温度 (接触面は切りくずと同じ温度、刃先から 2 mm 先は室温として、工具の中の定常の熱の流れを解いたもの) です。2 次元の平面ひずみ (幅 1 mm あたり)。Johnson–Cook の材料定数、刃先丸みつきの剛体工具、付着–すべり摩擦 (摩擦応力は μ×面圧と材料のせん断強さの小さいほう)、塑性発熱と熱伝導。要素がつぶれる前に自動で作り直します。力は工具に働く力で、主分力 Fc は切削方向、背分力 Ft は仕上げ面に垂直。</p>
       <p class="hint" id="status"></p>
       <h2 style="margin-top:14px">フライス加工の切削係数</h2>
       <div class="row"><label for="helix">ねじれ角 [°]</label><input id="helix" type="number" value="30" min="0" max="60" step="5"></div>
-      <div class="row"><label for="hs">切取り厚さ [mm]</label><input id="hs" type="text" value="0.06, 0.09, 0.12, 0.16"></div>
+      <div class="row"><label for="hs">切取り厚さ [mm]</label><input id="hs" type="text" value="0.09, 0.12, 0.16, 0.2"></div>
       <div class="btns"><button id="coefRun">係数を求める</button><button id="coefApply" class="ghost" disabled>フライス加工で使う</button></div>
       <p class="hint">上の条件 (被削材・切削速度・すくい角・刃先丸み・摩擦) で、切取り厚さを変えて FEM を数回流し、主分力・背分力を厚さに対する直線にします。切片が刃先の丸みが押しつける力 (エッジ係数 Kte Kre)、傾きの部分からせん断応力・せん断角・摩擦角を出し、ねじれ角で斜め切削に換算して Ktc Krc Kac にします (Web 版の Oxley 予測と同じ換算)。数分かかります。</p>
     </div>
@@ -113,7 +113,8 @@ function drawField() {
   const x0 = cx - 7 * hh, x1 = cx + 3 * hh, y0 = cy - 3.5 * hh, y1 = Math.min(cy + 12 * hh, Math.max(cy + 5 * hh, yTop + 0.3 * hh));
   const s = Math.min((w - 70) / (x1 - x0), h / (y1 - y0)), X = x => (x - x0) * s, Y = y => (y1 - y) * s;
   const vals = field === 'temp' ? f.tri.map(t => (f.temp[t[0]] + f.temp[t[1]] + f.temp[t[2]]) / 3) : f[field];
-  const vmax = field === 'ep' ? Math.min(4, Math.max(...vals)) : Math.max(...vals);
+  const toolT = field === 'temp' && f.tool_tri?.length ? f.tool_tri.map(t => (f.tool_temp[t[0]] + f.tool_temp[t[1]] + f.tool_temp[t[2]]) / 3) : null;
+  const vmax = field === 'ep' ? Math.min(4, Math.max(...vals)) : Math.max(...vals, ...(toolT || []));
   f.tri.forEach((t, e) => {
     const p = t.map(i => f.x[i]);
     if (p.every(q => q[0] < x0 || q[0] > x1 || q[1] < y0 || q[1] > y1)) return;
@@ -131,6 +132,12 @@ function drawField() {
   g.lineTo(X(cx + 9 * hh), Y(cy + 9 * hh)); g.closePath(); g.fill(); g.stroke();
   // the rounded edge itself (the outline above only runs along its outside)
   g.beginPath(); g.arc(X(cx), Y(cy), re * s, 0, 2 * Math.PI); g.fill();
+  // temperature view: the tool's own temperature field over its near-edge part
+  if (toolT) f.tool_tri.forEach((t, e) => {
+    const p = t.map(i => f.tool_x[i]);
+    g.fillStyle = g.strokeStyle = colour(toolT[e] / vmax);
+    g.beginPath(); g.moveTo(X(p[0][0]), Y(p[0][1])); g.lineTo(X(p[1][0]), Y(p[1][1])); g.lineTo(X(p[2][0]), Y(p[2][1])); g.closePath(); g.fill(); g.lineWidth = 0.4; g.stroke();
+  });
   // colour bar
   const unit = { temp: '°C', ep: '', mises: 'MPa' }[field];
   for (let k = 0; k < 100; k++) { g.fillStyle = colour(k / 99); g.fillRect(w - 50, h - 20 - k * (h - 40) / 100, 14, (h - 40) / 100 + 1); }
@@ -168,7 +175,8 @@ $('run').onclick = async () => {
       <tr><td>主分力 Fc</td><td>${s.fc.toFixed(1)} N/mm</td></tr><tr><td>背分力 Ft</td><td>${s.ft.toFixed(1)} N/mm</td></tr>
       <tr><td>比切削抵抗 Fc / h</td><td>${(s.fc / req.h).toFixed(0)} MPa</td></tr>
       <tr><td>切りくず厚さ</td><td>${s.chip.toFixed(3)} mm (厚さ比 ${(req.h / s.chip).toFixed(2)})</td></tr>
-      <tr><td>せん断角</td><td>${r.shear_angle.toFixed(1)}°</td></tr><tr><td>最高温度</td><td>${s.t_max.toFixed(0)} °C</td></tr></table>
+      <tr><td>せん断角</td><td>${r.shear_angle.toFixed(1)}°</td></tr><tr><td>最高温度 (被削材)</td><td>${s.t_max.toFixed(0)} °C</td></tr>
+      <tr><td>最高温度 (工具、温まった後)</td><td>${s.t_tool.toFixed(0)} °C</td></tr></table>
       <p class="hint">${r.stopped ? '途中で止めました。' : ''}計算時間 ${r.seconds.toFixed(1)} 秒。</p>`;
     $('status').textContent = '';
   } catch (err) { $('status').textContent = `計算できませんでした: ${err}`; }
@@ -203,9 +211,9 @@ $('coefRun').onclick = async () => {
         <tr><td>Ktc [N/mm²]</td><td>${f0(r.ktc)}</td><td>${f0(t[0])}</td></tr><tr><td>Krc [N/mm²]</td><td>${f0(r.krc)}</td><td>${f0(t[1])}</td></tr>
         <tr><td>Kac [N/mm²]</td><td>${f0(r.kac)}</td><td>${f0(t[2])}</td></tr><tr><td>Kte [N/mm]</td><td>${f1(r.kte)}</td><td>${f1(t[3])}</td></tr>
         <tr><td>Kre [N/mm]</td><td>${f1(r.kre)}</td><td>${f1(t[4])}</td></tr><tr><td>寸法効果 mc</td><td>${r.mc.toFixed(3)}</td><td>${(t[5] ?? NaN).toFixed(2)}</td></tr></table>
-        <table style="margin-top:8px"><tr><th>h [mm]</th><th>Fc / Ft [N/mm]</th><th>せん断角</th><th>摩擦角</th><th>τs [MPa]</th></tr>${r.rows.map(q =>
-          `<tr><td>${q.h}</td><td>${f0(q.fc)} / ${f0(q.ft)}</td><td>${(q.phi * 180 / Math.PI).toFixed(1)}°</td><td>${(q.lambda * 180 / Math.PI).toFixed(1)}°</td><td>${f0(q.tau_s)}</td></tr>`).join('')}</table>
-        <p class="hint">Ktc Krc Kac は切取り厚さ 0.05 mm での値 (寸法効果 mc で厚さによって変わる)。直線近似の決定係数 ${r.r2.map(v => v.toFixed(3)).join(' / ')}、計算 ${r.seconds.toFixed(0)} 秒。2 次元の直交切削からの換算なので、ねじれ角の影響は近似です。</p>`;
+        <table style="margin-top:8px"><tr><th>h [mm]</th><th>Fc / Ft [N/mm]</th><th>せん断角</th><th>摩擦角</th><th>τs [MPa]</th><th>安定</th></tr>${r.rows.map(q =>
+          `<tr><td>${q.h}</td><td>${f0(q.fc)} / ${f0(q.ft)}</td><td>${q.steady ? (q.phi * 180 / Math.PI).toFixed(1) + '°' : '—'}</td><td>${q.steady ? (q.lambda * 180 / Math.PI).toFixed(1) + '°' : '—'}</td><td>${q.steady ? f0(q.tau_s) : '—'}</td><td>${q.steady ? `○ (±${(q.fc_cv * 100).toFixed(0)}%)` : '除外'}</td></tr>`).join('')}</table>
+        <p class="hint">「除外」は切削抵抗が落ち着かなかった (後半のばらつき 10 % 以上) か、温度が融点近くまで上がった回で、係数には使っていません。Ktc Krc Kac は切取り厚さ 0.05 mm での値 (寸法効果 mc で厚さによって変わる)。直線近似の決定係数 ${r.r2.map(v => v.toFixed(3)).join(' / ')}、計算 ${r.seconds.toFixed(0)} 秒。2 次元の直交切削からの換算なので、ねじれ角の影響は近似です。</p>`;
       $('coefApply').disabled = false;
     }
   } catch (err) { $('coefOut').textContent = `計算できませんでした: ${err}`; }

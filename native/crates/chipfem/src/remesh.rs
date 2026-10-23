@@ -243,8 +243,15 @@ pub fn mesh_polygon_min(poly: &[[f64; 2]], h: &dyn Fn([f64; 2]) -> f64, h_max: f
             }
         }
     }
-    let tri = tri.iter().map(|t| [used[t[0]], used[t[1]], used[t[2]]]).collect();
-    Some(Mesh { x: nx, tri })
+    let tri: Vec<[usize; 3]> = tri.iter().map(|t| [used[t[0]], used[t[1]], used[t[2]]]).collect();
+    // the triangles must fill the polygon (a misclassified inside would leave holes, or nothing)
+    let poly_area = 0.5 * (0..poly.len()).map(|i| { let (p, q) = (poly[i], poly[(i + 1) % poly.len()]); p[0] * q[1] - q[0] * p[1] }).sum::<f64>();
+    let mesh = Mesh { x: nx, tri };
+    let mesh_area: f64 = (0..mesh.tri.len()).map(|e| mesh.area(e)).sum();
+    if mesh.tri.is_empty() || (mesh_area / poly_area - 1.0).abs() > 1e-3 {
+        return None;
+    }
+    Some(mesh)
 }
 
 /// Point location in a triangle mesh on a uniform bucket grid.

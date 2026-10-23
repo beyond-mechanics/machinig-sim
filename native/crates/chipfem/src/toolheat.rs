@@ -171,6 +171,58 @@ impl ToolHeat {
             .fold(f64::INFINITY, f64::min)
     }
 
+    /// Steady temperature with the given surface temperatures (Dirichlet; NaN: insulated) and
+    /// the far end held: Gauss–Seidel on the conduction equations until the largest change is
+    /// below 0.01 K.
+    pub fn solve_steady(&mut self, surface_temp: &[(usize, f64)]) {
+        let n = self.temp.len();
+        // node–node conductances (assembled once)
+        let mut diag = vec![0.0; n];
+        let mut off: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+        for (e, t) in self.mesh.tri.iter().enumerate() {
+            let (ak, g) = self.elem[e];
+            for a in 0..3 {
+                for b in 0..3 {
+                    let k = ak * (g[a][0] * g[b][0] + g[a][1] * g[b][1]);
+                    if a == b {
+                        diag[t[a]] += k;
+                    } else {
+                        off[t[a]].push((t[b], k));
+                    }
+                }
+            }
+        }
+        let mut held = self.fixed.clone();
+        for &(i, t) in surface_temp {
+            if t.is_finite() {
+                self.temp[i] = t;
+                held[i] = true;
+            }
+        }
+        for i in 0..n {
+            if self.fixed[i] {
+                self.temp[i] = self.t0;
+            }
+        }
+        for _ in 0..200_000 {
+            let mut change: f64 = 0.0;
+            for i in 0..n {
+                if held[i] || diag[i] <= 0.0 {
+                    continue;
+                }
+                let s: f64 = off[i].iter().map(|&(j, k)| k * self.temp[j]).sum();
+                let t = -s / diag[i];
+                // over-relaxation speeds the long, thin conduction paths
+                let t = self.temp[i] + 1.8 * (t - self.temp[i]);
+                change = change.max((t - self.temp[i]).abs());
+                self.temp[i] = t;
+            }
+            if change < 0.01 {
+                break;
+            }
+        }
+    }
+
     pub fn max_temp(&self) -> f64 {
         self.temp.iter().cloned().fold(f64::MIN, f64::max)
     }
