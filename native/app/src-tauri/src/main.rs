@@ -31,11 +31,12 @@ struct Point {
     t_max: f64,
     ep_max: f64,
     elements: usize,
+    t_tool: f64,
 }
 
 impl From<&Sample> for Point {
     fn from(s: &Sample) -> Point {
-        Point { cut: s.cut, fc: s.fc, ft: s.ft, chip: s.chip, t_max: s.t_max, ep_max: s.ep_max, elements: s.elements }
+        Point { cut: s.cut, fc: s.fc, ft: s.ft, chip: s.chip, t_max: s.t_max, ep_max: s.ep_max, elements: s.elements, t_tool: s.t_tool }
     }
 }
 
@@ -49,6 +50,11 @@ struct Fields {
     ep: Vec<f64>,
     mises: Vec<f64>,
     tool: [f64; 5],
+    /// the tool's thermal mesh in the work frame and its nodal temperature [°C] (empty for an
+    /// adiabatic tool)
+    tool_x: Vec<[f64; 2]>,
+    tool_tri: Vec<[usize; 3]>,
+    tool_temp: Vec<f64>,
 }
 
 #[derive(Serialize)]
@@ -62,6 +68,11 @@ struct Outcome {
 }
 
 fn fields(c: &Cutting) -> Fields {
+    fields_with(c, c.solver.tool_heat.as_ref())
+}
+
+/// the fields, with the tool's temperature from `th` (the warmed-up tool at the end of a run)
+fn fields_with(c: &Cutting, th: Option<&chipfem::toolheat::ToolHeat>) -> Fields {
     let s = &c.solver;
     let t = s.tool.as_ref().unwrap();
     let mises = s
@@ -73,7 +84,11 @@ fn fields(c: &Cutting) -> Fields {
             (1.5 * (a * a + b * b + z * z + 2.0 * g[3] * g[3])).sqrt()
         })
         .collect();
-    Fields { x: s.mesh.x.clone(), tri: s.mesh.tri.clone(), temp: s.temp.clone(), ep: s.ep.clone(), mises, tool: [t.c[0], t.c[1], t.re, t.rake, t.clearance] }
+    let (tool_x, tool_tri, tool_temp) = match th {
+        Some(th) => (th.mesh.x.iter().map(|p| [p[0] + t.c[0], p[1] + t.c[1]]).collect(), th.mesh.tri.clone(), th.temp.clone()),
+        None => (Vec::new(), Vec::new(), Vec::new()),
+    };
+    Fields { x: s.mesh.x.clone(), tri: s.mesh.tri.clone(), temp: s.temp.clone(), ep: s.ep.clone(), mises, tool: [t.c[0], t.c[1], t.re, t.rake, t.clearance], tool_x, tool_tri, tool_temp }
 }
 
 #[derive(Default)]
@@ -105,17 +120,106 @@ async fn orthogonal(window: Window, run: State<'_, Run>, req: Request) -> Result
             }
             !stop.load(Ordering::SeqCst)
         });
-        let st = c.steady(0.4);
+        let mut st = c.steady(0.4);
+        let th = c.tool_steady(2.0);
+        st.t_tool = th.max_temp();
         let r = c.p.h / st.chip.max(1e-9);
         let a = c.p.rake_deg.to_radians();
         Outcome {
             shear_angle: (r * a.cos() / (1.0 - r * a.sin())).atan().to_degrees(),
             steady: Point::from(&st),
             history: c.history.iter().map(Point::from).collect(),
-            fields: fields(&c),
+            fields: fields_with(&c, Some(&th)),
             seconds: t0.elapsed().as_secs_f64(),
             stopped: stop.load(Ordering::SeqCst),
         }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+struct CoefRequest {
+    material: String,
+    vc: f64,
+    rake: f64,
+    clearance: f64,
+    re: f64,
+    mu: f64,
+    helix: f64,
+    hs: Vec<f64>,
+}
+
+#[derive(Serialize, Clone)]
+struct CoefProgress {
+    k: usize,
+    n: usize,
+    h: f64,
+    fc: f64,
+    ft: f64,
+    chip: f64,
+}
+
+#[derive(Serialize)]
+struct CoefRow {
+    h: f64,
+    fc: f64,
+    ft: f64,
+    chip: f64,
+    t_max: f64,
+    tau_s: f64,
+    phi: f64,
+    lambda: f64,
+    ktc: f64,
+    krc: f64,
+    kac: f64,
+    fc_cv: f64,
+    steady: bool,
+}
+
+#[derive(Serialize)]
+struct CoefOutcome {
+    ktc: f64,
+    krc: f64,
+    kac: f64,
+    kte: f64,
+    kre: f64,
+    kae: f64,
+    mc: f64,
+    r2: [f64; 2],
+    rows: Vec<CoefRow>,
+    seconds: f64,
+}
+
+/// FEM runs at several uncut chip thicknesses → milling coefficients (chipfem::coefs)
+#[tauri::command]
+async fn milling_coefs(window: Window, run: State<'_, Run>, req: CoefRequest) -> Result<Option<CoefOutcome>, String> {
+    let mat = Material::preset(&req.material).ok_or_else(|| format!("材料 {} はありません", req.material))?;
+    let stop = run.stop.clone();
+    stop.store(false, Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut base = CutParams::new(req.vc, 0.1, req.rake);
+        base.clearance_deg = req.clearance;
+        base.re = req.re;
+        base.mu = req.mu;
+        let t0 = std::time::Instant::now();
+        let r = chipfem::coefs::milling_coefs(&mat, &base, &req.hs, req.helix, |k, n, row, c| {
+            let _ = window.emit("coef-progress", CoefProgress { k, n, h: row.h, fc: row.fc, ft: row.ft, chip: row.chip });
+            let _ = window.emit("fem-fields", fields(c));
+            !stop.load(Ordering::SeqCst)
+        });
+        r.map(|r| CoefOutcome {
+            ktc: r.ktc,
+            krc: r.krc,
+            kac: r.kac,
+            kte: r.kte,
+            kre: r.kre,
+            kae: r.kae,
+            mc: r.mc,
+            r2: r.r2,
+            rows: r.rows.iter().map(|q| CoefRow { h: q.h, fc: q.fc, ft: q.ft, chip: q.chip, t_max: q.t_max, tau_s: q.tau_s, phi: q.phi, lambda: q.lambda, ktc: q.ktc, krc: q.krc, kac: q.kac, fc_cv: q.fc_cv, steady: q.steady }).collect(),
+            seconds: t0.elapsed().as_secs_f64(),
+        })
     })
     .await
     .map_err(|e| e.to_string())
@@ -129,7 +233,7 @@ fn stop(run: State<'_, Run>) {
 fn main() {
     tauri::Builder::default()
         .manage(Run::default())
-        .invoke_handler(tauri::generate_handler![orthogonal, stop])
+        .invoke_handler(tauri::generate_handler![orthogonal, milling_coefs, stop])
         .run(tauri::generate_context!())
         .expect("failed to start the application");
 }

@@ -126,8 +126,56 @@ pub fn resample(poly: &[[f64; 2]], h: &dyn Fn([f64; 2]) -> f64, corner: f64, kee
     out
 }
 
-/// A new mesh of the region bounded by `poly` (counter-clockwise), graded by h(p).
-pub fn mesh_polygon(poly: &[[f64; 2]], h: &dyn Fn([f64; 2]) -> f64, h_max: f64) -> Mesh {
+/// Does a closed polygon cross itself (or touch itself at a non-adjacent edge)?
+pub fn self_intersects(poly: &[[f64; 2]]) -> bool {
+    let n = poly.len();
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    // bounding boxes first: the loop has a few hundred edges
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        for j in i + 2..n {
+            if i == 0 && j == n - 1 {
+                continue;
+            }
+            let (c, d) = (poly[j], poly[(j + 1) % n]);
+            if a[0].max(b[0]) < c[0].min(d[0]) || c[0].max(d[0]) < a[0].min(b[0]) || a[1].max(b[1]) < c[1].min(d[1]) || c[1].max(d[1]) < a[1].min(b[1]) {
+                continue;
+            }
+            let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+            if (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// A new mesh of the region bounded by `poly` (counter-clockwise), graded by h(p); None when the
+/// boundary is not a simple polygon (the caller keeps its mesh and tries again later).
+pub fn mesh_polygon(poly: &[[f64; 2]], h: &dyn Fn([f64; 2]) -> f64, h_max: f64) -> Option<Mesh> {
+    mesh_polygon_min(poly, h, h_max, 0.0)
+}
+
+/// As mesh_polygon, with no triangle refined below `min_area` (Delaunay refinement would
+/// otherwise put slivers next to sharp boundary corners, and one sliver sets the explicit step).
+pub fn mesh_polygon_min(poly: &[[f64; 2]], h: &dyn Fn([f64; 2]) -> f64, h_max: f64, min_area: f64) -> Option<Mesh> {
+    // points closer than a hundredth of the local size are one point
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(poly.len());
+    for &p in poly {
+        if let Some(q) = pts.last() {
+            if (p[0] - q[0]).hypot(p[1] - q[1]) < 0.01 * h(p) {
+                continue;
+            }
+        }
+        pts.push(p);
+    }
+    while pts.len() > 3 && (pts[0][0] - pts[pts.len() - 1][0]).hypot(pts[0][1] - pts[pts.len() - 1][1]) < 0.01 * h(pts[0]) {
+        pts.pop();
+    }
+    if pts.len() < 3 || self_intersects(&pts) {
+        return None;
+    }
+    let poly = &pts[..];
     // seeds on a graded quadtree, away from the boundary
     let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
     for p in poly {
@@ -160,13 +208,14 @@ pub fn mesh_polygon(poly: &[[f64; 2]], h: &dyn Fn([f64; 2]) -> f64, h_max: f64) 
     let nb = verts.len();
     verts.extend(seeds.iter().map(|p| Point2::new(p[0], p[1])));
     let edges: Vec<[usize; 2]> = (0..nb).map(|i| [i, (i + 1) % nb]).collect();
-    let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::bulk_load_cdt(verts, edges).expect("boundary polygon crosses itself");
+    let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::bulk_load_cdt(verts, edges).ok()?;
     let res = cdt.refine(
         RefinementParameters::<f64>::new()
             .exclude_outer_faces(true)
             .keep_constraint_edges()
             .with_angle_limit(AngleLimit::from_deg(24.0))
             .with_max_allowed_area(0.5 * h_max * h_max)
+            .with_min_required_area(min_area)
             .with_max_additional_vertices(200_000),
     );
     let excluded: std::collections::HashSet<_> = res.excluded_faces.iter().map(|f| f.index()).collect();
@@ -194,8 +243,15 @@ pub fn mesh_polygon(poly: &[[f64; 2]], h: &dyn Fn([f64; 2]) -> f64, h_max: f64) 
             }
         }
     }
-    let tri = tri.iter().map(|t| [used[t[0]], used[t[1]], used[t[2]]]).collect();
-    Mesh { x: nx, tri }
+    let tri: Vec<[usize; 3]> = tri.iter().map(|t| [used[t[0]], used[t[1]], used[t[2]]]).collect();
+    // the triangles must fill the polygon (a misclassified inside would leave holes, or nothing)
+    let poly_area = 0.5 * (0..poly.len()).map(|i| { let (p, q) = (poly[i], poly[(i + 1) % poly.len()]); p[0] * q[1] - q[0] * p[1] }).sum::<f64>();
+    let mesh = Mesh { x: nx, tri };
+    let mesh_area: f64 = (0..mesh.tri.len()).map(|e| mesh.area(e)).sum();
+    if mesh.tri.is_empty() || (mesh_area / poly_area - 1.0).abs() > 1e-3 {
+        return None;
+    }
+    Some(mesh)
 }
 
 /// Point location in a triangle mesh on a uniform bucket grid.
