@@ -61,6 +61,8 @@ impl MeshSdf {
         MeshSdf { t, en, bb, cell, lo, dim, bricks }
     }
 
+    pub fn cell_size(&self) -> f64 { self.cell }
+
     pub fn bricks_built(&self) -> usize { self.bricks.iter().filter(|b| b.get().is_some()).count() }
 
     // Exact signed distance at p: [d, nx, ny, nz] with n the outward direction.
@@ -199,5 +201,40 @@ impl MeshSdf {
         let l = js_hypot3(nx, ny, nz);
         let l = if l == 0.0 { 1.0 } else { l };
         [d, nx / l, ny / l, nz / l]
+    }
+
+    // The bricks for the GPU (src/gpusim.rs): every brick whose centre is within `far` plus half a
+    // brick diagonal of the surface, built now; the others are marked −1 (outside) or −2 (deep
+    // inside). Returns the table over the brick grid (slot or mark), the slots' samples, lo and dim.
+    pub fn gpu_grid(&self, far: f64) -> (Vec<i32>, Vec<f32>, [i64; 3], [i64; 3]) {
+        use rayon::prelude::*;
+        let (lo, dim, cell) = (self.lo, self.dim, self.cell);
+        let n = (dim[0] * dim[1] * dim[2]) as usize;
+        let band = far + 0.5 * 3f64.sqrt() * B as f64 * cell;
+        let mark: Vec<i32> = (0..n).into_par_iter().map(|s| {
+            let s = s as i64;
+            let (a, b, c) = (s % dim[0], (s / dim[0]) % dim[1], s / (dim[0] * dim[1]));
+            let (i, j, k) = (a + lo[0], b + lo[1], c + lo[2]);
+            let ctr = |q: i64| (q * B + B / 2) as f64 * cell;
+            // Bricks entirely off the box by more than the band need no distance query.
+            let (px, py, pz) = (ctr(i), ctr(j), ctr(k));
+            let bb = &self.bb;
+            let ex = f64::max(f64::max(bb[0] - px, 0.0), px - bb[3]);
+            let ey = f64::max(f64::max(bb[1] - py, 0.0), py - bb[4]);
+            let ez = f64::max(f64::max(bb[2] - pz, 0.0), pz - bb[5]);
+            if (ex * ex + ey * ey + ez * ez).sqrt() > band { return -1; }
+            let d = self.exact(px, py, pz)[0];
+            if d.abs() < band { let _ = self.brick(i, j, k); 0 } else if d > 0.0 { -1 } else { -2 }
+        }).collect();
+        let mut table = vec![0i32; n];
+        let mut pool = Vec::new();
+        let mut slot = 0;
+        for s in 0..n {
+            if mark[s] < 0 { table[s] = mark[s]; continue; }
+            let b = self.bricks[s].get().unwrap();
+            pool.extend_from_slice(b);
+            table[s] = slot; slot += 1;
+        }
+        (table, pool, lo, dim)
     }
 }

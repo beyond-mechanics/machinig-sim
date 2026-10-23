@@ -265,15 +265,19 @@ export class MeshSDF {
 }
 
 // Lattice points (spacing dx, cell centres) inside a closed mesh: ray parity along +x for every
-// (y, z) row. Returns Float64Array [x, y, z, …].
-export function fillMesh(tris, dx, max = Infinity) {
+// (y, z) row. box [x0, y0, z0, x1, y1, z1] keeps only the points in it (the lattice stays that of
+// the whole mesh). Returns Float64Array [x, y, z, …], or null past max points.
+export function fillMesh(tris, dx, max = Infinity, box = null) {
   const b = bounds(tris), y0 = b[1], z0 = b[2];
   const ny = Math.max(1, Math.ceil((b[4] - y0) / dx)), nz = Math.max(1, Math.ceil((b[5] - z0) / dx));
+  const k = box || [-Infinity, -Infinity, -Infinity, Infinity, Infinity, Infinity];
+  const ylo = Math.max(0, Math.ceil((k[1] - y0) / dx - 0.5)), yhi = Math.min(ny - 1, Math.floor((k[4] - y0) / dx - 0.5));
+  const zlo = Math.max(0, Math.ceil((k[2] - z0) / dx - 0.5)), zhi = Math.min(nz - 1, Math.floor((k[5] - z0) / dx - 0.5));
   const rows = new Map();   // row index → crossing x values
   for (let i = 0; i < tris.length; i += 9) {
     const ax = tris[i], ay = tris[i + 1], az = tris[i + 2], bx = tris[i + 3], by = tris[i + 4], bz = tris[i + 5], cx = tris[i + 6], cy = tris[i + 7], cz = tris[i + 8];
-    const jy0 = Math.max(0, Math.ceil((Math.min(ay, by, cy) - y0) / dx - 0.5)), jy1 = Math.min(ny - 1, Math.floor((Math.max(ay, by, cy) - y0) / dx - 0.5));
-    const jz0 = Math.max(0, Math.ceil((Math.min(az, bz, cz) - z0) / dx - 0.5)), jz1 = Math.min(nz - 1, Math.floor((Math.max(az, bz, cz) - z0) / dx - 0.5));
+    const jy0 = Math.max(ylo, Math.ceil((Math.min(ay, by, cy) - y0) / dx - 0.5)), jy1 = Math.min(yhi, Math.floor((Math.max(ay, by, cy) - y0) / dx - 0.5));
+    const jz0 = Math.max(zlo, Math.ceil((Math.min(az, bz, cz) - z0) / dx - 0.5)), jz1 = Math.min(zhi, Math.floor((Math.max(az, bz, cz) - z0) / dx - 0.5));
     const den = (by - ay) * (cz - az) - (cy - ay) * (bz - az);
     if (Math.abs(den) < 1e-30) continue;                     // parallel to the rays
     for (let jz = jz0; jz <= jz1; jz++) for (let jy = jy0; jy <= jy1; jy++) {
@@ -291,9 +295,28 @@ export function fillMesh(tris, dx, max = Infinity) {
     xs.sort((p, q) => p - q);
     const jy = key % ny, jz = (key - jy) / ny, Y = y0 + (jy + 0.5) * dx, Z = z0 + (jz + 0.5) * dx;
     for (let s = 0; s + 1 < xs.length; s += 2) {
-      for (let X = x0 + (Math.ceil((xs[s] - x0) / dx - 0.5) + 0.5) * dx; X < xs[s + 1]; X += dx) out.push(X, Y, Z);
+      const a = Math.max(xs[s], k[0]), e = Math.min(xs[s + 1], k[3]);
+      for (let X = x0 + (Math.ceil((a - x0) / dx - 0.5) + 0.5) * dx; X < e; X += dx) out.push(X, Y, Z);
       if (out.length / 3 > max) return null;
     }
   }
   return Float64Array.from(out);
+}
+
+// The part of the work a run can reach: the box the tool sweeps (straight: its outline plus the
+// travel along +x; spinning: the circle of its largest radius about the axis, along the feed),
+// widened by a margin of 12 spacings or half the tool's radius. Any one length unit. p: motion,
+// travel, angle [°], fr (drill, per turn), fz and z (mill), axis [x, y] or null.
+export function cutRegion(tris, p, dx) {
+  const tb = bounds(tris);
+  if (p.motion === 'linear') {
+    const m = Math.max(12 * dx, 0.25 * Math.max(tb[4] - tb[1], tb[5] - tb[2]));
+    return [tb[0] - m, tb[1] - m, tb[2] - m, tb[3] + p.travel + m, tb[4] + m, tb[5] + m];
+  }
+  const ax = p.axis ? p.axis[0] : 0.5 * (tb[0] + tb[3]), ay = p.axis ? p.axis[1] : 0.5 * (tb[1] + tb[4]);
+  let R = 0;
+  for (let i = 0; i < tris.length; i += 3) R = Math.max(R, Math.hypot(tris[i] - ax, tris[i + 1] - ay));
+  const m = Math.max(12 * dx, 0.5 * R), turns = p.angle / 360;
+  const feed = p.motion === 'mill' ? p.fz * p.z * turns : 0, drop = p.motion === 'drill' ? p.fr * turns : 0;
+  return [ax - R - m, ay - R - m, tb[2] - drop - m, ax + feed + R + m, ay + R + m, tb[5] + m];
 }

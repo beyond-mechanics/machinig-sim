@@ -17,12 +17,17 @@ export function nativeBackend() {
 // the backend. Without a backend, the worker itself.
 export function wrapWorker(worker, backend) {
   if (!backend) return worker;
-  const w = { onmessage: null, onerror: null, native: backend.name };
+  const w = { onmessage: null, onerror: null, native: backend.name, gpu: '', gpuNote: '' };   // gpu: the GPU's name when the core runs there
   let native = false, running = false, runN = 0, wall = 0, gen = 0, ready = null, setReady = null;
   const fail = (err) => { running = false; if (window.cutFatal) window.cutFatal(`ネイティブ計算: ${err && err.message || err}`); };
   worker.onerror = (e) => { if (w.onerror) w.onerror(e); };
   worker.onmessage = (e) => {
-    if (e.data.type === 'nativeState') { const p = backend.init(e.data.json); p.catch(fail); setReady(p); return; }
+    if (e.data.type === 'nativeState') {
+      const p = backend.init(e.data.json);
+      p.then((r) => { w.gpu = (r && r.gpu) || ''; w.gpuNote = (r && r.gpuNote) || ''; }, fail);
+      setReady(p);
+      return;
+    }
     if (w.onmessage) w.onmessage(e);
   };
   async function loop(g) {

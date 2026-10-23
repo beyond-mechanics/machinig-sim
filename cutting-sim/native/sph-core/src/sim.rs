@@ -21,6 +21,11 @@ use crate::util::{js_hypot2, js_hypot3, Shared};
 const PI: f64 = std::f64::consts::PI;
 const DEG: f64 = PI / 180.0;
 
+// The whole step on the GPU (STL mode).
+#[cfg(feature = "gpu")]
+#[path = "gpusim.rs"]
+pub mod gpusim;
+
 #[derive(Deserialize)]
 pub struct Arrays {
     pub x: Vec<f64>, pub y: Vec<f64>, pub z: Vec<f64>, pub vx: Vec<f64>, pub vy: Vec<f64>, pub vz: Vec<f64>,
@@ -136,6 +141,8 @@ pub struct Sim {
     // Positions and supports before the last integration, kept for the chip analysis of a sampling step.
     snap: Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<u8>)>, want_snap: bool,
     xr: Option<(Vec<f64>, Vec<f64>, Vec<f64>)>, dead_ref: u64, last_sort: Option<u64>,
+    // No reordering at a search (the GPU keeps its own copy of the particles in their order).
+    pub no_reorder: bool,
     pub n_dead: u64, pub n_evac: u64,
     pub steps: u64, pub t: f64, pub done: bool,
     ang: f64, mx: f64, mz: f64, ca: f64, sa: f64,
@@ -164,7 +171,7 @@ impl Sim {
             q: vec![0.0; 4 * n], lm: vec![0.0; 19 * n], pk: vec![0.0; 9 * n], ac: vec![0.0; 6 * n], ef: Vec::new(),
             sc: d.sc, cfg: d.cfg, mat: d.mat, sdf: d.tool.map(|t| MeshSdf::new(t, far)), wedge: d.wedge, heat: d.heat, motion, per, ox: 0.0, mill: d.mill,
             fixp: Held::default(), movp: Moving::default(), snap: None, want_snap: false,
-            xr: None, dead_ref: 0, last_sort: None, n_dead, n_evac, steps: d.steps, t: d.t, done: false,
+            xr: None, dead_ref: 0, last_sort: None, no_reorder: false, n_dead, n_evac, steps: d.steps, t: d.t, done: false,
             ang: 0.0, mx: 0.0, mz: 0.0, ca: 1.0, sa: 0.0, imp: [0.0; 5], imp_t: 0.0, work_in: 0.0, heat_tool: 0.0,
             hist: Hist::default(), last_sample: 0.0, pieces: 0, failed: 0, searches: 0, prof: [0.0; 8],
         };
@@ -276,7 +283,7 @@ impl Sim {
         let key = |x: f64, y: f64, z: f64| -> u32 {
             (((x - x0) / cell).floor() as i64 + cw * (((y - y0) / cell).floor() as i64 + ch * i64::min(cd - 1, ((z - z0) / czs).floor() as i64))) as u32
         };
-        if self.last_sort.map_or(true, |l| self.steps - l >= 50) {
+        if !self.no_reorder && self.last_sort.map_or(true, |l| self.steps - l >= 50) {
             let keys: Vec<u32> = (0..n).into_par_iter().map(|i| if self.dead[i] != 0 { 0 } else { key(self.x[i], self.y[i], self.z[i]) }).collect();
             self.reorder(&keys, ncell);
             self.last_sort = Some(self.steps);

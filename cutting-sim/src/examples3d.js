@@ -106,7 +106,7 @@ const drillTool = () => {
 const mk = (f) => () => orient(Float64Array.from(f()));
 // cfg: the motion and feeds each example is set up for (the tool sits where the first cut starts).
 export const EXAMPLES = {
-  plane: { name: '平削り（すくい角 5°、h = 0.1 mm）', tool: mk(planeTool), work: mk(planeWork), cfg: { motion: 'linear', travel: 0.6, dxUm: 25 } },
-  mill: { name: 'エンドミル φ2・2枚刃・ねじれ 30°（ae 0.2 × ap 0.15 mm、fz 0.1）', tool: mk(millTool), work: mk(millWork), cfg: { motion: 'mill', z: 2, fz: 0.1, angle: 70, dxUm: 20, axis: [1.0, -0.8] } },
-  drill: { name: 'ドリル φ1・先端角 118°・2枚刃・ねじれ 30°', tool: mk(drillTool), work: mk(drillWork), cfg: { motion: 'drill', fr: 0.2, angle: 120, dxUm: 30, axis: [0.8, 0.8], hold: 'sides' } },
+  plane: { name: '平削り（すくい角 5°、h = 0.1 mm）', short: '平削りバイト', tool: mk(planeTool), work: mk(planeWork), cfg: { motion: 'linear', travel: 0.6, dxUm: 25 } },
+  mill: { name: 'エンドミル φ2・2枚刃・ねじれ 30°（ae 0.2 × ap 0.15 mm、fz 0.1）', short: 'φ2 エンドミル', tool: mk(millTool), work: mk(millWork), cfg: { motion: 'mill', z: 2, fz: 0.1, angle: 70, dxUm: 20, axis: [1.0, -0.8] } },
+  drill: { name: 'ドリル φ1・先端角 118°・2枚刃・ねじれ 30°', short: 'φ1 ドリル', tool: mk(drillTool), work: mk(drillWork), cfg: { motion: 'drill', fr: 0.2, angle: 120, dxUm: 30, axis: [0.8, 0.8], hold: 'sides' } },
 };

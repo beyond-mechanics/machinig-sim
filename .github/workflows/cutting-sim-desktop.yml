@@ -1,5 +1,6 @@
 # Cutting simulator, native core and desktop app (cutting-sim/native).
-# - core: the Rust core must step like the JS solver (a few steps from the same state agree to rounding).
+# - core: the Rust core must step like the JS solver (a few steps from the same state agree to rounding),
+#   and the GPU step like the CPU one (to f32 rounding).
 # - windows: the Tauri app for Windows, as a portable exe and a per-user installer, and the GPU
 #   prototype benchmark with two example states (artifacts).
 name: cutting-sim desktop
@@ -25,8 +26,11 @@ jobs:
         with: { workspaces: cutting-sim/native/sph-core }
       - run: npm ci
       - run: cargo build --release --manifest-path native/sph-core/Cargo.toml
-      - name: GPU prototype builds
-        run: cargo build --release --manifest-path native/sph-core/Cargo.toml --features gpu --bin sphgpu
+      - name: GPU step against the CPU step (Vulkan on the CPU, llvmpipe; drill example, 300 steps)
+        run: |
+          sudo apt-get install -y -q mesa-vulkan-drivers
+          cargo build --release --manifest-path native/sph-core/Cargo.toml --features gpu
+          node native/scripts/gpucheck.mjs native/sph-core/target/release/sphcli 300
       - name: Native core against the JS solver (drill example, 2 steps)
         run: node native/scripts/compare.mjs drill 2 native/sph-core/target/release/sphcli 2
 

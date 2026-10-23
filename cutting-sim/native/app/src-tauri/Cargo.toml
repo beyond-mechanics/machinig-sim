@@ -1,6 +1,7 @@
 [package]
 name = "cutting-sim-app"
 version = "0.1.0"
+authors = ["Naruoka Yutaro"]
 edition = "2021"
 description = "Cutting simulator desktop app: the page of cutting-sim with the native SPH core"
 license = "MIT"
@@ -13,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde_json = "1"
 rayon = "1"
-sph-core = { path = "../../sph-core" }
+sph-core = { path = "../../sph-core", features = ["gpu"] }
 
 [profile.release]
 opt-level = 3

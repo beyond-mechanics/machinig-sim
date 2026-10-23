@@ -1,6 +1,7 @@
 [package]
 name = "sph-core"
 version = "0.1.0"
+authors = ["Naruoka Yutaro"]
 edition = "2021"
 description = "Native core of the cutting simulator: the 3D SPH solver of src/sph3d.js (STL mode), multi-threaded"
 license = "MIT"
