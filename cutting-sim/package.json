@@ -1,6 +1,7 @@
 {
   "name": "cutting-sim",
   "version": "0.1.0",
+  "author": "Naruoka Yutaro",
   "private": true,
   "type": "module",
   "scripts": {

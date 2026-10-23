@@ -132,6 +132,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
 .notes summary { cursor: pointer; }
 .notes pre { margin: 6px 0 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; max-width: calc(80ch + 28px); }
 .brand .caution { margin-top: 4px; font-size: 12px; color: var(--warn); }
+.brand .sign { margin-top: 2px; font-size: 12px; color: var(--muted, #888); }
 @media (prefers-reduced-motion: reduce) { .progress > i { transition: none; } }
 .fatal { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--warn); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 13px; }
 .fatal code { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
@@ -144,6 +145,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
       <h1>切削シミュレーター（2D・3D）</h1>
       <p>工具と被削材の接触部で、切りくずの生成と排出、温度、応力、ひずみ、切削抵抗、工具の温度と摩耗を計算します（粒子法 SPH、2D 平面ひずみと 3D 傾斜切削）</p>
       <p class="caution">研究用の試作です。結果は参考値で、実際の加工条件の決定には使わないでください。</p>
+      <p class="sign">作成：/*AUTHOR*/　版 /*VERSION*/</p>
     </div>
     <span class="pill" id="state" data-s="idle">待機</span>
     <button class="primary" id="run">切削開始</button>
@@ -366,6 +368,7 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
     <div class="legal">
       <h2>ご利用にあたって・ライセンス</h2>
       <p>研究・教育用の試作ソフトウェアです。切削抵抗や温度は文献値や便覧値と 1 割前後で合わせていますが、材料定数や解像度によって大きく変わります。結果は参考値として扱い、実際の加工条件・工具選定・安全に関わる判断には使わないでください。結果によって生じた損害について、作者は責任を負いません。</p>
+      <p>作成：/*AUTHOR*/、版 /*VERSION*/。</p>
       <p>このページには次のオープンソースソフトウェアが含まれています。</p>
       <details>
         <summary>three.js（MIT License）</summary>

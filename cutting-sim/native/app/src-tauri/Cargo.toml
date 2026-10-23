@@ -1,6 +1,7 @@
 [package]
 name = "cutting-sim-app"
 version = "0.1.0"
+authors = ["Naruoka Yutaro"]
 edition = "2021"
 description = "Cutting simulator desktop app: the page of cutting-sim with the native SPH core"
 license = "MIT"
