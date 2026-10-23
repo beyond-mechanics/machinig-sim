@@ -25,7 +25,8 @@ fn main() {
                 let mut body = Vec::new();
                 rq.as_reader().read_to_end(&mut body).ok();
                 match eng.init(&body) {
-                    Ok(n) => Response::from_string(format!("{{\"n\":{n},\"threads\":{}}}", rayon::current_num_threads())).with_header(ct("application/json")).boxed(),
+                    Ok(n) => Response::from_string(serde_json::json!({ "n": n, "threads": rayon::current_num_threads(), "gpu": eng.gpu_name(), "gpuNote": eng.gpu_note }).to_string())
+                        .with_header(ct("application/json")).boxed(),
                     Err(e) => Response::from_string(e).with_status_code(400).boxed(),
                 }
             }

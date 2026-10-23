@@ -1,6 +1,7 @@
 // Runs a state written by native/scripts/dump.mjs to the end (or for a number of steps) and writes
 // the force history, a summary and, on request, the final particle state.
-// sphcli <state.json> [--steps N] [--threads T] [--out result.json] [--state final.json]
+// sphcli <state.json> [--steps N] [--threads T] [--out result.json] [--state final.json] [--gpu]
+// (--gpu: the whole step on the GPU, STL mode; needs the gpu feature)
 use serde_json::json;
 use sph_core::sim::{Dump, Sim};
 use std::time::Instant;
@@ -14,16 +15,46 @@ fn main() {
     let t0 = Instant::now();
     let d: Dump = serde_json::from_slice(&std::fs::read(path).expect("read state")).expect("parse state");
     let mut s = Sim::new(d);
-    let load = t0.elapsed().as_secs_f64();
-    let t1 = Instant::now();
+    // --no-reorder: keep the particle order (as the GPU run does), to compare states particle by particle.
+    if args.iter().any(|a| a == "--no-reorder") { s.no_reorder = true; }
+    let gpu = args.iter().any(|a| a == "--gpu");
+    #[allow(unused_mut)]
+    let mut gprof: Option<(String, [f64; 4])> = None;
+    let load;
+    let t1;
     let mut k = 0u64;
     let mut last = Instant::now();
-    while !s.done && k < max_steps {
-        s.step_sample();
-        k += 1;
-        if last.elapsed().as_secs_f64() > 10.0 {
-            last = Instant::now();
-            eprintln!("step {} progress {:.1}% {:.1} ms/step", s.steps, 100.0 * s.progress(), 1e3 * t1.elapsed().as_secs_f64() / k as f64);
+    if gpu {
+        #[cfg(feature = "gpu")]
+        {
+            let mut g = sph_core::sim::gpusim::GpuSim::new(s).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(2) });
+            load = t0.elapsed().as_secs_f64();
+            eprintln!("GPU: {}", g.adapter);
+            t1 = Instant::now();
+            while !g.s.done && k < max_steps {
+                g.step_sample();
+                k += 1;
+                if last.elapsed().as_secs_f64() > 10.0 {
+                    last = Instant::now();
+                    eprintln!("step {} progress {:.1}% {:.2} ms/step", g.s.steps, 100.0 * g.s.progress(), 1e3 * t1.elapsed().as_secs_f64() / k as f64);
+                }
+            }
+            g.download_particles();
+            gprof = Some((g.adapter.clone(), g.prof.map(|v| 1e3 * v / k.max(1) as f64)));
+            s = g.s;
+        }
+        #[cfg(not(feature = "gpu"))]
+        { eprintln!("--gpu: built without the gpu feature"); std::process::exit(2); }
+    } else {
+        load = t0.elapsed().as_secs_f64();
+        t1 = Instant::now();
+        while !s.done && k < max_steps {
+            s.step_sample();
+            k += 1;
+            if last.elapsed().as_secs_f64() > 10.0 {
+                last = Instant::now();
+                eprintln!("step {} progress {:.1}% {:.1} ms/step", s.steps, 100.0 * s.progress(), 1e3 * t1.elapsed().as_secs_f64() / k as f64);
+            }
         }
     }
     let run = t1.elapsed().as_secs_f64();
@@ -41,6 +72,7 @@ fn main() {
         "loadS": load, "runS": run, "msPerStep": 1e3 * run / k.max(1) as f64, "threads": rayon::current_num_threads(),
         "searches": s.searches, "profMs": s.prof.iter().map(|v| 1e3 * v / k.max(1) as f64).collect::<Vec<_>>(), "pairsHeld": fp, "pairsMoving": mp, "bricks": s.sdf.as_ref().map_or(0, |m| m.bricks_built()),
         "ttool": s.heat.as_ref().map(|h| h.max_t()),
+        "gpu": gprof.as_ref().map(|(a, p)| json!({ "adapter": a, "profMs": { "step": p[0], "search": p[1], "sample": p[2], "copies": p[3] } })),
         "summary": { "fx": mean(&h.fc), "fy": mean(&h.ft), "fz": mean(&h.fr), "torque": mean(&h.mz), "tmax": s.max_temp(),
             "rpm": s.rpm(), "angle": s.angle_deg(), "travel": s.travel_mm(), "pieces": s.pieces, "failed": s.failed, "evacuated": s.n_evac, "dead": s.n_dead },
         "hist": h,

@@ -10,7 +10,8 @@ native/
     src/tool2d.rs    刃先断面（tool.js のくさび・多角形）
     src/toolheat.rs  工具の温度格子（toolheat.js の接触熱と伝導。定常温度と摩耗は JS 側）
     src/meshsdf.rs   工具メッシュの符号付き距離場（src/mesh.js の MeshSDF）
-    src/gpu.rs, gpu.wgsl  GPU 試作（wgpu、f32）。対の 2 工程をシェーダーで計算して CPU と比べる（sphgpu）
+    src/gpusim.rs, gpusim.wgsl  GPU 計算（wgpu、f32）。STL モードのステップ全体
+    src/gpu.rs, gpu.wgsl  GPU ベンチ。対の 2 工程を GPU と CPU で計って比べる（sphgpu）
     src/engine.rs    画面とのやりとり（状態の受け取り、時間で区切った計算、バイナリのフレーム）
     src/bin/sphcli.rs    コマンドライン実行（状態ファイル → 力の履歴と要約）
     src/bin/sphserve.rs  ローカルサーバー（ページと計算を 127.0.0.1 で配る、試験用）
@@ -60,18 +61,26 @@ native/
 画面から計算したときの全体の時間（4 コア、表示込み）は、3D エンドミル標準条件で JS 710 秒に対して 306 秒です。
 粒子が 1 万個未満だと並列の効きが落ちる（4 スレッドで 2 倍強）ので、粒子を増やすほど差が開きます。
 表示の更新は 1 秒に約 4 回にしています（毎回の書き戻しと描画が計算の CPU を食うため）。
-さらに速くするには GPU 計算（wgpu、Windows では DirectX 12）に移します（今後）。
+STL 取り込みモードは、GPU があればそちらで計算します（下）。
 
-## GPU 試作
+## GPU 計算（STL 取り込みモード）
 
-1 ステップの時間の約 7 割を占める対の 2 工程（速度勾配と補正行列、運動量）を GPU のコンピュートシェーダー
-（wgpu、Windows では DirectX 12）に移した試作です。まだアプリでは使っていません。GPU の計算は f32 なので
-JS とはビット一致せず、CPU（f64）との差は相対 1e-6 程度です（ドリル例・3D エンドミル例で確認）。
+アプリでは、STL 取り込みモードの計算を GPU（wgpu、Windows では DirectX 12 か Vulkan）で行います。GPU が見つからない
+ときや使えないときは、今までどおり CPU で計算します（環境変数 `SPH_GPU=0` でも CPU に戻せます）。画面の下の行に
+「GPU 計算（GPU の名前、… ms/ステップ）」と出ます。3D 傾斜切削と 3D エンドミルは、まだ CPU です。
 
-GitHub Actions の成果物 `CuttingSim-gpu-bench` を展開して `gpu-bench.bat` を実行すると、その PC の GPU で
-同じ状態から CPU と GPU の時間・差を測り、`gpu-bench-result.txt` に書きます。`gpuMs` が `cpuMs` より十分小さければ、
-ステップ全体を GPU に載せる価値があります。この開発環境には GPU がなく、CPU で GPU をまねる llvmpipe では
-GPU 側が CPU の半分の速さでした（正しさの確認だけの数字です）。
+- ステップの全工程（速度勾配、Shepard フィルター、構成則と破壊、運動量、熱伝導、積分と工具接触）をシェーダーに
+  移しました（`src/gpusim.wgsl`、`src/gpusim.rs`）。粒子は GPU に置いたままで、CPU は近傍探索（粒子がスキンの半分
+  動いたとき、ドリル例で約 50 ステップに 1 回）とサンプル（1 回の計算で約 100 回）のときだけ粒子を読み戻します。
+  ふだんのステップで読み戻すのは、力の合計と探索の要否の数十バイトだけです。
+- 工具の距離場は、表面の近くのブリック（8³ セル）を最初に全部作って GPU に置きます。
+- GPU は f32 で計算するので、CPU（f64）とはビット一致しません。ドリル例を最後まで計算して、推力 328 N
+  （CPU 324 N、JS 324 N）、トルク 134 mNm（CPU・JS とも 134 mNm）、最後の 1/4 の最高温度の平均 685 °C（CPU 668 °C）。
+  `node native/scripts/gpucheck.mjs <sphcli>` が 300 ステップで力の差を確かめます（CI でも実行、0.3% 程度）。
+- `sphcli 状態.json --gpu` でコマンドラインからも GPU で計算できます（`--features gpu` でビルド）。
+
+会社 PC（NVIDIA RTX PRO 2000）でのベンチでは、重い 2 工程が CPU 14 スレッドの 10〜11 倍でした（`sphgpu`、
+成果物 `CuttingSim-gpu-bench`）。この開発環境には GPU がなく、CPU で GPU をまねる llvmpipe で正しさだけを確かめています。
 
 ## 作り方
 
@@ -100,6 +109,6 @@ cargo build --release --manifest-path native/sph-core/Cargo.toml --features serv
 
 ## 次の段階
 
-1. GPU 計算で粒子数を 10 倍級に。対の 2 工程は試作済み（上）。会社 PC で速さを測ってから、残り（構成則、熱伝導、積分と工具接触、近傍探索）を移します。
+1. GPU 計算を 3D 傾斜切削・3D エンドミルにも広げる（工具温度の格子の接触熱を GPU で）。近傍探索も GPU に移し、粒子数を 10 倍級に。
 2. 高解像度向けの表示（フレームを f32 に、表示する粒子を間引く）、結果の VTK 書き出し（ParaView）、条件スイープの一括実行。
 3. 2D（直交切削・エンドミル断面）の移植。今でも 1 分以内に終わるので後回しにしています。
