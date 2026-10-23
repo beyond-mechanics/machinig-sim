@@ -272,6 +272,36 @@ test('STL mesh: exact distance and normal of a box, fill count matches the volum
   for (let i = 0; i < n; i++) for (let k = 0; k < 9; k++) dv.setFloat32(84 + 50 * i + 12 + 4 * k, w[9 * i + k], true);
   const back = parseSTL(buf, 1e-3);
   assert.ok(Math.abs(volume(back) - 0.16e-9) < 1e-15);
+  // A box keeps exactly the points of the whole fill that lie in it.
+  const box = [0.22, 0.1, -0.31, 0.61, 0.33, 0.5], inBox = (a) => a[0] >= box[0] && a[0] < box[3] && a[1] >= box[1] && a[1] <= box[4] && a[2] >= box[2] && a[2] <= box[5];
+  const pick = (f) => Array.from({ length: f.length / 3 }, (_, i) => [f[3 * i], f[3 * i + 1], f[3 * i + 2]].map((v) => +v.toFixed(9)).join());
+  const part = fillMesh(w, 0.05, Infinity, box);
+  assert.deepEqual(pick(part).sort(), pick(fill).filter((k) => inBox(k.split(',').map(Number))).sort());
+  assert.ok(part.length > 0 && part.length < fill.length);
+});
+
+test('STL mode: a large work is cropped to the reach of the tool, with its cut faces held', async () => {
+  const { Cutting3D } = await import('../src/sph3d.js');
+  const { EXAMPLES } = await import('../src/examples3d.js');
+  const { bounds } = await import('../src/mesh.js');
+  const e = EXAMPLES.drill, ew = bounds(e.work());
+  const v = [[-15, -43, -50], [25, -43, -50], [25, 37, -50], [-15, 37, -50], [-15, -43, 10], [25, -43, 10], [25, 37, 10], [-15, 37, 10]];
+  const big = Float64Array.from([[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]].flatMap((q) => q.flatMap((i) => v[i])));
+  const d = [5 - 0.5 * (ew[0] + ew[3]), -3 - 0.5 * (ew[1] + ew[4]), 10 - ew[5]];   // the tool at the top centre of the 40 × 80 × 60 mm block
+  const m = (t, o) => Float64Array.from(t, (x, i) => (x + o[i % 3]) * 1e-3);
+  const s = new Cutting3D({ mode: 'mesh', mat: 'S45C', vc: 200, dxUm: 40, toolTris: m(e.tool(), d), workTris: m(big, [0, 0, 0]), motion: 'drill', fr: 0.2, angle: 60,
+    axis: [(e.cfg.axis[0] + d[0]) * 1e-3, (e.cfg.axis[1] + d[1]) * 1e-3], crop: true });
+  assert.ok(s.N > 1000 && s.N < 60000, `N ${s.N}`);
+  const wb = s.wb.map((x) => x * 1e3);
+  assert.ok(wb[3] - wb[0] < 2.5 && wb[4] - wb[1] < 2.5 && Math.abs(wb[5] - 10) < 1e-9, `box ${wb}`);   // the top face stays the real one
+  let side = 0, top = 0;
+  for (let i = 0; i < s.N; i++) {
+    const x = s.x[i] * 1e3, z = s.z[i] * 1e3;
+    if (x < wb[0] + 0.1) side += s.fixed[i] ? 1 : 0;
+    if (z > wb[5] - 0.05 && Math.hypot(x - 5, s.y[i] * 1e3 + 3) < 0.8) top += s.fixed[i] ? 1 : 0;
+  }
+  assert.ok(side > 0, 'cut faces held');
+  assert.equal(top, 0, 'the real top face near the tool stays free');
 });
 
 test('STL mode: planing with the example tool forms a chip, the force settles, and the surface view closes', async () => {

@@ -6,7 +6,7 @@ import { makeTool, toolOutline } from './tool.js';
 import { View3D } from './view3d.js';
 import { View3DCanvas } from './view3dcanvas.js';
 import { renderField, legendGradient, bandsOf } from './fieldview.js';
-import { parseSTL, bounds, volume, weld } from './mesh.js';
+import { parseSTL, bounds, volume, weld, fillMesh, cutRegion } from './mesh.js';
 import { EXAMPLES } from './examples3d.js';
 import { nativeBackend, wrapWorker } from './native.js';
 
@@ -92,7 +92,7 @@ function readCfg() {
     return {
       mode, mat: matSel.value, vc: num('vc'), mu: num('mu'), friction: $('fric').value, fracture: $('fracture').checked, efScale: num('efs'), flowScale: num('fls'),
       motion: mot, spin: parseFloat($('sspin').value), z: num('sflutes'), fz: num('sfz'), fr: num('sfr'), travel: num('stravel'), angle: num('sangle'), dxUm: num('sdx'), hold: $('shold').value,
-      toolTris: toM(stl.tool && stl.tool.t, off), workTris: toM(stl.work && stl.work.t, [0, 0, 0]), maxN: STL_MAX, axis: stlAxis() && stlAxis().map((v) => v * 1e-3),
+      toolTris: toM(stl.tool && stl.tool.t, off), workTris: toM(stl.work && stl.work.t, [0, 0, 0]), maxN: STL_MAX, axis: stlAxis() && stlAxis().map((v) => v * 1e-3), crop: !!(stl.tool && stl.work && stl.work.t && stlCrop()),
     };
   }
   if (mode === '3d') return {
@@ -123,13 +123,60 @@ async function loadStl(key, f) {
   try { stl[key] = meshPart(parseSTL(await f.arrayBuffer(), UNIT[$('sunit').value]), f.name, f); }
   catch (err) { stl[key] = { err: `${f.name}：${err.message}`, file: f }; }
 }
-for (const [id, key] of [['stool', 'tool'], ['swork', 'work']]) $(id).addEventListener('change', async () => {
-  const f = $(id).files[0];
-  if (!f) return;
-  $('sex').value = '';
-  await loadStl(key, f);
-  stlInfo(); reset();
-});
+for (const [k, e] of Object.entries(EXAMPLES)) {
+  $('stoolsrc').appendChild(new Option(`例：${e.short}`, k));
+  $('sworksrc').appendChild(new Option(`例：${e.short} 用のワーク`, k));
+}
+const EX_FOR = { linear: 'plane', mill: 'mill', drill: 'drill' };   // the example that fills a missing part
+const exPart = (key, k) => Object.assign(meshPart(EXAMPLES[k][key](), key === 'tool' ? `例の${EXAMPLES[k].short}` : `${EXAMPLES[k].short} 用の例のワーク`), { ex: k });
+const PART = { tool: ['stool', 'stoolsrc'], work: ['swork', 'sworksrc'] };
+// One part from a file and the other from an example: put the tool where the example's tool sits
+// on its own work, measured from the top centre of the work (straight motion: from its −x end;
+// end mill: from its −y side, so that it cuts the side as in the example).
+function placeTool() {
+  const t = stl.tool, w = stl.work;
+  if (!t || !w || t.err || w.err || t.ex === w.ex || (!t.ex && !w.ex)) return;
+  const lin = $('smotion').value === 'linear', side = $('smotion').value === 'mill', mid = (b, k) => 0.5 * (b[k] + b[k + 3]);
+  let d;
+  if (t.ex) {
+    const ew = bounds(EXAMPLES[t.ex].work()), uw = bounds(w.t);
+    d = [lin ? uw[0] - ew[0] : mid(uw, 0) - mid(ew, 0), side ? uw[1] - ew[1] : mid(uw, 1) - mid(ew, 1), uw[5] - ew[5]];
+    const ax = EXAMPLES[t.ex].cfg.axis;
+    $('sax').value = ax ? +(ax[0] + d[0]).toFixed(4) : ''; $('say').value = ax ? +(ax[1] + d[1]).toFixed(4) : '';
+  } else {
+    const et = bounds(EXAMPLES[w.ex].tool()), ut = bounds(t.t);
+    d = [lin ? et[0] - ut[0] : mid(et, 0) - mid(ut, 0), mid(et, 1) - mid(ut, 1), et[2] - ut[2]];
+    $('sax').value = ''; $('say').value = '';
+  }
+  ['sox', 'soy', 'soz'].forEach((id, k) => { $(id).value = +d[k].toFixed(4); });
+}
+// A file for one part: the other, if still empty, comes from the example for the current motion.
+function fillOther(key) {
+  const o = key === 'tool' ? 'work' : 'tool';
+  if (stl[o]) return;
+  const k = EX_FOR[$('smotion').value];
+  stl[o] = exPart(o, k); $(PART[o][1]).value = k;
+}
+for (const [key, [id, src]] of Object.entries(PART)) {
+  $(id).addEventListener('change', async () => {
+    const f = $(id).files[0];
+    if (!f) return;
+    $('sex').value = ''; $(src).value = 'file';
+    await loadStl(key, f);
+    fillOther(key); placeTool(); stlInfo(); reset();
+  });
+  $(src).addEventListener('change', () => {
+    const k = $(src).value;
+    $('sex').value = '';
+    if (k === 'file') { stl[key] = null; $(id).click(); }
+    else {
+      stl[key] = exPart(key, k); $(id).value = '';
+      if (key === 'tool' && $('smotion').value !== EXAMPLES[k].cfg.motion) { $('smotion').value = EXAMPLES[k].cfg.motion; showShapeRows(); }
+      placeTool();
+    }
+    stlInfo(); reset();
+  });
+}
 $('sunit').addEventListener('change', async () => {
   for (const k of ['tool', 'work']) if (stl[k] && stl[k].file) await loadStl(k, stl[k].file);
   stlInfo(); reset();
@@ -137,8 +184,9 @@ $('sunit').addEventListener('change', async () => {
 $('sex').addEventListener('change', () => {
   const e = EXAMPLES[$('sex').value];
   if (!e) return;
-  stl.tool = meshPart(e.tool(), '例の工具'); stl.work = meshPart(e.work(), '例のワーク');
+  stl.tool = exPart('tool', $('sex').value); stl.work = exPart('work', $('sex').value);
   $('stool').value = ''; $('swork').value = ''; $('sunit').value = 'mm';
+  $('stoolsrc').value = $('sex').value; $('sworksrc').value = $('sex').value;
   const c = e.cfg;
   $('smotion').value = c.motion; $('sdx').value = c.dxUm;
   if (c.travel) $('stravel').value = c.travel;
@@ -152,8 +200,8 @@ $('sex').addEventListener('change', () => {
   showShapeRows(); stlInfo(); reset();
 });
 $('smotion').addEventListener('change', () => { showShapeRows(); stlInfo(); reset(); });
-for (const id of ['sdx', 'sox', 'soy', 'soz', 'sax', 'say']) $(id).addEventListener('change', () => { stlInfo(); reset(); });
-for (const id of ['vc', 'sflutes', 'sfz', 'sfr', 'stravel']) $(id).addEventListener('change', stlInfo);
+for (const id of ['sdx', 'sox', 'soy', 'soz', 'sax', 'say', 'scrop']) $(id).addEventListener('change', () => { stlInfo(); reset(); });
+for (const id of ['vc', 'sflutes', 'sfz', 'sfr', 'stravel', 'sangle']) $(id).addEventListener('change', stlInfo);
 // Spin axis given in the form [mm], or null for the centre of the tool's outline.
 function stlAxis() {
   const x = parseFloat($('sax').value), y = parseFloat($('say').value);
@@ -162,6 +210,18 @@ function stlAxis() {
 function stlCount() {
   const dx = parseFloat($('sdx').value) * 1e-3;
   return stl.work && stl.work.t ? Math.round(Math.abs(volume(stl.work.t)) / (dx * dx * dx)) : 0;
+}
+// Cropping the work to the reach of the tool: always, never, or when the whole work is too big.
+const stlCrop = () => $('scrop').value === 'on' || ($('scrop').value === 'auto' && stlCount() > STL_MAX);
+// The cropped box [mm] (the work's bounds where the reach goes past them) and its particle count
+// (Infinity past STL_MAX).
+function stlCropped() {
+  const num = (id) => parseFloat($(id).value), dx = num('sdx') * 1e-3, off = ['sox', 'soy', 'soz'].map((id) => num(id) || 0);
+  const t = Float64Array.from(stl.tool.t, (v, i) => v + off[i % 3]);
+  const r = cutRegion(t, { motion: $('smotion').value, travel: num('stravel'), angle: num('sangle'), fr: num('sfr'), fz: num('sfz'), z: num('sflutes'), axis: stlAxis() }, dx);
+  const wb = stl.work.b, box = r.map((v, k) => (k < 3 ? Math.max(v, wb[k]) : Math.min(v, wb[k])));
+  const fill = fillMesh(stl.work.t, dx, STL_MAX, box);
+  return { box, n: fill ? fill.length / 3 : Infinity };
 }
 // What was read, the particle count, the spindle speed and feed it gives, and what looks wrong.
 function stlInfo() {
@@ -180,9 +240,16 @@ function stlInfo() {
   }
   const a = stl.tool && stl.tool.b, w = stl.work && stl.work.b;
   if (a && w && !stl.tool.err && !stl.work.err) {
-    const n = stlCount();
-    msg.push(`粒子 約 ${n.toLocaleString()} 個`);
-    if (n > STL_MAX) bad.push(`粒子が ${STL_MAX.toLocaleString()} 個を超えます。間隔を広げるか、ワークを小さくしてください`);
+    if (stlCrop()) {
+      const { box, n } = stlCropped(), mm3 = `${(box[3] - box[0]).toFixed(2)} × ${(box[4] - box[1]).toFixed(2)} × ${(box[5] - box[2]).toFixed(2)} mm`;
+      if (n === Infinity) bad.push(`工具の届く範囲（${mm3}）だけでも粒子が ${STL_MAX.toLocaleString()} 個を超えます。間隔を広げるか、回転角・移動量を減らしてください`);
+      else if (n === 0) bad.push('工具の届く範囲にワークがありません。工具をワークに食い込ませた位置に置いてください');
+      else msg.push(`ワークは工具の届く範囲 ${mm3} だけを切り出し（切り口は固定）、粒子 ${n.toLocaleString()} 個`);
+    } else {
+      const n = stlCount();
+      msg.push(`粒子 約 ${n.toLocaleString()} 個`);
+      if (n > STL_MAX) bad.push(`粒子が ${STL_MAX.toLocaleString()} 個を超えます。間隔を広げるか、ワークの切り出しを使ってください`);
+    }
     const reach = $('smotion').value === 'linear' ? parseFloat($('stravel').value) || 0 : 0;   // the straight tool sweeps +x
     if (a[3] + reach < w[0] || a[0] > w[3] || a[4] < w[1] || a[1] > w[4] || a[5] < w[2] || a[2] > w[5]) bad.push('工具とワークが離れています。工具をワークに食い込ませた位置に置いてください');
     const mot = $('smotion').value;

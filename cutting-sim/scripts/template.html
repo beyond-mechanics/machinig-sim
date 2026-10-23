@@ -207,7 +207,9 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
       <fieldset data-only="mesh" hidden>
         <legend>工具とワーク（STL）</legend>
         <div class="row wide"><select id="sex" aria-label="例"><option value="">例を選ぶ、または下で自分のファイルを読み込む</option></select></div>
+        <div class="row wide"><label for="stoolsrc">工具</label><select id="stoolsrc"><option value="file">STL ファイルを読み込む</option></select></div>
         <div class="row wide"><label for="stool">工具の STL</label><input id="stool" class="file" type="file" accept=".stl"></div>
+        <div class="row wide"><label for="sworksrc">ワーク</label><select id="sworksrc"><option value="file">STL ファイルを読み込む</option></select></div>
         <div class="row wide"><label for="swork">ワークの STL</label><input id="swork" class="file" type="file" accept=".stl"></div>
         <div class="row"><label for="sunit">ファイルの単位</label><select id="sunit"><option value="mm">mm</option><option value="um">µm</option><option value="in">inch</option></select></div>
         <div class="row"><label for="smotion">工具の動き</label><select id="smotion"><option value="linear">直進（平削り・形削り）</option><option value="mill">回転＋横送り（エンドミル）</option><option value="drill">回転＋下へ送り（ドリル）</option></select></div>
@@ -219,9 +221,10 @@ legend { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--
         <div class="row" data-motion="mill drill"><label for="sangle">回転角<small>°</small></label><input id="sangle" type="number" min="30" max="1080" step="30" value="200"></div>
         <div class="row wide" data-motion="mill drill"><label for="sax">回転軸の位置 x / y<small>mm（空欄なら工具の外形の中心）</small></label><span class="xyz"><input id="sax" type="number" step="0.01" placeholder="自動" aria-label="回転軸 x"><input id="say" type="number" step="0.01" placeholder="自動" aria-label="回転軸 y"></span></div>
         <div class="row"><label for="shold">ワークの固定</label><select id="shold"><option value="bottom">下面だけ</option><option value="sides">下面と側面（万力）</option></select></div>
+        <div class="row"><label for="scrop">ワークの切り出し</label><select id="scrop"><option value="auto">自動（大きすぎるときだけ）</option><option value="on">工具の届く範囲だけ</option><option value="off">しない（ワーク全体）</option></select></div>
         <div class="row"><label for="sdx">粒子の間隔<small>µm</small></label><input id="sdx" type="number" min="5" max="100" step="1" value="25"></div>
         <div class="row wide"><label for="sox">工具をずらす x / y / z<small>mm</small></label><span class="xyz"><input id="sox" type="number" step="0.01" value="0" aria-label="x"><input id="soy" type="number" step="0.01" value="0" aria-label="y"><input id="soz" type="number" step="0.01" value="0" aria-label="z"></span></div>
-        <p class="hint">閉じた STL（バイナリかテキスト）を2つ読み込みます。座標はファイルのまま、z が上です。工具は「直進」で +x へ切削速度で進み、「回転」では工具の外形の中心を通る z 軸のまわりに、一番外側の半径で切削速度になる回転数で回ります。工具はワークに食い込ませた位置に置いてください（それまでに削れたはずの形は自動でくり抜きます）。ワークの下面（と側面）の 3 層を、工具の通り道を除いて固定します。</p>
+        <p class="hint">工具とワークは、それぞれ閉じた STL（バイナリかテキスト）を読み込むか、例の形を使えます。片方だけ読み込むと、もう片方は工具の動きに合った例で補い、ワークの上面の中心（直進なら −x 側の端、エンドミルは −y 側の側面）に工具を置きます（「工具をずらす」で動かせます）。座標はファイルのまま、z が上です。大きなワークは工具が届く範囲だけを箱で切り出し、切り口の 3 層を固定します。工具は「直進」で +x へ切削速度で進み、「回転」では工具の外形の中心を通る z 軸のまわりに、一番外側の半径で切削速度になる回転数で回ります。工具はワークに食い込ませた位置に置いてください（それまでに削れたはずの形は自動でくり抜きます）。ワークの下面（と側面）の 3 層を、工具の通り道を除いて固定します。</p>
         <p class="hint" id="sinfo">工具とワークを選んでください。</p>
       </fieldset>
       <fieldset data-only="mill helix" hidden>

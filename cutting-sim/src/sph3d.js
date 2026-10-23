@@ -31,7 +31,7 @@ import { MATERIALS, TOOLS, flowStress, frictionAt } from './materials.js';
 import { ToolHeat } from './toolheat.js';
 import { makeTool, localSdf, toolOutline } from './tool.js';
 import { Mill } from './process.js';
-import { MeshSDF, fillMesh, bounds, radialEnvelope } from './mesh.js';
+import { MeshSDF, fillMesh, bounds, radialEnvelope, cutRegion } from './mesh.js';
 
 export const DEFAULTS3D = {
   mat: 'S45C', vc: 200, h: 0.1, b: 0.3, lambda: 15, rake: 5, clearance: 7, edgeRadius: 10, mu: null,
@@ -188,8 +188,18 @@ export class Cutting3D {
   buildMesh() {
     const c = this.cfg, dx = this.dx;
     this.periodic = false; this.lam = 0; this.lead = 0; this.x0 = 0; this.oy = 0;
-    const wb = bounds(c.workTris), fill = fillMesh(c.workTris, dx, c.maxN || 150000);
+    // crop: only the part of the work the tool can reach, its cut faces held like the supports.
+    const wf = bounds(c.workTris), wb = wf.slice(), cut = [false, false, false, false, false, false];
+    if (c.crop) {
+      const r = cutRegion(c.toolTris, { motion: c.motion, travel: c.travel * 1e-3, angle: c.angle, fr: c.fr * 1e-3, fz: c.fz * 1e-3, z: c.z, axis: c.axis }, dx);
+      for (let k = 0; k < 3; k++) {
+        if (r[k] > wf[k] + dx) { wb[k] = r[k]; cut[k] = true; }
+        if (r[k + 3] < wf[k + 3] - dx) { wb[k + 3] = r[k + 3]; cut[k + 3] = true; }
+      }
+    }
+    const fill = fillMesh(c.workTris, dx, c.maxN || 150000, c.crop ? wb : null);
     if (!fill) throw new Error('粒子が多すぎます。');
+    if (!fill.length) throw new Error('工具の届く範囲にワークがありません。');
     this.msdf = new MeshSDF(c.toolTris, 0.5 * dx);
     // A tool placed in the work starts in the cavity it would have cut so far: a straight tool its
     // own shape; a spinning one the envelope it sweeps, one tooth's feed back (mill: fz along −x,
@@ -212,7 +222,8 @@ export class Cutting3D {
     for (let i = 0; i < fill.length; i += 3) {
       if (inCavity(fill[i], fill[i + 1], fill[i + 2])) { cavity++; continue; }
       const x = fill[i], y = fill[i + 1], z = fill[i + 2], m = 3 * dx;
-      const face = z < wb[2] + m || (sides && (x < wb[0] + m || x > wb[3] - m || y < wb[1] + m || y > wb[4] - m));
+      const face = z < wb[2] + m || ((sides || cut[0]) && x < wb[0] + m) || ((sides || cut[3]) && x > wb[3] - m)
+        || ((sides || cut[1]) && y < wb[1] + m) || ((sides || cut[4]) && y > wb[4] - m) || (cut[5] && z > wb[5] - m);
       pts.push(x, y, z, face && !swept(x, y, z) ? 1 : 0);
     }
     this.cavity = cavity;
