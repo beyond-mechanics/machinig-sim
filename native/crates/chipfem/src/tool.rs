@@ -37,7 +37,7 @@ pub struct Contact {
 }
 
 impl Tool {
-    fn faces(&self) -> ([f64; 2], [f64; 2], [f64; 2], [f64; 2]) {
+    pub fn faces(&self) -> ([f64; 2], [f64; 2], [f64; 2], [f64; 2]) {
         let (sa, ca) = self.rake.sin_cos();
         let (sg, cg) = self.clearance.sin_cos();
         ([sa, ca], [-ca, sa], [cg, sg], [sg, -cg])

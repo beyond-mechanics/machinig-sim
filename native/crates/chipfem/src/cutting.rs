@@ -241,8 +241,9 @@ impl Cutting {
     }
 
     /// Run until the cut length is reached (or `stop` says so), sampling every `every` mm of cut.
+    /// A run can be continued with a longer `p.length` (sampling goes on from the present cut).
     pub fn run(&mut self, every: f64, mut on_sample: impl FnMut(&Sample, &Cutting) -> bool) {
-        let mut next = every;
+        let mut next = ((self.cut_length() / every).floor() + 1.0) * every;
         let mut since = 0usize;
         let mut q_after = self.solver.min_quality();
         let mut dt_after = self.solver.dt;
