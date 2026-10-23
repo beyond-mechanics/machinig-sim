@@ -5,7 +5,8 @@ on:
     branches: ['native/**']
     paths: ['native/**', 'src/**', 'scripts/**', '.github/workflows/native.yml']
   pull_request:
-    paths: ['native/**', '.github/workflows/native.yml']
+    # the app carries the web version (the milling tab), so its changes rebuild the installer too
+    paths: ['native/**', 'src/**', 'scripts/**', '.github/workflows/native.yml']
   workflow_dispatch:
 
 concurrency:

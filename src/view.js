@@ -1,5 +1,6 @@
 // Three.js rendering (global THREE, r128). Z is up, units mm.
 import { MAX_CHIPS, nozzlePose, freeJet, COOLANTS } from './chips.js';
+import { Machine } from './machine.js';
 
 export class View {
   constructor(canvas) {
@@ -32,6 +33,7 @@ export class View {
     this.devScale = 0.05; this.devTol = 0.002;
     this.exag = 100;
     this.showChips = true; this.showPath = true;
+    this.machine = new Machine(this.scene);
     this.buildTool();
     this.buildChips();
     this.buildNozzle();
@@ -85,6 +87,7 @@ export class View {
     // machine table under the stock: cast iron with T-slots along X (18 mm slots at 63 mm pitch,
     // as on a vertical machining centre); ground lands, dark slot floors
     const table = machineTable(stock);
+    this.machine.setStock(stock, table.userData);
     // fit the shadow frustum to the stock plus the tool above it
     const sc = this.sun.shadow.camera, half = Math.hypot(stock.w, stock.l) / 2 + 40;
     sc.left = sc.bottom = -half; sc.right = sc.top = half; sc.near = 1; sc.far = 800; sc.updateProjectionMatrix();
@@ -330,6 +333,10 @@ export class View {
     this.spin.traverse(o => { if (o.isMesh) o.castShadow = true; });
     // tool hangs from the pivot: children are offset by -stickout
     this.spin.position.set(0, 0, -t.stickout);
+    // the holder's top above the pivot: where the spindle nose of the machine meets it
+    this.spin.updateMatrixWorld(true);
+    const bb = new T.Box3().setFromObject(this.spin), pz = this.pivot.position.z;
+    this.holderTop = Math.max(0, bb.max.z - pz);
     // motion blur: what the eye integrates over a frame at speed. Nested translucent shells
     // whose opacity is the fraction of a revolution the flutes fill at that radius.
     this.blurGroup = new T.Group();
@@ -386,6 +393,7 @@ export class View {
     this.holderMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0); this.nutMat.emissive.setRGB(0.7 * this.hitGlow, 0, 0);
     this.shankMat.emissive.setRGB(0.5 * this.hitGlow, 0, 0);
     this.pivot.position.set(pos.x, pos.y, pos.z + L);
+    this.machine.update(pos.x, pos.y, pos.z + L + (this.holderTop ?? 60));
     const sx = Math.max(-0.9, Math.min(0.9, dy / L)), sy = Math.max(-0.9, Math.min(0.9, dx / L));
     this.pivot.rotation.set(Math.asin(sx), -Math.asin(sy), 0);
     this.spin.rotation.z = -angle; // clockwise seen from above
@@ -880,6 +888,10 @@ export class View {
     const o = this.orbit;
     this.camera.position.set(o.target.x + o.dist * Math.cos(o.el) * Math.cos(o.az), o.target.y + o.dist * Math.cos(o.el) * Math.sin(o.az), o.target.z + o.dist * Math.sin(o.el));
     this.camera.lookAt(o.target);
+    // the spindle head fades as the view looks down onto the cut (it would hide it)
+    this.machine.update(this.machine.column.position.x, this.machine.column.position.y, this.machine.head.position.z, clamp((o.el - 0.85) / 0.45, 0, 1));
+    // and the parts of the machine in the way are seen through (from behind, from below)
+    this.machine.occlude(this.camera.position, o.target);
     if (this.pathLine) this.pathLine.visible = this.showPath;
     this.renderer.render(this.scene, this.camera);
     this.pathFullDirty = false; // the whole path colour buffer went up with this frame
@@ -922,7 +934,8 @@ function backdropTexture() {
 
 // cast-iron T-slot table: lands with slot floors 14 mm lower, slots along X
 function machineTable(stock) {
-  const T = THREE, W = stock.w + 200, Lt = stock.l + 200, pitch = 63, slot = 18, depth = 14;
+  // a table of a mid-size machine (at least 700 × 420 mm), centred on the stock
+  const T = THREE, W = Math.max(stock.w + 300, 700), Lt = Math.max(stock.l + 260, 420), pitch = 63, slot = 18, depth = 14;
   const g = new T.Group(), z0 = stock.zBottom;
   const land = new T.MeshStandardMaterial({ color: lin(0x6b7078), metalness: 0.7, roughness: 0.42 });
   const iron = new T.MeshStandardMaterial({ color: lin(0x3c4046), metalness: 0.5, roughness: 0.7 });
@@ -938,6 +951,7 @@ function machineTable(stock) {
   }
   const body = new T.Mesh(new T.BoxGeometry(W, Lt, 40), iron); body.position.set(cx, stock.l / 2, z0 - depth - 20); body.receiveShadow = true;
   g.add(body);
+  g.userData = { W, L: Lt, bottom: z0 - depth - 40 };
   return g;
 }
 
