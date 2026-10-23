@@ -890,6 +890,8 @@ export class View {
     this.camera.lookAt(o.target);
     // the spindle head fades as the view looks down onto the cut (it would hide it)
     this.machine.update(this.machine.column.position.x, this.machine.column.position.y, this.machine.head.position.z, clamp((o.el - 0.85) / 0.45, 0, 1));
+    // and the parts of the machine in the way are seen through (from behind, from below)
+    this.machine.occlude(this.camera.position, o.target);
     if (this.pathLine) this.pathLine.visible = this.showPath;
     this.renderer.render(this.scene, this.camera);
     this.pathFullDirty = false; // the whole path colour buffer went up with this frame

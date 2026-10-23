@@ -43,11 +43,12 @@ export class Machine {
   }
 
   dispose(g) {
-    for (const c of [...g.children]) { g.remove(c); c.traverse(o => o.geometry && o.geometry.dispose()); }
+    for (const c of [...g.children]) { g.remove(c); c.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); }
   }
 
+  // each mesh gets its own copy of the material, so that it can fade alone (see occlude)
   box(g, mat, sx, sy, sz, x, y, z, cast = true) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat.clone());
     m.position.set(x, y, z); m.castShadow = cast; m.receiveShadow = true;
     g.add(m); return m;
   }
@@ -109,8 +110,8 @@ export class Machine {
     const hw = 320, hh = 460;
     // (the head reaches from the column's face forward past the spindle axis)
     const hy0 = -170, hy1 = yf + 10;
-    this.box(this.head, M.casting.clone(), hw, hy1 - hy0, hh, 0, (hy0 + hy1) / 2, 140 + hh / 2);
-    this.box(this.head, M.dark.clone(), hw + 4, 8, 120, 0, hy0 - 3, 140 + hh - 80); // a dark band (motor cover)
+    this.box(this.head, M.casting, hw, hy1 - hy0, hh, 0, (hy0 + hy1) / 2, 140 + hh / 2);
+    this.box(this.head, M.dark, hw + 4, 8, 120, 0, hy0 - 3, 140 + hh - 80); // a dark band (motor cover)
     const lathe = (pts, mat) => {
       const g = new T.LatheGeometry(pts.map(([r, z]) => new T.Vector2(r, z)), 96); g.rotateX(Math.PI / 2);
       const m = new T.Mesh(g, mat); m.castShadow = true; this.head.add(m); return m;
@@ -130,7 +131,25 @@ export class Machine {
     this.column.position.set(x, y, 0);
     this.colBody.position.z = this.zt ?? -100;   // on the bed
     this.head.position.z = zNose;
-    const op = 1 - 0.85 * fade;
-    for (const m of this.headMats) { m.transparent = op < 0.999; m.opacity = op; m.depthWrite = op > 0.5; }
+  }
+
+  // Fade whatever stands between the camera and the point it looks at (the column seen from
+  // behind, the enclosure's back panels, the bed from below), and the head by `fade`: the cut
+  // stays in view from any side.
+  occlude(cam, target) {
+    const T = THREE;
+    this._ray = this._ray || new T.Ray(); this._box = this._box || new T.Box3(); this._hit = this._hit || new T.Vector3();
+    const dir = cam.clone().sub(target), len = dir.length();
+    this._ray.set(target, dir.normalize());
+    const headOp = 1 - 0.85 * (this.fade || 0);
+    for (const g of [this.fixed, this.column]) g.traverse(o => {
+      if (!o.isMesh) return;
+      this._box.setFromObject(o);
+      const p = this._ray.intersectBox(this._box, this._hit);
+      let op = p && p.distanceTo(target) < len ? 0.15 : 1;
+      if (this.headMats.includes(o.material)) op = Math.min(op, headOp);
+      const m = o.material;
+      if (m.opacity !== op) { m.transparent = op < 0.999; m.opacity = op; m.depthWrite = op > 0.5; }
+    });
   }
 }
