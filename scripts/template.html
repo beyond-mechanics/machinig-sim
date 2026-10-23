@@ -27,9 +27,15 @@
 body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.5; }
 .wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 12px 32px; max-width: 1600px; margin: 0 auto; display: grid; gap: 12px; }
 header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 4px; }
-.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
+.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-right: auto; min-width: 0; }
 .brand h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: 0.04em; text-wrap: balance; }
 .brand .sub { color: var(--ink-mute); font-size: 12px; }
+.brand .caution { color: var(--warn); font-size: 12px; }
+.legal { margin-top: 16px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 18px; font-size: 13px; }
+.legal h2 { font-size: 14px; margin: 0 0 6px; }
+.legal p { margin: 0 0 6px; max-width: 70ch; }
+.legal summary { cursor: pointer; }
+.legal pre { margin: 6px 0 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; max-width: calc(80ch + 28px); }
 .pill { font: 500 12px/1 var(--font-mono); padding: 6px 10px; border-radius: 999px; border: 1px solid currentColor; letter-spacing: 0.05em; white-space: nowrap; }
 .pill[data-s="stable"] { color: var(--ok); } .pill[data-s="marginal"] { color: var(--warn); } .pill[data-s="chatter"] { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); } .pill[data-s="idle"] { color: var(--ink-mute); }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -157,7 +163,7 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
 <div class="dropzone" id="dropzone" hidden>NC プログラム・STL / OBJ / STEP・プロジェクト (.json) をここに放してください</div>
 <div class="wrap">
   <header class="bar">
-    <div class="brand"><h1>3軸加工シミュレーター</h1><span class="sub">切削力 · びびり振動 · たわみ · 切粉</span></div>
+    <div class="brand"><h1>3軸加工シミュレーター</h1><span class="sub">切削力 · びびり振動 · たわみ · 切粉</span><span class="caution">研究用の試作です。結果は参考値で、実際の加工条件の決定には使わないでください。</span></div>
     <span class="pill" id="statePill" data-s="idle">待機中</span>
     <div class="controls">
       <button class="primary" id="btnPlay">▶ 開始</button>
@@ -208,6 +214,9 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
           <legend>被削材</legend>
           <div class="row wide"><select id="material"></select></div>
           <p class="hint" id="matHint"></p>
+          <button id="coefLoad">切削シミュの係数 (JSON) を読み込む</button>
+          <input type="file" id="coefFile" accept=".json,application/json" hidden>
+          <p class="hint" id="coefInfo">切削現象シミュレーターで同定した Ktc・Kte などを書き出した JSON を読み込むと、表の値の代わりに使います。</p>
           <button id="coefReset" hidden>切削係数を表の値に戻す</button>
           <details id="scBox" class="oxbox">
             <summary>この被削材と工具の推奨条件 (はじめの目安)</summary>
@@ -461,6 +470,16 @@ textarea { width: 100%; min-height: 300px; resize: vertical; background: var(--b
         <div class="forow"><button id="foLoad" disabled>最適化したプログラムを読み込む</button><button id="foSave" disabled>保存 (.nc)</button></div>
       </div>
     </div>
+  </section>
+
+  <section class="legal">
+    <h2>ご利用にあたって・ライセンス</h2>
+    <p>研究・教育用の試作ソフトウェアです。切削力や安定限界は文献値や便覧値と比べて確かめていますが、材料定数や工具・機械の動特性によって大きく変わります。結果は参考値として扱い、実際の加工条件・工具選定・安全に関わる判断には使わないでください。結果によって生じた損害について、作者は責任を負いません。</p>
+    <p>このページには次のオープンソースソフトウェアが含まれています。</p>
+    <details>
+      <summary>three.js（MIT License）</summary>
+      <pre>/*THREE_LICENSE*/</pre>
+    </details>
   </section>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

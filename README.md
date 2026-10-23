@@ -16,6 +16,8 @@
 - **実測との検証**: 動力計の切削抵抗波形 (CSV) を同期平均してシミュレーションと 1 回転の形で比較 (誤差・相関)、波形から係数と工具の振れを同定、回転に同期しない成分の周波数からびびり・共振を判定
 - **結果**: 振動・たわみ・寸法誤差 (指令/目標との差) の色分け、加工レポート (行ごとの集計、注意が必要な行と対策の目安、工具 1 本の加工個数、CSV)、工具経路の負荷色分け、送り最適化 (F を書き換えたプログラムの読み込み・保存)
 
+切削係数は材料ごとの文献並みの値です。[切削現象シミュレーター](cutting-sim/) のエンドミルモードで同定して書き出した係数 JSON を「加工条件 › 被削材 › 切削シミュの係数」で読み込むと、対応する材料に切り替えてその Ktc・Krc・Kte・Kre（ねじれ刃モードなら Kac・Kae も）で計算します。寸法効果の指数 mc は表の値のままです。
+
 ## 開発
 
 ```sh
@@ -44,6 +46,7 @@ node test/advice.test.mjs     # 加工レポートの対策の目安
 node test/cad.test.mjs        # STEP の読み込み (OpenCascade、npm install が必要)
 node test/conditions.test.mjs # 推奨の切削条件 (はじめの目安)
 node test/stabtd.test.mjs     # 時間領域の二分法による安定限界 (プロセスダンピング込み)
+node test/coeffs.test.mjs     # 切削シミュの係数ファイルの読み込み
 ```
 
 物理計算 (`src/gcode.js` `stock.js` `cutting.js` `sld.js` `tool.js` `thermal.js` `chips.js` `sim.js`) は DOM に依存しないので Node でそのまま動きます。表示は `view.js` `charts.js` `main.js` です。

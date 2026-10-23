@@ -1,0 +1,39 @@
+[package]
+name = "sph-core"
+version = "0.1.0"
+edition = "2021"
+description = "Native core of the cutting simulator: the 3D SPH solver of src/sph3d.js (STL mode), multi-threaded"
+license = "MIT"
+publish = false
+
+[dependencies]
+bytemuck = { version = "1.25.2", optional = true }
+pollster = { version = "1.0.1", optional = true }
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+wgpu = { version = "30.0.1", optional = true }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+
+# Local engine server: serves the page and the solver over HTTP (tests, and use from a browser).
+[[bin]]
+name = "sphserve"
+required-features = ["serve"]
+
+[[bin]]
+name = "sphgpu"
+required-features = ["gpu"]
+
+[features]
+serve = ["dep:tiny_http"]
+# GPU prototype (wgpu: DirectX 12 / Vulkan / Metal): the sphgpu benchmark.
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies.tiny_http]
+version = "0.12"
+optional = true

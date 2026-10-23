@@ -3,7 +3,7 @@ import { SimHost } from './host.js';
 import { wallProfile, wallSides } from './roughness.js';
 import { parseFrfCsv, fitModes, exampleCsv, staticK, dominant } from './frf.js';
 import { View } from './view.js';
-import { MATERIALS } from './materials.js';
+import { MATERIALS, parseCoeffs, coefsFromFile } from './materials.js';
 import { COOLANTS } from './chips.js';
 import { SAMPLES } from './samples.js';
 import { decodeText } from './gcode.js';
@@ -628,7 +628,25 @@ $('vaApply').onclick = () => {
   vaFitRes = null; $('vaApply').disabled = true;
   vaShow();
 };
+// Coefficients from the cutting simulator: switch to the matching material and lay them over it.
+const COEF_HINT = $('coefInfo').textContent;
+$('coefLoad').onclick = () => $('coefFile').click();
+$('coefFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    const r = parseCoeffs(await f.text());
+    if (r.material) { sim.cfg.material = r.material; $('material').value = r.material; }
+    const key = sim.cfg.material;
+    sim.cfg.coefs = { ...(sim.cfg.coefs || {}), [key]: coefsFromFile(r, MATERIALS[key]) };
+    host.config(true); view.mat = sim.mat; view.setStock(sim.stock, sim.mat); updateMatHint(); showJc(); showStart();
+    const list = Object.entries(r.coeffs).map(([k, v]) => `${k} ${v}`).join(' / ');
+    $('coefInfo').textContent = `${f.name}（${r.from}、${r.mode}）を ${MATERIALS[key].name} に適用：${list}` +
+      (r.material ? '' : '。対応する材料が表にないので、選択中の材料に当てています');
+  } catch (err) { $('coefInfo').textContent = `読み込めませんでした：${err.message}`; }
+};
 $('coefReset').onclick = () => {
+  $('coefInfo').textContent = COEF_HINT;
   if (sim.cfg.coefs) delete sim.cfg.coefs[sim.cfg.material];
   host.config(true); updateMatHint(); showJc();
 };

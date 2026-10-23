@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1.6mm" height="0.6mm" viewBox="0 0 1.6 0.6">
+  <!-- Workpiece cross-section for orthogonal cutting (mm): a 0.04 mm step down at x = 0.7 and a
+       Ø0.14 mm cross hole just below the cut, so the tool runs into a thinner layer, then an
+       interrupted cut. -->
+  <path d="M0 0 H0.7 V0.04 H1.6 V0.6 H0 Z" fill="#ccc" stroke="#000" stroke-width="0.005"/>
+  <circle cx="1.1" cy="0.17" r="0.07" fill="#fff" stroke="#000" stroke-width="0.005"/>
+</svg>

@@ -31,3 +31,25 @@ export const MATERIALS = {
   IN718: { fzD: 0.002, surf: [0.66, 0.66, 0.66], Tm: 1336, muRake: 0.5, cp: 435, kth: 11.4, life: 15, name: 'インコネル 718 耐熱合金', Ktc: 3100, Krc: 1300, Kac: 700, Kte: 45, Kre: 60, Kae: 12, mc: 0.12, Ci: 3e5, curl: [1.0, 0.15, 0.7], rho: 8190, E: 200000, chip: [0.55, 0.50, 0.45], hot: true, vc: 40, lam: 2.0, Rb: 4, kA: 0.40, mu: 0.45 },
   Ti64: { fzD: 0.0035, surf: [0.56, 0.55, 0.53], Tm: 1604, muRake: 0.5, cp: 560, kth: 7, life: 20, name: 'Ti-6Al-4V チタン合金', Ktc: 1950, Krc: 650, Kac: 520, Kte: 25, Kre: 40, Kae: 10, mc: 0.12, Ci: 2.5e5, curl: [0.55, 0.08, 0.7], rho: 4430, E: 114000, chip: [0.62, 0.60, 0.58], hot: true, vc: 60, lam: 1.3, Rb: 3, kA: 0.45, mu: 0.45 },
 };
+
+// Coefficients identified by cutting-sim (its "係数を JSON で書き出す" file): the material it
+// names maps to the closest one here, and every finite coefficient it carries replaces the
+// table value (a 2D end-mill section has no axial terms, so Kac/Kae stay as tabled).
+const FROM_CUTTING_SIM = { S45C: 'S50C', SUS304: 'SUS304', Ti64: 'Ti64', Ti64s: 'Ti64', Al7075: 'A7075', Al6061: 'A5052', Al2024: 'A5052', Al5083: 'A5052' };
+export function parseCoeffs(text) {
+  let d;
+  try { d = JSON.parse(text); } catch { throw new Error('JSON として読めません'); }
+  if (!d || typeof d.coefficients !== 'object' || !d.coefficients) throw new Error('coefficients がありません（cutting-sim の係数ファイルではないようです）');
+  const coeffs = {};
+  for (const k of ['Ktc', 'Krc', 'Kac', 'Kte', 'Kre', 'Kae']) {
+    const v = d.coefficients[k];
+    if (typeof v === 'number' && Number.isFinite(v)) coeffs[k] = v;
+  }
+  if (!(coeffs.Ktc > 0)) throw new Error('Ktc が正の数ではありません');
+  return { material: FROM_CUTTING_SIM[d.material] || null, from: d.material || '?', mode: d.mode || '?', coeffs };
+}
+// As a per-material coefficient set (sim.cfg.coefs[key]): terms the file leaves out stay as tabled.
+export function coefsFromFile(r, base) {
+  const c = { Ktc: base.Ktc, Krc: base.Krc, Kac: base.Kac, mc: base.mc, ...r.coeffs, source: '切削シミュの係数' };
+  return c;
+}
