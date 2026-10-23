@@ -78,12 +78,32 @@ pub struct Solver {
     /// stop at the first non-finite value (CHIPFEM_DEBUG)
     pub debug_nan: bool,
     pub friction_work: f64,
+    /// contact stresses along the tool surface, summed over time (None: not recorded)
+    pub profile: Option<ContactProfile>,
     mass: Vec<f64>,
     mass_phys: Vec<f64>,
     adj: (Vec<usize>, Vec<usize>),
     work: Vec<ElemWork>,
     /// the two boundary neighbours of each boundary node (usize::MAX inside)
     bnb: Vec<[usize; 2]>,
+}
+
+/// Contact along the tool surface, summed over the steps in bins of the coordinate s along the
+/// rake face (s = 0 where the rake face meets the edge radius, negative on the edge): normal and
+/// friction force, the friction limit m·k·length, contact length, sticking, temperature (each
+/// times dt; divide by the summed time).
+#[derive(Clone, Debug)]
+pub struct ContactProfile {
+    pub s0: f64,
+    pub ds: f64,
+    /// per bin: [time, F_n, F_t, m·k·ℓ, ℓ, sticking time, T·time]
+    pub bins: Vec<[f64; 7]>,
+}
+
+impl ContactProfile {
+    pub fn new(s0: f64, s1: f64, ds: f64) -> ContactProfile {
+        ContactProfile { s0, ds, bins: vec![[0.0; 7]; ((s1 - s0) / ds).ceil() as usize] }
+    }
 }
 
 /// radial return: new deviatoric stress, plastic strain increment, flow stress
@@ -153,6 +173,7 @@ impl Solver {
             tool_force: [0.0; 2],
             plastic_work: 0.0,
             friction_work: 0.0,
+            profile: None,
             mass: Vec::new(),
             mass_phys: Vec::new(),
             adj: (Vec::new(), Vec::new()),
@@ -368,6 +389,8 @@ impl Solver {
                 let tj = self.tool_heat.as_ref().filter(|_| self.thermal).map(|th| th.nearest_surface([p[0] - tool.c[0], p[1] - tool.c[1]]));
                 let vts = vt[0].hypot(vt[1]);
                 let mut dvt = [0.0; 2];
+                let mut shear_lim = f64::NAN;
+                let mut stuck = false;
                 if vts > 1e-12 {
                     let mut lim = tool.mu * imp_n / m;
                     if let Some(mf) = tool.shear_factor {
@@ -375,9 +398,11 @@ impl Solver {
                         let (off, ids) = (&self.adj.0, &self.adj.1);
                         let els = &ids[off[i]..off[i + 1]];
                         let q: f64 = els.iter().map(|&e| { let d = self.s[e]; (1.5 * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + 2.0 * d[3] * d[3])).sqrt() }).sum::<f64>() / els.len().max(1) as f64;
-                        lim = lim.min(mf * q / 3f64.sqrt() * len * dt / m);
+                        shear_lim = mf * q / 3f64.sqrt() * len;
+                        lim = lim.min(shear_lim * dt / m);
                     }
                     let k = if vts <= lim { 1.0 } else { lim / vts };
+                    stuck = k >= 1.0;
                     dvt = [-k * vt[0], -k * vt[1]];
                     // friction work: friction force × the slip that is left after it (a sticking
                     // node, k = 1, does not slip and makes no friction heat: its shearing is the
@@ -400,6 +425,19 @@ impl Solver {
                     let q = g * (self.temp[i] - th.temp[j]);
                     heat_fric[i] -= q;
                     th.add_heat(j, q);
+                }
+                if let Some(pr) = self.profile.as_mut() {
+                    let (tr, _, _, _) = tool.faces();
+                    let sq = (p[0] - tool.c[0]) * tr[0] + (p[1] - tool.c[1]) * tr[1];
+                    let b = ((sq - pr.s0) / pr.ds).floor();
+                    if b >= 0.0 && (b as usize) < pr.bins.len() {
+                        let e = &mut pr.bins[b as usize];
+                        let ftan = m * dvt[0].hypot(dvt[1]) / dt;
+                        let t = self.temp[i];
+                        for (k, v) in [dt, imp_n / dt, ftan, if shear_lim.is_finite() { shear_lim } else { 0.0 }, len, if stuck { 1.0 } else { 0.0 }, t].iter().enumerate() {
+                            e[k] += if k == 0 { *v } else { v * dt };
+                        }
+                    }
                 }
                 let dv = [dvn * nn[0] + dvt[0], dvn * nn[1] + dvt[1]];
                 self.v[i][0] += dv[0];
