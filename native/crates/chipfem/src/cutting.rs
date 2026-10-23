@@ -35,6 +35,10 @@ pub struct CutParams {
     pub mass_scale: f64,
     /// initial temperature [°C]
     pub t0: f64,
+    /// refinement along the rake face: over `rake_band`·h from the edge (0: none), the elements
+    /// next to the face at `rake_layer`·h_min
+    pub rake_band: f64,
+    pub rake_layer: f64,
     /// conduct heat into a carbide tool (false: adiabatic tool)
     pub tool_heat: bool,
     /// all the friction heat into the work (else half of it, the rest to the tool)
@@ -56,6 +60,8 @@ impl CutParams {
             h_max: (h * 0.8).max(0.04),
             mass_scale: 100.0,
             t0: 20.0,
+            rake_band: 3.0,
+            rake_layer: 0.5,
             tool_heat: false,
             friction_heat_to_work: true,
         }
@@ -144,12 +150,29 @@ impl Cutting {
 
     /// target element size: fine at the edge, growing with the distance from it
     fn size_fn(&self) -> impl Fn([f64; 2]) -> f64 {
-        let c = self.solver.tool.as_ref().map(|t| t.c).unwrap_or([0.0, 0.0]);
+        let (c, rake) = self.solver.tool.as_ref().map(|t| (t.c, t.rake)).unwrap_or(([0.0, 0.0], 0.0));
         let (hmin, hmax, h, re) = (self.p.h_min, self.p.h_max, self.p.h, self.p.re);
+        let (band, layer) = (self.p.rake_band, self.p.rake_layer);
+        let (sa, ca) = rake.sin_cos();
+        let (tr, nr) = ([sa, ca], [-ca, sa]);
         move |q: [f64; 2]| {
             let r = ((q[0] - c[0]).hypot(q[1] - c[1]) - re).max(0.0);
             // the primary shear zone and the chip near the edge stay fine over about 2h
-            (hmin + 0.35 * (r - 1.5 * h).max(0.0)).clamp(hmin, hmax)
+            let mut size = (hmin + 0.35 * (r - 1.5 * h).max(0.0)).clamp(hmin, hmax);
+            // the secondary shear zone: a thin layer along the rake face over the contact length,
+            // where the chip sticks and shears (its heating decides the interface temperature)
+            if band > 0.0 {
+                let d = [q[0] - c[0] - re * nr[0], q[1] - c[1] - re * nr[1]];
+                let along = d[0] * tr[0] + d[1] * tr[1];
+                let off = -(d[0] * nr[0] + d[1] * nr[1]);
+                if along > -re && along < band * h && off > -0.5 * hmin && off < 0.5 * h {
+                    // the layer next to the face at `layer`·h_min, growing to h_min half a chip
+                    // thickness out
+                    let f = (off.max(0.0) / (0.5 * h)).min(1.0);
+                    size = size.min(hmin * (layer + (1.0 - layer) * f));
+                }
+            }
+            size
         }
     }
 

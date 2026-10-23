@@ -100,6 +100,14 @@ fn main() {
     if std::env::var("CHIPFEM_FRICTION_WORK").is_ok() {
         p.friction_heat_to_work = true;
     }
+    // CHIPFEM_RAKE=band,layer: refinement along the rake face
+    if let Ok(v) = std::env::var("CHIPFEM_RAKE") {
+        let v: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+        if v.len() == 2 {
+            p.rake_band = v[0];
+            p.rake_layer = v[1];
+        }
+    }
     // CHIPFEM_TOOLHEAT=0: an adiabatic tool
     if std::env::var("CHIPFEM_TOOLHEAT").map_or(false, |v| v == "0") {
         p.tool_heat = false;
