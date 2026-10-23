@@ -75,6 +75,53 @@ fn tool_svg(c: &Cutting, th: &chipfem::toolheat::ToolHeat, vmax: f64, ox: f64, o
     }
 }
 
+/// The contact profile as a table: per bin of s (along the rake face from where it meets the
+/// edge radius, negative on the edge) the mean normal and friction stress, their ratio, the shear
+/// flow stress k, the sticking share and the temperature; then the force totals on the edge and on
+/// the rake face, and the friction angle each gives.
+fn print_profile(pr: &chipfem::solver::ContactProfile, time: f64, c: &Cutting) {
+    let tool = c.solver.tool.as_ref().unwrap();
+    let (tr, nr, _, _) = tool.faces();
+    println!("contact along the tool (s from the rake face's start, mean over {:.1} µs):", time * 1e6);
+    println!("   s[mm]   s/h   contact  σn[MPa]  τ[MPa]   τ/σn   k[MPa]  τ/k  stick  T[°C]");
+    // forces per mm width on the edge (s < 0) and the rake face (s ≥ 0), in the tool's x–y frame
+    let (mut fe, mut fr) = ([0.0; 2], [0.0; 2]);
+    let (mut rn, mut rt) = (0.0, 0.0);
+    for (k, b) in pr.bins.iter().enumerate() {
+        let s = pr.s0 + (k as f64 + 0.5) * pr.ds;
+        let [tc, fnd, ftd, lim, ld, st, td] = *b;
+        if tc <= 0.0 {
+            continue;
+        }
+        // share of the run this bin was in contact (by length: ℓ·dt summed over its nodes / ds)
+        let share = ld / (time * pr.ds);
+        let (sn, tau, kk) = (fnd / ld, ftd / ld, lim / ld);
+        println!("  {:+.4}  {:+5.2}  {:5.2}   {:7.0}  {:6.0}   {:5.2}  {:6.0}  {:4.2}  {:4.2}  {:5.0}", s, s / c.p.h, share, sn, tau, tau / sn, kk, if kk > 0.0 { tau / kk } else { 0.0 }, st / tc, td / tc);
+        if s >= 0.0 {
+            rn += fnd / time;
+            rt += ftd / time;
+        }
+        // the edge's normal direction varies: the rake face's for s ≥ 0, on the edge the normal
+        // where the projection on the rake direction is s (s = −re·sin of the angle past n_r)
+        let n = if s >= 0.0 {
+            nr
+        } else {
+            let a = nr[1].atan2(nr[0]) + (-s / tool.re).min(1.0).asin();
+            [a.cos(), a.sin()]
+        };
+        let t = [n[1], -n[0]];
+        let _ = tr;
+        // force on the tool: pressure against −n, friction along t
+        let f = [(-n[0] * fnd + t[0] * ftd) / time, (-n[1] * fnd + t[1] * ftd) / time];
+        let acc = if s >= 0.0 { &mut fr } else { &mut fe };
+        acc[0] += f[0];
+        acc[1] += f[1];
+    }
+    let a = tool.rake;
+    println!("  forces on the tool [N/mm]: edge Fc {:.1} Ft {:.1}; rake face Fc {:.1} Ft {:.1} (N {:.1}, F {:.1}: friction angle {:.1}°, total {:.1}°)",
+        fe[0], fe[1], fr[0], fr[1], rn, rt, (rt / rn).atan().to_degrees(), (a + ((fr[1] + fe[1]) / (fr[0] + fe[0])).atan()).to_degrees());
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let key = a.get(1).map(String::as_str).unwrap_or("S50C");
@@ -124,7 +171,10 @@ fn main() {
     println!("{key}: Vc {vc} m/min, h {h} mm, rake {rake}°, edge radius {} mm, μ {}; {} elements", c.p.re, c.p.mu, c.solver.mesh.tri.len());
     println!("  cut[mm]  Fc[N/mm]  Ft[N/mm]  chip[mm]  Tmax[°C]  εp max  elements remeshes  Ttool[°C]");
     let t0 = std::time::Instant::now();
-    c.run(len / 20.0, |s, c| {
+    // CHIPFEM_PROFILE=1: contact stresses along the tool over the last 40 % of the cut
+    let profile = std::env::var("CHIPFEM_PROFILE").is_ok();
+    let mut t_prof = 0.0;
+    let mut print = |s: &chipfem::cutting::Sample, c: &Cutting| {
         println!("  {:6.3}  {:8.1}  {:8.1}  {:8.4}  {:8.0}  {:6.2}  {:8} {:8}  {:8.0}", s.cut, s.fc, s.ft, s.chip, s.t_max, s.ep_max, s.elements, s.remeshes, s.t_tool);
         if std::env::var("CHIPFEM_DEBUG").is_ok() {
             // where the hottest node is: relative to the edge centre, the time step
@@ -136,12 +186,24 @@ fn main() {
             eprintln!("    hottest node {i}: {t:.0} °C at ({:+.4}, {:+.4}) from the edge centre; dt {:.2e} s, steps {}, quality {:.3}", p[0] - tc[0], p[1] - tc[1], sv.dt, sv.steps, sv.min_quality());
         }
         true
-    });
+    };
+    if profile {
+        c.p.length = 0.6 * len;
+        c.run(len / 20.0, &mut print);
+        c.p.length = len;
+        let h = c.p.h;
+        c.solver.profile = Some(chipfem::solver::ContactProfile::new(-c.p.re, 5.0 * h, h / 8.0));
+        t_prof = c.solver.t;
+    }
+    c.run(len / 20.0, &mut print);
     let st = c.steady(0.4);
     let r = c.p.h / st.chip.max(1e-9);
     let a_r = c.p.rake_deg.to_radians();
     let phi = (r * a_r.cos() / (1.0 - r * a_r.sin())).atan().to_degrees();
     println!("steady (last 40 %): Fc {:.1} N/mm, Ft {:.1} N/mm, chip {:.4} mm (ratio {:.2}, shear angle {:.1}°), Tmax {:.0} °C, tool {:.0} °C  [{:.1} s]", st.fc, st.ft, st.chip, r, phi, st.t_max, st.t_tool, t0.elapsed().as_secs_f64());
+    if let Some(pr) = &c.solver.profile {
+        print_profile(pr, c.solver.t - t_prof, &c);
+    }
     // fields: temperature (element mean of the nodes) and plastic strain
     let m = &c.solver.mesh;
     let te: Vec<f64> = m.tri.iter().map(|t| t.iter().map(|&i| c.solver.temp[i]).sum::<f64>() / 3.0).collect();

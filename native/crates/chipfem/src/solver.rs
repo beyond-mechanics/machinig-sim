@@ -90,8 +90,9 @@ pub struct Solver {
 
 /// Contact along the tool surface, summed over the steps in bins of the coordinate s along the
 /// rake face (s = 0 where the rake face meets the edge radius, negative on the edge): normal and
-/// friction force, the friction limit m·k·length, contact length, sticking, temperature (each
-/// times dt; divide by the summed time).
+/// friction force (on the tool, along t = (n_y, −n_x): up the rake face, + where the chip drags
+/// the tool along its flow), the friction limit m·k·length, contact length, sticking, temperature
+/// (each times dt; divide by the summed time).
 #[derive(Clone, Debug)]
 pub struct ContactProfile {
     pub s0: f64,
@@ -432,7 +433,8 @@ impl Solver {
                     let b = ((sq - pr.s0) / pr.ds).floor();
                     if b >= 0.0 && (b as usize) < pr.bins.len() {
                         let e = &mut pr.bins[b as usize];
-                        let ftan = m * dvt[0].hypot(dvt[1]) / dt;
+                        // friction force on the tool along t = (n_y, −n_x) (up the rake face)
+                        let ftan = -m * (dvt[0] * nn[1] - dvt[1] * nn[0]) / dt;
                         let t = self.temp[i];
                         for (k, v) in [dt, imp_n / dt, ftan, if shear_lim.is_finite() { shear_lim } else { 0.0 }, len, if stuck { 1.0 } else { 0.0 }, t].iter().enumerate() {
                             e[k] += if k == 0 { *v } else { v * dt };
